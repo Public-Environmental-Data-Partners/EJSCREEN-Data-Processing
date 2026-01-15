@@ -1,24 +1,40 @@
-# Template
+# EJSCREEN-Data-Processing
 
-This repo is a template for PEDP repositories containing original PEDP projects (as opposed to forked/cloned/archived projects). Replace this paragraph with a description of the repo.
+This repo holds the code required to build and update
+all [EJScreen](https://screening-tools.com/epa-ejscreen) indicators 
+and indexes as new data becomes available. 
+It is intended to re-engineer the previous generation of EPA-produced
+tools to get comparable, but not necessarily exactly the same, results
+given the same input. However, the tool stack, processing steps, 
+and data pipeline will diverge substantially from the EPA's 
+ArcGIS-, AWS-, and Hadoop-dependent pipeline.
 
 # How to start contributing to this repo
-* Instructions go here
-* Developer setup (if relevant)
-* Communication channels (if relevant)
+* For the time being, this code is being built by a small team from 
+  the Public Environmental Data Partners organization. If you'd like
+  to be actively involved, we'd appreciate you joining us there
+  so you have access to our working docs and communication channels.
+  https://screening-tools.com/get-involved
+* Later, this project is intended to evolve into a more standard
+  open source effort where this GitHub repo will be the center of
+  communication.
+* Developer setup: TBD
 
-**Suggestions for additional components of Readmes:**
-* A "How to use" section if the repo's project is a tool or website
-* A link to the [good-first-issue](https://github.com/issues?q=is%3Aopen+is%3Aissue+label%3Agood-first-issue+user%3APublic-Environmental-Data-Partners) label (this link across PEDP, or a specific link for the repo)
-* Highlight "ready" label on issues to mean "this is an issue that is ready to work on and needs an owner"
-* Additional badges at the top, such as code quality indicators
-
-
-**When using this template, please look through all of the files to ensure they apply to the new repo.**
-
+---
+**Coming attractions:**
+* Documentation and "How to use" instructions
+* Issue labels including some issues labelled [good-first-issue] (https://github.com/issues?q=is%3Aopen+is%3Aissue+label%3Agood-first-issue+user%3APublic-Environmental-Data-Partners) 
 ---
 
 ## License & Copyright
+
+This repository is likely to include some sample code and data produced by the EPA.
+That material is and will remain public domain. 
+The bulk of this repo will contain new-build software for which the 
+GNU Affero GPL license referenced below will apply.
+We will make best efforts to make it clear which material is public domain.
+All other contents should be assumed to be covered by the copyright/license below.
+
 
 Copyright (C) <year> Public Environmental Data Partners (PEDP)
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, version 3.0.

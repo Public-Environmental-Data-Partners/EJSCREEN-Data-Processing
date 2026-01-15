@@ -1,0 +1,9 @@
+# IDEs
+.idea/
+
+# Virtual environments
+.venv/
+venv/
+
+# OS cruft
+.DS_Store

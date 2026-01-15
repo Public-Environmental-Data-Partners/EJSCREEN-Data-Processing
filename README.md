@@ -1,9 +1,9 @@
 # EJSCREEN-Data-Processing
 
-This repo holds the code required to build and update
+This repo is intended to hold the code required to build and update
 all [EJScreen](https://screening-tools.com/epa-ejscreen) indicators 
 and indexes as new data becomes available. 
-It is intended to re-engineer the previous generation of EPA-produced
+The goal is to re-engineer the previous generation of EPA-produced
 tools to get comparable, but not necessarily exactly the same, results
 given the same input. However, the tool stack, processing steps, 
 and data pipeline will diverge substantially from the EPA's 
@@ -15,7 +15,7 @@ ArcGIS-, AWS-, and Hadoop-dependent pipeline.
   to be actively involved, we'd appreciate you joining us there
   so you have access to our working docs and communication channels.
   https://screening-tools.com/get-involved
-* Later, this project is intended to evolve into a more standard
+* Later, this project should to evolve into a more standard
   open source effort where this GitHub repo will be the center of
   communication.
 * Developer setup: TBD
@@ -30,11 +30,10 @@ ArcGIS-, AWS-, and Hadoop-dependent pipeline.
 
 This repository is likely to include some sample code and data produced by the EPA.
 That material is and will remain public domain. 
-The bulk of this repo will contain new-build software for which the 
+The bulk of the content will be new-build software for which the 
 GNU Affero GPL license referenced below will apply.
 We will make best efforts to make it clear which material is public domain.
 All other contents should be assumed to be covered by the copyright/license below.
-
 
 Copyright (C) <year> Public Environmental Data Partners (PEDP)
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, version 3.0.

@@ -3,11 +3,14 @@
 This repo is intended to hold the code required to build and update
 all [EJScreen](https://screening-tools.com/epa-ejscreen) indicators 
 and indexes as new data becomes available. 
+
 The goal is to re-engineer the previous generation of EPA-produced
 tools to get comparable, but not necessarily exactly the same, results
 given the same input. However, the tool stack, processing steps, 
 and data pipeline will diverge substantially from the EPA's 
-ArcGIS-, AWS-, and Hadoop-dependent pipeline.
+ArcGIS-, AWS-, and Hadoop-dependent pipeline. One of the primary reference
+documents we use is the EPA's:
+https://www.epa.gov/system/files/documents/2024-07/ejscreen-tech-doc-version-2-3.pdf
 
 # How to start contributing to this repo
 * For the time being, this code is being built by a small team from 

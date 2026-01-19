@@ -82,6 +82,37 @@ def WeightedScoreUDF2(land_area, water_area, distance, total_pop, aadt_volume):
     # and both the raw score and the weighted score.
     return (adj_distance_lt, radius_lt, score_lt, weighted_score)
 
+def WeightedScoreUDF3(land_area, water_area, distance, total_pop, aadt_volume):
+    # Difference from UDF1 is that we check land_area for 0 before calculating scores.
+    #
+    # Per Eric:
+    if distance < 0.1:
+        adj_distance_lt = 0.1
+    else:
+        adj_distance_lt = distance
+    inverse_distance = 1.0 / adj_distance_lt  # max value will be 10
+
+    # We appear to be setting a fixed radius value to pass along for the benefit
+    # of downstream code. This is understood to be a magic number.
+    # AI recommends the 500 value, probably based on search results
+    # such as: https://careshq.org/ss_whatsnewitem/ej-screen-traffic-proximity/
+    radius_lt = 500.0
+
+    score_lt = 0.0
+    weighted_score = 0.0
+    # TODO: consider if this should be changed to be a "close to 0" test.
+    if land_area != 0:
+        # raw score is traffic volume divided by adjusted distance
+        score_lt = aadt_volume * inverse_distance
+
+        # weighted score is raw score times total population
+        weighted_score = score_lt * total_pop
+    # else both scores remain 0.0 since land area is 0
+
+    # Return the adjusted distance value we used, that fixed radius,
+    # and both the raw score and the population-weighted score.
+    return (adj_distance_lt, radius_lt, score_lt, weighted_score)
+
 def main():
     """
     Simple test harness for WeightedScoreUDF1 and WeightedScoreUDF2.
@@ -92,20 +123,68 @@ def main():
         # (land_area, water_area, distance, total_pop, aadt_volume)
         (1000, 50, 10.0, 200, 15000),   # normal plausible block
         (1000, 50, 3.0, 200, 15000),      # nearly same values, but distance < 5
+        (1000, 50, 0.001, 200, 15000),  # nearly same values, but very small distance
         (0, 1000, 10.0, 50, 15000),      # zero land area case
     ]
+
+    # column headings match the tuple returned by the UDFs
+    cols = ("adj_distance_lt", "      radius_lt", "          score_lt", "      weighted_score")
 
     for idx, (aland, awater, dist, pop, aadt) in enumerate(samples, start=1):
         print(f"Sample {idx}: aland={aland}, awater={awater}, distance={dist}, totpop={pop}, aadt={aadt}")
 
-        # Call WeightedScoreUDF1 once
+        # Call the UDFs
         res1 = WeightedScoreUDF1(aland, awater, dist, pop, aadt)
-        print(f"  WeightedScoreUDF1 -> adj_distance, radius, score, weighted_score = {res1}")
-
-        # Call WeightedScoreUDF2 once
         res2 = WeightedScoreUDF2(aland, awater, dist, pop, aadt)
-        print(f"  WeightedScoreUDF2 -> adj_distance, radius, score, weighted_score = {res2}")
+        res3 = WeightedScoreUDF3(aland, awater, dist, pop, aadt)
 
+        # Print a very simple table: header row (variable names) and one row per UDF
+        # Use fixed-width space-separated columns for alignment (no tabs)
+        # Define column widths
+        col_w = {
+            'udf': 22,
+            'adj_distance_lt': 15,
+            'radius_lt': 15,
+            'score_lt': 18,
+            'weighted_score': 20,
+        }
+
+        # Build a header line with space-aligned column names
+        header = (
+            f"{ 'UDF':{col_w['udf']}}"
+            f"{cols[0]:{col_w['adj_distance_lt']}}"
+            f"{cols[1]:{col_w['radius_lt']}}"
+            f"{cols[2]:{col_w['score_lt']}}"
+            f"{cols[3]:{col_w['weighted_score']}}"
+        )
+        print(header)
+
+        def fmt_val(v, width, fmt_float='g'):
+            # Format numbers consistently; leave non-numeric as-is
+            try:
+                vf = float(v)
+            except Exception:
+                return f"{str(v):{width}}"
+
+            if fmt_float == 'f':
+                return f"{vf:{width}.1f}"
+            elif fmt_float == 'g':
+                # general format with limited significant digits
+                return f"{vf:{width}.6g}"
+            else:
+                return f"{vf:{width}}"
+
+        def fmt_row(name, vals):
+            v0 = fmt_val(vals[0], col_w['adj_distance_lt'], fmt_float='g')
+            v1 = fmt_val(vals[1], col_w['radius_lt'], fmt_float='f')
+            v2 = fmt_val(vals[2], col_w['score_lt'], fmt_float='g')
+            v3 = fmt_val(vals[3], col_w['weighted_score'], fmt_float='g')
+            return f"{name:{col_w['udf']}}{v0}{v1}{v2}{v3}"
+
+        print(fmt_row("WeightedScoreUDF1", res1))
+        print(fmt_row("WeightedScoreUDF2", res2))
+        print(fmt_row("WeightedScoreUDF3", res3))
+        print("")
 
 
 # Only run the tests when executed directly, not when imported as a module

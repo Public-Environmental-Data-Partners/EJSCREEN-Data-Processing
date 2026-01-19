@@ -67,19 +67,64 @@ def main(limit_rows=None):
             # (land_area, water_area, distance, total_pop, aadt_volume)
             print(f"Row {i}: GEOID={row.get('GEOID20')} OBJECTID={row.get('OBJECTID')} ALAND={land_area} AWATER={water_area} dist={distance} total_pop={total_pop} aadt={aadt_volume}")
 
-            # Call both UDF versions
+            # Call UDF versions (including UDF3)
             try:
                 res1 = ws.WeightedScoreUDF1(land_area, water_area, distance, total_pop, aadt_volume)
             except Exception as e:
-                res1 = f"ERROR: {e}"
+                res1 = (f"ERR", "ERR", f"ERROR: {e}", "ERR")
 
             try:
                 res2 = ws.WeightedScoreUDF2(land_area, water_area, distance, total_pop, aadt_volume)
             except Exception as e:
-                res2 = f"ERROR: {e}"
+                res2 = (f"ERR", "ERR", f"ERROR: {e}", "ERR")
 
-            print(f"  WeightedScoreUDF1 -> adj_distance, radius, score, weighted_score = {res1}")
-            print(f"  WeightedScoreUDF2 -> adj_distance, radius, score, weighted_score = {res2}")
+            try:
+                res3 = ws.WeightedScoreUDF3(land_area, water_area, distance, total_pop, aadt_volume)
+            except Exception as e:
+                res3 = (f"ERR", "ERR", f"ERROR: {e}", "ERR")
+
+            # Column formatting (fixed-width, space-aligned)
+            cols = ("adj_distance_lt", "   radius_lt", "          score_lt", "      weighted_score")
+            col_w = {
+                'udf': 22,
+                'adj_distance_lt': 15,
+                'radius_lt': 12,
+                'score_lt': 18,
+                'weighted_score': 20,
+            }
+
+            header = (
+                f"{ 'UDF':{col_w['udf']}}"
+                f"{cols[0]:{col_w['adj_distance_lt']}}"
+                f"{cols[1]:{col_w['radius_lt']}}"
+                f"{cols[2]:{col_w['score_lt']}}"
+                f"{cols[3]:{col_w['weighted_score']}}"
+            )
+            print(header)
+
+            def fmt_val(v, width, fmt_float='g'):
+                try:
+                    vf = float(v)
+                except Exception:
+                    return f"{str(v):{width}}"
+
+                if fmt_float == 'f':
+                    return f"{vf:{width}.1f}"
+                elif fmt_float == 'g':
+                    return f"{vf:{width}.6g}"
+                else:
+                    return f"{vf:{width}}"
+
+            def fmt_row(name, vals):
+                v0 = fmt_val(vals[0], col_w['adj_distance_lt'], fmt_float='g')
+                v1 = fmt_val(vals[1], col_w['radius_lt'], fmt_float='f')
+                v2 = fmt_val(vals[2], col_w['score_lt'], fmt_float='g')
+                v3 = fmt_val(vals[3], col_w['weighted_score'], fmt_float='g')
+                return f"{name:{col_w['udf']}}{v0}{v1}{v2}{v3}"
+
+            print(fmt_row("WeightedScoreUDF1", res1))
+            print(fmt_row("WeightedScoreUDF2", res2))
+            print(fmt_row("WeightedScoreUDF3", res3))
             print("---")
 
 

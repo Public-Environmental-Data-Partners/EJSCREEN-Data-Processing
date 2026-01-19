@@ -36,7 +36,7 @@ def WeightedScoreUDF1(land_area, water_area, distance, total_pop, aadt_volume):
     #
     # Prevent artificially high scores due to zero or near-zero distances.
     # Enforce a minimum distance of 5 meters
-    adj_distance_lt = min(5.0, distance)
+    adj_distance_lt = max(5.0, distance)
 
     # We appear to be setting a fixed radius value to pass along for the benefit
     # of downstream code. This is understood to be a magic number.
@@ -59,7 +59,7 @@ def WeightedScoreUDF2(land_area, water_area, distance, total_pop, aadt_volume):
     #
     # Prevent artificially high scores due to zero or near-zero distances.
     # Enforce a minimum distance of 5 meters
-    adj_distance_lt = min(5.0, distance)
+    adj_distance_lt = max(5.0, distance)
 
     # We appear to be setting a fixed radius value to pass along for the benefit
     # of downstream code. This is understood to be a magic number.

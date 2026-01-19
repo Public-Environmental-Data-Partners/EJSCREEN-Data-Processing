@@ -6,11 +6,16 @@
 # I used Gemini heavily to analyze and understand the original Pig script and
 # produce this Python version.
 #
-# This file includes 2 versions of the function, in increasing order of speculativeness:
+# This file includes 3 versions of the function
 # WeightedScoreUDF1 -- a naive implementation with the weighted score calculated
 #                      as (aadt_volume / adjusted distance) * total_pop
 # WeightedScoreUDF2 -- applies a land_area filter, if it is 0, we return 0 for
 #                      both the raw and weighted scores.
+# WeightedScoreUDF3 -- similar to UDF2, but uses an inverse distance approach
+#                      as suggested by Eric.
+
+# Note that there is a script in utilities/testing that will run all three versions of
+# the UDFs against sample data and print the results in a small tables for eyeball comparison.
 #
 # TODO: Once these functions have been tested for valid input/output behavior, we should
 # investigate how land_area and water_area should be further used to adjust the score calculations.

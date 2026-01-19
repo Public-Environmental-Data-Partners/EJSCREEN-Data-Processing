@@ -1,3 +1,5 @@
+# Simple code to test the WeightedScoreUDF functions using a sample CSV file.
+
 from pathlib import Path
 import csv
 import importlib.util

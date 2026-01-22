@@ -13,3 +13,5 @@ __pycache__/
 .DS_Store
 /.Rproj.user
 *.Rproj
+scripts/traffic/.Rhistory
+.Rhistory

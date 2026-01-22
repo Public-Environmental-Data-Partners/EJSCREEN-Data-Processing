@@ -38,7 +38,7 @@ ri_b <- st_read(paste0(file_loc, "/tl_2022_44_tabblock20.shp")) %>%
 # mapview(ri_b)
 
 # reading HPMS line segments
-file <- "../../outputs/traffic/preprocessing/HPMS2020_44.json"
+file <- "./outputs/traffic/preprocessing/HPMS2020_44.json" # if in EJSCREEN-Data-Processing folder, the local root of cloned repo
 prepro_ri_2020 <- st_read(file) %>% 
   st_transform(., crs = st_crs(ri_b))
 # quick plot to see what we're cookin' with: 
@@ -130,7 +130,7 @@ prep_dist %>%
 
 
 ## checking out the latest weights function: 
-source_python("WeightedScoreUDF.py")
+source_python("scripts/traffic/WeightedScoreUDF.py")
 mini_test <- prep_dist %>%
   as.data.frame() %>%
   select(-geometry) %>% 

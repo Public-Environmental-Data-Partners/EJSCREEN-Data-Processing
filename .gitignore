@@ -11,3 +11,5 @@ __pycache__/
 
 # OS cruft
 .DS_Store
+/.Rproj.user
+*.Rproj

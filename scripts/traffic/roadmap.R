@@ -11,7 +11,9 @@ roadmap <- function(spdf,
 										geoid = NULL,
 										dist = 500
 ) {
+	
 	require(data.table)
+	require(units)
 	# filter on FIPS
 	these_blocks <- if (is.null(geoid)) { rep(TRUE, NROW(spdf))} else {
 		if (all(nchar(geoid)) > 12) {
@@ -34,6 +36,7 @@ roadmap <- function(spdf,
 	
 	# filter on distance
 	cutoff <- dist
+	# once units package is loaded, this should work
 	units(cutoff) <- structure(list(numerator = "m", denominator = character(0)), class = "symbolic_units")
 	prep_dist_lines <- prep_dist[prep_dist$dist_pair <= cutoff, c("ID", "line_geom", "aadt", "dist_pair", "dist_nearest")]
 	prep_dist_lines$geometry <- prep_dist_lines$line_geom
@@ -41,20 +44,28 @@ roadmap <- function(spdf,
 	# map the road segments
 	if (NROW(prep_dist_lines) == 0) {
 		segmentmap <- NULL
-		cat("no road segments within cutoff \n")
+		cat("no road segments are within the cutoff distance \n")
 	} else {
 		segdata <- unique(prep_dist_lines[ , c(
 			"ID", "geometry", "aadt")])
 		ncolors <- min(NROW(segdata), 400)
+		colorlist = c("black", "red", "lightblue", "gray", "blue", "orange", "darkgreen", "green", "purple", "brown", "hotpink2")
+		if (ncolors < length(colorlist)) {
+			colors2use = colorlist[1:ncolors]
+		} else {
+			colors2use = c(colorlist, sample(colorlist, ncolors - length(colorlist), replace = TRUE))  
+		}
+		
 		segmentmap <- mapview( segdata,
-													 col.regions = mapviewGetOption("vector.palette")(ncolors), zcol="ID", legend=F)
+													 # random color for each road segment
+													 color = colors2use, zcol="ID", legend=F)
 	}
 	
 	# map the block points beyond cutoff
 	if (sum(prep_dist$dist_pair > cutoff, na.rm = T) > 0) {
 		farmap <- mapview( unique(prep_dist[prep_dist$dist_pair > cutoff , c(
 			"GEOID20", "block_group_geoid", "block_group_pop", "dist_nearest", "geometry"
-		)]), col.regions ="gray", layer.name	= paste0("beyond cutoff distance of ", round(cutoff, 1), " meters"), legend=T )#, cex=3)
+		)]), color = "black", col.regions ="gray", layer.name	= paste0("beyond cutoff distance of ", round(cutoff, 1), " meters"), legend=T )#, cex=3)
 	} else {
 		farmap <- NULL
 		# cat("none of the block points are beyond the cutoff \n")
@@ -64,12 +75,12 @@ roadmap <- function(spdf,
 	if (sum(prep_dist$dist_pair <= cutoff, na.rm = T) > 0) {
 		nearmap <- mapview( unique(prep_dist[prep_dist$dist_pair <= cutoff , c(
 			"GEOID20", "block_group_geoid", "block_group_pop", "dist_nearest", "geometry"
-		)]), col.regions ="red", layer.name	= paste0("within ", round(cutoff, 1), " meters of nearest road segment"), legend=T  )#, cex=3)
+		)]), color = "black", col.regions ="red", layer.name	= paste0("within ", round(cutoff, 1), " meters of nearest road segment"), legend=T  )#, cex=3)
 	} else {
 		nearmap <- NULL
-		cat("none of the block points are within the cutoff distance \n")
+		cat("no relevant block points are within the cutoff distance \n")
 	}
 	
-	return(segmentmap + farmap + nearmap)
+	return(farmap + segmentmap + nearmap)
 }
 ################################################################################################################## #

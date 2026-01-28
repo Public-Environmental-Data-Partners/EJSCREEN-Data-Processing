@@ -137,18 +137,32 @@ if missing:
 
 out_path = ("./traffic_subset.csv")
 
-# Force Excel to treat the ID column as text by writing it in the form ="<id>" which Excel preserves as text
+# Ensure a single 'fips' column: copy from the original ID if present, then drop the original
 if 'EJSCREEN Map ejam_uniq_id' in out_df.columns:
-    def _format_id_for_excel(v):
-        if pandas.isna(v):
-            return v
-        s = str(v)
-        # if already looks like ="..." leave it
-        if s.startswith('="') and s.endswith('"'):
-            return s
-        # otherwise format as ="<id>"
-        return f'="{s}"'
-    out_df['EJSCREEN Map ejam_uniq_id'] = out_df['EJSCREEN Map ejam_uniq_id'].apply(_format_id_for_excel)
+    if 'fips' not in out_df.columns:
+        out_df['fips'] = out_df['EJSCREEN Map ejam_uniq_id']
+    else:
+        out_df['fips'] = out_df['fips'].fillna(out_df['EJSCREEN Map ejam_uniq_id'])
+    # remove the duplicate original ID column
+    out_df = out_df.drop(columns=['EJSCREEN Map ejam_uniq_id'], errors='ignore')
+
+# Format the `fips` column for Excel so it imports as text (e.g. ="440010301001")
+def _format_id_for_excel_col(v):
+    if pandas.isna(v):
+        return v
+    s = str(v)
+    if s.startswith('="') and s.endswith('"'):
+        return s
+    return f'="{s}"'
+
+if 'fips' in out_df.columns:
+    out_df['fips'] = out_df['fips'].apply(_format_id_for_excel_col)
+
+# Reorder columns so `fips` is the first column
+cols = list(out_df.columns)
+if 'fips' in cols:
+    cols = ['fips'] + [c for c in cols if c != 'fips']
+    out_df = out_df[cols]
 
 out_df.to_csv(out_path, index=False)
 print(f"Wrote {len(out_df)} rows × {len(out_df.columns)} columns to {out_path}")

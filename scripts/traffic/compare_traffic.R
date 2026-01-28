@@ -50,7 +50,8 @@ tscore <- function(aadt, pop, popwt,
 	aadt[dist > dist_past_which_just_1_nearest] <- 0 # placeholder to exclude these for now
 	aadt[dist > dist_max] <- 0
 	
-	sum(pop * popwt * aadt / dist, na.rm = TRUE)
+	# sum(pop * popwt * aadt / dist, na.rm = TRUE)
+	sum( aadt / dist, na.rm = TRUE)
 }
 ##################################################### #
 

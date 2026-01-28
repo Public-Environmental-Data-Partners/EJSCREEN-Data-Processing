@@ -56,12 +56,7 @@ if (FALSE) {
 	source('./scripts/traffic/compare_traffic.R')
 	
 	##################################################### #
-	## might want to use this helper to be clear in debugging validation of scores
-	## but is this the right formula? 
-	# tscore = function(aadt, dist, pop, popwt) {
-	# 	sum(pop * popwt * aadt / dist)
-	# }
-	##################################################### #
+
 	## Load (if available) a saved copy of block data and traffic data
 	if (!exists("prep_dist")) {
 		mydir <- '~/Documents/EJAM 2026' # e.g., if it had been saved there

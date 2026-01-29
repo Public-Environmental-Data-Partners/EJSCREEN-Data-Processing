@@ -11,3 +11,7 @@ __pycache__/
 
 # OS cruft
 .DS_Store
+/.Rproj.user
+*.Rproj
+scripts/traffic/.Rhistory
+.Rhistory

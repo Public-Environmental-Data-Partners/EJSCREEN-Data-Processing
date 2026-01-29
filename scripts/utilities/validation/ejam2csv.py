@@ -1,5 +1,6 @@
 import pandas
 import requests
+import json
 
 url = "https://ejamapi-84652557241.us-central1.run.app/data"
 
@@ -11,6 +12,17 @@ resp.raise_for_status()
 print("HTTP status:", resp.status_code)
 
 data = resp.json()
+# dump the raw JSON response to a file for inspection
+def dumpRequestJson(obj, filename='ejam_response.json'):
+    """Pretty-print the response JSON to a file for debugging/inspection."""
+    try:
+        with open(filename, 'w', encoding='utf-8') as fh:
+            json.dump(obj, fh, indent=2, ensure_ascii=False)
+    except Exception as e:
+        # non-fatal: print error and continue
+        print(f"Warning: couldn't write JSON dump to {filename}: {e}")
+
+dumpRequestJson(data)
 print("response type:", type(data))
 
 # handle dict-of-lists or list-of-dicts

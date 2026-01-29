@@ -61,7 +61,7 @@ ri_bg <- st_read(paste0(file_loc, "/tl_2022_44_bg.shp")) %>%
 
 
 # reading HPMS line segments
-file <- "../../outputs/traffic/preprocessing/HPMS2020_44.json"
+file <- "./outputs/traffic/preprocessing/HPMS2020_44.json" # if in EJSCREEN-Data-Processing folder, the local root of cloned repo
 prepro_ri_2020 <- st_read(file) %>% 
   st_transform(., crs = st_crs(ri_b))
 # quick plot to see what we're cookin' with: 

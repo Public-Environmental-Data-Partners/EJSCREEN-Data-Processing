@@ -63,15 +63,16 @@ def _format_id_for_excel_col(v):
 
 
 # --- Main script body ------------------------------------------------------
-
+# For now, the default number of record to process is small.
+# Pass None if you want them all
+# TODO: change this the default to None/ALL once the script is stable
 def main(limit=10):
+    # See EJAM API documentation: https://github.com/edgi-govdata-archiving/EJAM-API?tab=readme-ov-file
     url = "https://ejamapi-84652557241.us-central1.run.app/data"
-
     request_data = {"buffer": 0, "fips": "RI", "scale": "blockgroup"}
 
     resp = requests.post(url, json=request_data)
     resp.raise_for_status()
-
     print("HTTP status:", resp.status_code)
 
     data = resp.json()
@@ -79,22 +80,17 @@ def main(limit=10):
     dumpRequestJson(data, limit=limit)
     print("response type:", type(data))
 
-    # handle dict-of-lists or list-of-dicts
-    if isinstance(data, dict):
-        df = pandas.DataFrame.from_dict(data)
-    else:
-        df = pandas.DataFrame(data)
+    # The API returns a list-of-dicts; construct DataFrame directly
+    df = pandas.DataFrame(data)
+    if df is None:
+        print("***No/bad data returned by API; processing halted.")
+        exit(1)
+    full_data_len = len(df)
+    print(f"Loaded data with {full_data_len} rows and {len(df.columns)} columns")
 
-    # limit how many rows we process
-    try:
-        orig_n = len(df)
-    except Exception:
-        orig_n = None
+    # limit number of rows we are going to process, if requested
     if limit is not None:
         df = df.head(limit)
-
-    print("DataFrame shape:", df.shape, f"(original {orig_n})")
-    print(df.head(20).to_string(index=False))
 
     # --- Simple exact-match selection of known traffic-related columns ---
     # exact column names to include (in this order)

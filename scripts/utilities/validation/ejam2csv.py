@@ -3,7 +3,7 @@ import requests
 import json
 
 # --- Helper functions (moved to top) ---------------------------------------
-def dumpRequestJson(obj, filename='ejam_response.json', limit=None):
+def dumpRequestJson(obj, filename='./test_files/ejam_response.json', limit=None):
     """Pretty-print the response JSON to a file for debugging/inspection.
 
     If `limit` is provided, attempt to write only the first `limit` JSON objects
@@ -62,6 +62,46 @@ def _format_id_for_excel_col(v):
     return f'="{s}"'
 
 
+# This is a hack but ChatGPT says it is a common one and works better than quoting
+def force_ejam_uniq_id_to_excel_text(v):
+    """Return the value wrapped in single quotes unless it's NA or already quoted."""
+    if pandas.isna(v):
+        return v
+    s = str(v)
+    # preface the long string of digits with a tab and Excel will see it as text
+    return f"\t{s}"
+
+
+# helper to extract href URL from an HTML anchor tag; returns original value if not an anchor
+def extract_url_from_anchor(s):
+    """Extract the URL from an HTML <a href="..."> anchor string.
+
+    If s is NA or not a string containing an href, returns s unchanged.
+    """
+    try:
+        if pandas.isna(s):
+            return s
+        text = str(s)
+        # quick check for anchor
+        if '<a' not in text.lower() or 'href' not in text.lower():
+            return text
+        import re, html
+        # unescape HTML entities first
+        text_un = html.unescape(text)
+        # find href= followed by single or double quote
+        m = re.search(r'href\s*=\s*["\']([^"\']+)["\']', text_un, re.IGNORECASE)
+        if m:
+            return m.group(1)
+        # fallback: try to extract http(s)://... pattern
+        m2 = re.search(r'(https?://\S+)', text_un)
+        if m2:
+            # strip trailing characters like '"' or '>'
+            url = m2.group(1).rstrip('"\'>)')
+            return url
+        return text_un
+    except Exception:
+        return s
+
 # --- Main script body ------------------------------------------------------
 # For now, the default number of record to process is small.
 # Pass None if you want them all
@@ -91,11 +131,12 @@ def main(limit=10):
     # limit number of rows we are going to process, if requested
     if limit is not None:
         df = df.head(limit)
+        print(f"Processing is being limited to first {limit} rows")
 
     # --- Simple exact-match selection of known traffic-related columns ---
     # exact column names to include (in this order)
     desired = [
-        "EJSCREEN Map ejam_uniq_id","valid invalid_msg","pop","ST","statename","REGION",
+        "EJAM Report","ejam_uniq_id","valid","invalid_msg","pop","ST","statename",
         "ratio.to.avg.traffic.score","ratio.to.state.avg.traffic.score",
         "traffic.score","pctile.traffic.score","state.pctile.traffic.score",
         "avg.traffic.score","state.avg.traffic.score",
@@ -113,105 +154,36 @@ def main(limit=10):
             out_df[col] = pandas.NA
             missing.append(col)
 
-    # If the API provided a 'valid' (or similar) column, prefer that over heuristic extraction
-    if 'valid invalid_msg' in missing:
-        for c in df.columns:
-            if 'valid' in c.lower():
-                # copy and normalize to capitalize True/False
-                out_df['valid invalid_msg'] = df[c].astype(str).str.capitalize()
-                if 'valid invalid_msg' in missing:
-                    missing.remove('valid invalid_msg')
-                break
+    if (len(missing) > 0):
+        print(f"***Warning: We are missing {len(missing)} desired columns:")
+        print(" ", missing)
+    else:
+        print("All desired columns found in API response.")
 
-    # If key fields are missing, try to heuristically extract them from the raw row text
-    if any(c in missing for c in ["EJSCREEN Map ejam_uniq_id", "valid invalid_msg", "pop", "ST"]):
-        import re
+    out_path = ("./test_files/traffic_subset.csv")
 
-        combined_space = df.apply(row_to_text_space, axis=1)
-        combined_comma = df.apply(row_to_text_comma, axis=1)
-        fips_re = re.compile(r"(\d{12})")
-        # general valid match but avoid tokens immediately preceded by '=' (to skip validate_regids=FALSE)
-        valid_re_general = re.compile(r"(?<!=)\b(True|False)\b", re.IGNORECASE)
-        # simple valid regex for searching after the fips substring
-        valid_re = re.compile(r"\b(True|False)\b", re.IGNORECASE)
-        # token that reliably appears before the desired 'True' in the HTML-like output
-        ejscreen_token_re = re.compile(r"EJSCREEN", re.IGNORECASE)
-        # match e.g. '1276 RI' or '1276, RI' or '1276 RI Rhode'
-        pop_st_re = re.compile(r"(\d{1,7})\s*,?\s*([A-Z]{2})")
+    # Extract URL from EJAM Report anchor and ensure ejam_uniq_id values are quoted for Excel
+    if 'EJAM Report' in out_df.columns:
+        out_df['EJAM Report'] = out_df['EJAM Report'].apply(extract_url_from_anchor)
 
-        # add a separate fips column for convenience
-        if 'fips' not in out_df.columns:
-            out_df['fips'] = pandas.NA
+    if 'ejam_uniq_id' in out_df.columns:
+        out_df['ejam_uniq_id'] = out_df['ejam_uniq_id'].apply(force_ejam_uniq_id_to_excel_text)
 
-        for idx in df.index:
-            txts = [combined_space.iloc[idx], combined_comma.iloc[idx]]
-            txt_found = ""
-            for txt in txts:
-                if not isinstance(txt, str):
-                    continue
-                # try FIPS (capture end position so we can prefer valid flags that occur after it)
-                fips_pos = None
-                if pandas.isna(out_df.at[idx, 'EJSCREEN Map ejam_uniq_id']):
-                    m = fips_re.search(txt)
-                    if m:
-                        out_df.at[idx, 'EJSCREEN Map ejam_uniq_id'] = m.group(1)
-                        out_df.at[idx, 'fips'] = m.group(1)
-                        fips_pos = m.end()
-                        txt_found += 'f'
-                # try valid flag: first prefer a match after the EJSCREEN token (this avoids matching validate_regids=FALSE inside URLs)
-                if pandas.isna(out_df.at[idx, 'valid invalid_msg']):
-                    m = None
-                    e_pos = ejscreen_token_re.search(txt)
-                    if e_pos:
-                        m = valid_re.search(txt[e_pos.end():])
-                    if not m and fips_pos:
-                        m = valid_re.search(txt[fips_pos:])
-                    if not m:
-                        m = valid_re_general.search(txt)
-                    if m:
-                        out_df.at[idx, 'valid invalid_msg'] = m.group(1).capitalize()
-                        txt_found += 'v'
-                # try pop + state
-                if pandas.isna(out_df.at[idx, 'pop']) or pandas.isna(out_df.at[idx, 'ST']):
-                    m = pop_st_re.search(txt)
-                    if m:
-                        out_df.at[idx, 'pop'] = m.group(1)
-                        out_df.at[idx, 'ST'] = m.group(2)
-                        txt_found += 'p'
-                # if we've found all three in this txt, break
-                if 'f' in txt_found and 'v' in txt_found and 'p' in txt_found:
-                    break
-
-    # report missing columns
-    if missing:
-        print("Warning: the following requested columns were not found and were filled with NA:")
-        for m in missing:
-            print(" -", m)
-
-    out_path = ("./traffic_subset.csv")
-
-    # Ensure a single 'fips' column: copy from the original ID if present, then drop the original
-    if 'EJSCREEN Map ejam_uniq_id' in out_df.columns:
-        if 'fips' not in out_df.columns:
-            out_df['fips'] = out_df['EJSCREEN Map ejam_uniq_id']
-        else:
-            out_df['fips'] = out_df['fips'].fillna(out_df['EJSCREEN Map ejam_uniq_id'])
-        # remove the duplicate original ID column
-        out_df = out_df.drop(columns=['EJSCREEN Map ejam_uniq_id'], errors='ignore')
-
-    # Format the `fips` column for Excel so it imports as text (e.g. ="440010301001")
-    if 'fips' in out_df.columns:
-        out_df['fips'] = out_df['fips'].apply(_format_id_for_excel_col)
-
-    # Reorder columns so `fips` is the first column
+    # Reorder columns: put ejam_uniq_id first (if present), and ensure 'EJAM Report' is last (if present)
     cols = list(out_df.columns)
-    if 'fips' in cols:
-        cols = ['fips'] + [c for c in cols if c != 'fips']
-        out_df = out_df[cols]
+    # we know the column name is `ejam_uniq_id`; place it first when present
+    if 'ejam_uniq_id' in cols:
+        cols = ['ejam_uniq_id'] + [c for c in cols if c != 'ejam_uniq_id']
+    # Ensure 'EJAM Report' is last if present
+    if 'EJAM Report' in cols:
+        cols = [c for c in cols if c != 'EJAM Report'] + ['EJAM Report']
+
+    # Apply new column order (if columns list changed)
+    out_df = out_df[cols]
 
     out_df.to_csv(out_path, index=False)
     print(f"Wrote {len(out_df)} rows × {len(out_df.columns)} columns to {out_path}")
-    print(out_df.head(10).to_string(index=False))
+    # print(out_df.head(10).to_string(index=False))
 
 
 if __name__ == "__main__":

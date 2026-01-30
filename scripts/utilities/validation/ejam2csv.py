@@ -1,3 +1,16 @@
+# Summary: EJAM->CSV extractor
+#
+# This script requests EJAM API data (blockgroup traffic/context) and converts the
+# JSON list-of-dicts response into a compact CSV of selected fields. Key steps:
+#  - POST to EJAM API and optionally dump a pretty JSON sample for inspection
+#  - Load response into a pandas DataFrame, limit rows via CLI (-n)
+#  - Extract/normalize fields, transform 'EJAM Report' anchor into its URL,
+#    and format 'ejam_uniq_id' to preserve it as text for Excel consumers
+#  - Write a CSV (default ./test_files/traffic_subset.csv)
+#
+# Inputs: none required (hardcoded API request), optional CLI `-n/--limit` to limit rows
+# Output: CSV file with selected fields; JSON dump (optional) for debugging
+
 import pandas
 import requests
 import json
@@ -106,7 +119,14 @@ def extract_url_from_anchor(s):
 # For now, the default number of record to process is small.
 # Pass None if you want them all
 # TODO: change this the default to None/ALL once the script is stable
-def main(limit=10):
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Dump EJAM response and create a traffic subset CSV")
+    parser.add_argument('-n', '--limit', type=int, default=10,
+                        help='maximum number of DataFrame rows/JSON objects to process (default: 10)')
+    args = parser.parse_args()
+    limit = args.limit
+
     # See EJAM API documentation: https://github.com/edgi-govdata-archiving/EJAM-API?tab=readme-ov-file
     url = "https://ejamapi-84652557241.us-central1.run.app/data"
     request_data = {"buffer": 0, "fips": "RI", "scale": "blockgroup"}
@@ -163,23 +183,18 @@ def main(limit=10):
 
     out_path = ("./test_files/traffic_subset.csv")
 
-    # Extract URL from EJAM Report anchor and ensure ejam_uniq_id values are quoted for Excel
+    # Clean up fields to work better in Excel
     if 'EJAM Report' in out_df.columns:
         out_df['EJAM Report'] = out_df['EJAM Report'].apply(extract_url_from_anchor)
 
     if 'ejam_uniq_id' in out_df.columns:
         out_df['ejam_uniq_id'] = out_df['ejam_uniq_id'].apply(force_ejam_uniq_id_to_excel_text)
 
+    # Let'er rip
     out_df.to_csv(out_path, index=False)
     print(f"Wrote {len(out_df)} rows × {len(out_df.columns)} columns to {out_path}")
     # print(out_df.head(10).to_string(index=False))
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Dump EJAM response and create a traffic subset CSV")
-    parser.add_argument('-n', '--limit', type=int, default=10,
-                        help='maximum number of DataFrame rows/JSON objects to process (default: 10)')
-    args = parser.parse_args()
-    main(args.limit)
+    main()

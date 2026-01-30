@@ -136,13 +136,14 @@ def main(limit=10):
     # --- Simple exact-match selection of known traffic-related columns ---
     # exact column names to include (in this order)
     desired = [
-        "EJAM Report","ejam_uniq_id","valid","invalid_msg","pop","ST","statename",
+        "ejam_uniq_id","valid","invalid_msg","pop","ST","statename",
         "ratio.to.avg.traffic.score","ratio.to.state.avg.traffic.score",
         "traffic.score","pctile.traffic.score","state.pctile.traffic.score",
         "avg.traffic.score","state.avg.traffic.score",
         "pctile.EJ.DISPARITY.traffic.score.eo","pctile.EJ.DISPARITY.traffic.score.supp",
         "state.pctile.EJ.DISPARITY.traffic.score.eo","state.pctile.EJ.DISPARITY.traffic.score.supp",
-        "EJ.DISPARITY.traffic.score.eo","state.EJ.DISPARITY.traffic.score.eo","EJ.DISPARITY.traffic.score.supp"
+        "EJ.DISPARITY.traffic.score.eo","state.EJ.DISPARITY.traffic.score.eo",
+        "EJ.DISPARITY.traffic.score.supp","EJAM Report"
     ]
 
     out_df = pandas.DataFrame(index=df.index)
@@ -168,18 +169,6 @@ def main(limit=10):
 
     if 'ejam_uniq_id' in out_df.columns:
         out_df['ejam_uniq_id'] = out_df['ejam_uniq_id'].apply(force_ejam_uniq_id_to_excel_text)
-
-    # Reorder columns: put ejam_uniq_id first (if present), and ensure 'EJAM Report' is last (if present)
-    cols = list(out_df.columns)
-    # we know the column name is `ejam_uniq_id`; place it first when present
-    if 'ejam_uniq_id' in cols:
-        cols = ['ejam_uniq_id'] + [c for c in cols if c != 'ejam_uniq_id']
-    # Ensure 'EJAM Report' is last if present
-    if 'EJAM Report' in cols:
-        cols = [c for c in cols if c != 'EJAM Report'] + ['EJAM Report']
-
-    # Apply new column order (if columns list changed)
-    out_df = out_df[cols]
 
     out_df.to_csv(out_path, index=False)
     print(f"Wrote {len(out_df)} rows × {len(out_df.columns)} columns to {out_path}")

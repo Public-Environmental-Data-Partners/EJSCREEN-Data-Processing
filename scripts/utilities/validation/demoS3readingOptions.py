@@ -3,10 +3,10 @@
 demoS3readingOptions.py
 
 Purpose:
-  Small demonstrator script that validates AWS credentials and copies a GeoJSON
-  file from S3 to a local path. It also demonstrates two ways to read S3 data:
-    - read the entire object into memory and print the first/last lines
-    - stream the object line-by-line (memory-efficient) and print first/last lines
+  Small demonstrator script that validates AWS credentials and
+    - copies a GeoJSON file from S3 to a local path.
+    - reads the entire object into memory and prints the first/last lines
+    - streams the object line-by-line (memory-efficient) and prints first/last lines
 
 Usage:
   Run the script directly. It expects AWS credentials available via environment
@@ -16,6 +16,9 @@ Dependencies:
   - boto3 (for S3/STS access)
   - botocore
   - python-dotenv (optional, for loading .env)
+  - S3 authentication values available via environment variables or a .env file
+    AWS_ACCESS_KEY_ID=<your id>
+    AWS_SECRET_ACCESS_KEY=<your secret>
 
 Author / Credit:
   Code written by GitHub Copilot (coding assistance) under the direction of Anne Gunn.

@@ -5,6 +5,10 @@
 .venv/
 venv/
 
+# Hold project-specific environment variables,
+# needed for Python access to some APIs such as AWS
+.env
+
 # Python bytecode
 __pycache__/
 *.py[cod]

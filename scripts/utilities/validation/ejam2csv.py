@@ -1,15 +1,35 @@
-# Summary: EJAM->CSV extractor
-#
-# This script requests EJAM API data (blockgroup traffic/context) and converts the
-# JSON list-of-dicts response into a compact CSV of selected fields. Key steps:
-#  - POST to EJAM API and optionally dump a pretty JSON sample for inspection
-#  - Load response into a pandas DataFrame, limit rows via CLI (-n)
-#  - Extract/normalize fields, transform 'EJAM Report' anchor into its URL,
-#    and format 'ejam_uniq_id' to preserve it as text for Excel consumers
-#  - Write a CSV (default ./test_files/traffic_subset.csv)
-#
+"""
+ejam2csv.py
+
+Purpose:
+  Request EJAM API data for a state and convert the JSON
+  list-of-dicts response into a compact CSV of selected fields
+  (traffic fields for now).
+
+Usage:
+  - Configure defaults in the `Config` dataclass or run with command-line options:
+      python ejam2csv.py -p <path-or-s3-prefix> -n <number-of-rows> [--dry-run]
+  - If `-p/--path` starts with `s3://`, the output CSV will be uploaded to S3.
+  - `-n/--number_rows` accepts an integer; <=0 (or 0) means no limit (process all rows).
+
+Behavior:
+  - Sends a POST request to the EJAM API (currently hardcoded to fips="RI" and scale="blockgroup").
+  - Dumps a small JSON sample for inspection (./test_files/ejam_response.json by default).
+  - Loads response into a pandas.DataFrame, normalizes selected columns, and writes a CSV.
+  - Supports writing to either the local filesystem or to an S3 URI using boto3.
+
+Dependencies:
+  - Python 3.8+
+  - pandas
+  - requests
+  - boto3 (required if writing to S3)
+  - python-dotenv (optional; allows loading AWS creds from a .env file)
+
+Author / Credit:
+  Adapted to match project conventions and S3/local I/O handling (pattern taken from geojson2csv.py).
+"""
+
 # Inputs: none required (hardcoded API request), optional CLI `-n/--limit` to limit rows
-# Output: CSV file with selected fields; JSON dump (optional) for debugging
 import argparse
 import pandas
 import requests
@@ -26,11 +46,12 @@ from typing import Optional
 class Config:
     # output filename (will be joined with `path`); default writes locally under ./test_files/
     output_file: str = "ri_ejam_traffic_subset.csv"
-    # number of rows to process; <=0 or None means no limit
-    number_rows: Optional[int] = 10
+    # number of rows to process; <=0 or None means process all rows
+    number_rows: Optional[int] = 0
     dry_run: bool = False
-    # destination path or s3 prefix (e.g. s3://bucket/key-prefix/ or ./test_files/)
-    path: str = "./test_files/"
+    # destination path for the csv file
+    path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
+    #path: str = "./test_files/"
 
 
 def get_config(argv=None) -> Config:
@@ -68,24 +89,16 @@ def join_path_and_file(path: str, filename: str) -> str:
 def dumpRequestJson(obj, filename='./test_files/ejam_response.json', limit=None):
     """Pretty-print the response JSON to a file for debugging/inspection.
 
-    If `limit` is provided, attempt to write only the first `limit` JSON objects
-    (works for list-of-dicts and dict-of-lists by converting to records).
+    This is currently hardcoded to a) write locally and b) limit output to first 10 records
     """
     try:
         # Try to coerce to a table of records using pandas (handles dict-of-lists and list-of-dicts)
         try:
             df_tmp = pandas.DataFrame.from_dict(obj)
-            if limit is not None:
-                recs = df_tmp.head(limit).to_dict(orient='records')
-            else:
-                recs = df_tmp.to_dict(orient='records')
+            recs = df_tmp.head(10).to_dict(orient='records')
             to_dump = recs
         except Exception:
-            # Fallback: if it's a list, slice; otherwise dump the whole object
-            if isinstance(obj, list):
-                to_dump = obj[:limit] if limit is not None else obj
-            else:
-                to_dump = obj
+            print("Warning: couldn't coerce response to DataFrame for json dump")
 
         with open(filename, 'w', encoding='utf-8') as fh:
             json.dump(to_dump, fh, indent=2, ensure_ascii=False)
@@ -165,6 +178,55 @@ def extract_url_from_anchor(s):
         return s
 
 # --- Main script body ------------------------------------------------------
+def write_csv(df, out_path: str, limit: Optional[int] = None) -> None:
+    """Write df to CSV; if out_path is S3 URI (s3://...), write to a temp file and upload.
+
+    If limit is None or <=0, write all rows; otherwise write up to `limit` rows.
+    """
+    # Determine which rows to write
+    if limit is None or (isinstance(limit, int) and limit <= 0):
+        use_df = df
+    else:
+        use_df = df.head(limit)
+
+    # If destination is S3, write to a temp file then upload
+    if isinstance(out_path, str) and out_path.lower().startswith('s3://'):
+        import tempfile
+        import os
+        tmp_path = None
+        try:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.csv')
+            tmp_path = Path(tmp.name)
+            tmp.close()
+            use_df.to_csv(tmp_path, index=False)
+
+            # parse s3 uri
+            tail = out_path[5:]
+            parts = tail.split('/', 1)
+            if len(parts) != 2:
+                raise ValueError(f"Invalid S3 URI: {out_path}")
+            bucket, key = parts[0], parts[1]
+
+            import boto3
+            s3 = boto3.client('s3')
+            s3.upload_file(Filename=str(tmp_path), Bucket=bucket, Key=key)
+            print(f"Wrote {len(use_df)} rows × {len(use_df.columns)} columns to {out_path}")
+        finally:
+            # clean up temp file if it was created
+            try:
+                if tmp_path is not None and tmp_path.exists():
+                    os.unlink(str(tmp_path))
+            except Exception:
+                pass
+        return
+
+    # Otherwise treat as local filesystem path
+    out_p = Path(out_path)
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+    use_df.to_csv(out_p, index=False)
+    print(f"Wrote {len(use_df)} rows × {len(use_df.columns)} columns to {out_path}")
+
+
 def main(argv=None) -> None:
     # Use simplified config/CLI parsing
     config = get_config(argv)
@@ -177,7 +239,7 @@ def main(argv=None) -> None:
 
     # See EJAM API documentation: https://github.com/edgi-govdata-archiving/EJAM-API?tab=readme-ov-file
     url = "https://ejamapi-84652557241.us-central1.run.app/data"
-	# TODO: make state abbreviation a runtime parameter
+    # TODO: make state abbreviation a runtime parameter
     request_data = {"buffer": 0, "fips": "RI", "scale": "blockgroup"}
 
     resp = requests.post(url, json=request_data)
@@ -198,7 +260,9 @@ def main(argv=None) -> None:
     print(f"Loaded data with {full_data_len} rows and {len(df.columns)} columns")
 
     # limit number of rows we are going to process, if requested
-    if limit is not None:
+    if limit is None or limit <= 0:
+        print("No row limit specified; processing all rows")
+    else:
         df = df.head(limit)
         print(f"Processing is being limited to first {limit} rows")
 
@@ -243,10 +307,9 @@ def main(argv=None) -> None:
         if not out_df.empty:
             print(out_df.head(min(10, len(out_df))).to_string(index=False))
     else:
-        # Let'er rip
-        out_df.to_csv(out_path, index=False)
-        print(f"Wrote {len(out_df)} rows × {len(out_df.columns)} columns to {out_path}")
-        # print(out_df.head(10).to_string(index=False))
+        # Let'er rip (write locally or to S3 depending on out_path)
+        write_csv(out_df, out_path, limit=None)
+         # print(out_df.head(10).to_string(index=False))
 
 
 if __name__ == '__main__':

@@ -1,8 +1,44 @@
+import argparse
+from dataclasses import dataclass, asdict
 import json
 from pathlib import Path
 import pandas as pd
 from typing import Optional
 
+from dotenv import load_dotenv # needed for AWS access via .env file
+
+# load .env now so boto3 can pick up AWS creds from environment variables
+load_dotenv()
+
+@dataclass
+class Config:
+    #TODO: when we start processing more than one state, filename prefix should be a parameter
+    input_file: str = "ri_bg_summary.geojson"
+    output_file: str = "ri_bg_summary.csv"
+    number_rows: int = 10  # <=0 means no limit
+    dry_run: bool = False
+    path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
+    path: str = "./test_files"
+
+def get_config(argv=None) -> Config:
+
+    # get AWS credentials from environment (including .env)
+    load_dotenv()
+
+    # Build config by merging defaults with CLI arguments.
+    parser = argparse.ArgumentParser(description="GeoJSON to CSV converter (properties only, no geometry).")
+    # We only add arguments for things we actually want to override at runtime
+    parser.add_argument('-p', '--path', type=str, default=Config.path, help='S3 path prefix for input/output files')
+    parser.add_argument('-n', '--number_rows', type=int, default=Config.number_rows, help='Number of rows to write to CSV; <=0 means no limit (default: 10)')
+    parser.add_argument('--dry-run', action='store_true', help='If set, do not write any files, just show what would be done')
+
+    args = parser.parse_args(argv)
+
+    # Filter out 'None' values so they don't overwrite our Dataclass defaults
+    overrides = {k: v for k, v in vars(args).items() if v is not None}
+
+    # Merge overrides into the default Config
+    return Config(**overrides)
 
 # --- Helper functions ------------------------------------------------------
 def load_geojson_properties(path: str) -> pd.DataFrame:
@@ -10,13 +46,41 @@ def load_geojson_properties(path: str) -> pd.DataFrame:
 
     The geometry is ignored. Expects a GeoJSON FeatureCollection with a 'features' list
     where each feature has a 'properties' mapping.
-    """
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"GeoJSON file not found: {path}")
 
-    with p.open('r', encoding='utf-8') as fh:
-        obj = json.load(fh)
+    Supports local filesystem paths and S3 URIs of the form s3://bucket/key.
+    If an S3 URI is provided this function attempts to use boto3 and the
+    environment (including values loaded from a .env file) for credentials.
+    """
+    obj = None
+    # If the path is an S3 URI, stream the object from S3
+    if isinstance(path, str) and path.lower().startswith('s3://'):
+        # parse s3://bucket/key
+        s3tail = path[5:]
+        parts = s3tail.split('/', 1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise ValueError(f"Invalid S3 URI: {path}")
+        bucket, key = parts[0], parts[1]
+        try:
+            import boto3
+        except Exception:
+            raise ImportError("To read from S3 you must install boto3 (pip install boto3)")
+
+        s3 = boto3.client('s3')
+        try:
+            resp = s3.get_object(Bucket=bucket, Key=key)
+            # Read entire object into memory and parse as JSON (consistent with local-file behavior)
+            body = resp['Body'].read()
+            text = body.decode('utf-8')
+            obj = json.loads(text)
+        except Exception as e:
+            raise RuntimeError(f"Failed to read S3 object s3://{bucket}/{key}: {e}") from e
+    else:
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"GeoJSON file not found: {path}")
+
+        with p.open('r', encoding='utf-8') as fh:
+            obj = json.load(fh)
 
     # Support either a top-level FeatureCollection or a raw list of features
     if isinstance(obj, dict) and 'features' in obj and isinstance(obj['features'], list):
@@ -81,17 +145,20 @@ def _format_id_for_excel_col(v):
 
 
 # --- Main ------------------------------------------------------------------
-def main(limit: int = 10, input_geojson: str = 'ri_bg_summary.geojson', output_csv: str = 'ri_bg_summary.csv', dry_run: bool = False) -> None:
-    """Read input GeoJSON, ignore geometry, and write CSV of properties limited to `limit` rows.
+def main(argv=None) -> None:
+    config = get_config(argv)
 
-    limit <= 0 means no limit (write all rows). Default limit is 10.
-    If dry_run is True, do not write any files — just show what would be written.
-    """
+    print(f"Will be reading from and writing to path: {config.path}")
+    input_geojson = str(Path(config.path) / config.input_file)
+    output_csv = str(Path(config.path) / config.output_file)
+    limit = config.number_rows
+    dry_run = config.dry_run
+
     try:
         df = load_geojson_properties(input_geojson)
     except Exception as e:
         print(f"Error loading GeoJSON '{input_geojson}': {e}")
-        raise
+        exit(1)
 
     orig_n = len(df)
     # Interpret non-positive limit as no limit
@@ -128,14 +195,5 @@ def main(limit: int = 10, input_geojson: str = 'ri_bg_summary.geojson', output_c
 
 
 if __name__ == '__main__':
-    import argparse
 
-    parser = argparse.ArgumentParser(description='Convert a GeoJSON (FeatureCollection) to CSV of properties (ignore geometry).')
-    parser.add_argument('-i', '--input', default='ri_bg_summary.geojson', help='input GeoJSON file path (default: ri_bg_summary.geojson)')
-    parser.add_argument('-o', '--output', default='ri_bg_summary.csv', help='output CSV file path (default: ri_bg_summary.csv)')
-    parser.add_argument('-n', '--limit', type=int, default=10,
-                        help='maximum number of rows to write to CSV; <=0 means no limit; default 10')
-    parser.add_argument('--dry-run', action='store_true', help='do not write files, only show what would be written')
-
-    args = parser.parse_args()
-    main(limit=args.limit, input_geojson=args.input, output_csv=args.output, dry_run=args.dry_run)
+    main()

@@ -7,18 +7,15 @@ from typing import Optional
 
 from dotenv import load_dotenv # needed for AWS access via .env file
 
-# load .env now so boto3 can pick up AWS creds from environment variables
-load_dotenv()
-
 @dataclass
 class Config:
-    #TODO: when we start processing more than one state, filename prefix should be a parameter
+    #TODO: when we start processing more than one state, filename prefix will need to be a parameter
     input_file: str = "ri_bg_summary.geojson"
     output_file: str = "ri_bg_summary.csv"
     number_rows: int = 10  # <=0 means no limit
     dry_run: bool = False
     path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
-    path: str = "./test_files"
+    path: str = "./test_files/"
 
 def get_config(argv=None) -> Config:
 
@@ -186,12 +183,6 @@ def main(argv=None) -> None:
         return
 
     write_csv(used_df, output_csv, limit=None)
-
-    # show a small preview
-    if not used_df.empty:
-        print(used_df.head(10).to_string(index=False))
-    else:
-        print("No rows written (empty input file)")
 
 
 if __name__ == '__main__':

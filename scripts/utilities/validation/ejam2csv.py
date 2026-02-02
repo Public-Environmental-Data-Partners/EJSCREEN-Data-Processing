@@ -10,10 +10,59 @@
 #
 # Inputs: none required (hardcoded API request), optional CLI `-n/--limit` to limit rows
 # Output: CSV file with selected fields; JSON dump (optional) for debugging
-
+import argparse
 import pandas
 import requests
 import json
+import re
+import html
+from dataclasses import dataclass
+from pathlib import Path
+from dotenv import load_dotenv  # needed for AWS access via .env file
+from typing import Optional
+
+# --- Configuration and CLI parsing (moved/simplified to mirror geojson2csv.py) ---
+@dataclass
+class Config:
+    # output filename (will be joined with `path`); default writes locally under ./test_files/
+    output_file: str = "ri_ejam_traffic_subset.csv"
+    # number of rows to process; <=0 or None means no limit
+    number_rows: Optional[int] = 10
+    dry_run: bool = False
+    # destination path or s3 prefix (e.g. s3://bucket/key-prefix/ or ./test_files/)
+    path: str = "./test_files/"
+
+
+def get_config(argv=None) -> Config:
+    """Load .env then parse a small set of CLI args and return a Config."""
+    # Load environment variables (so boto3 can pick up AWS creds if later needed)
+    load_dotenv()
+
+
+    parser = argparse.ArgumentParser(description="Request EJAM API response and create a traffic subset CSV")
+    parser.add_argument('-p', '--path', type=str, default=Config.path,
+                        help='S3 path prefix or local folder for output (default: ./test_files/)')
+    parser.add_argument('-n', '--number_rows', type=int, default=Config.number_rows,
+                        help='maximum number of rows to process (default: 10); <=0 means no limit')
+    parser.add_argument('--dry-run', action='store_true', help='If set, do not write any files, just show what would be done')
+
+    args = parser.parse_args(argv)
+
+    # Filter out 'None' values so they don't overwrite our Dataclass defaults
+    overrides = {k: v for k, v in vars(args).items() if v is not None}
+
+    # Merge overrides into the default Config
+    return Config(**overrides)
+
+
+def join_path_and_file(path: str, filename: str) -> str:
+    """Return a correctly-formed path:
+    - If `path` is an S3 URI (s3://...), join using '/' and preserve the s3:// scheme.
+    - Otherwise, use pathlib.Path to build a local filesystem path.
+    """
+    if isinstance(path, str) and path.lower().startswith('s3://'):
+        return path.rstrip('/') + '/' + filename.lstrip('/')
+    return str(Path(path) / filename)
 
 # --- Helper functions (moved to top) ---------------------------------------
 def dumpRequestJson(obj, filename='./test_files/ejam_response.json', limit=None):
@@ -98,7 +147,7 @@ def extract_url_from_anchor(s):
         # quick check for anchor
         if '<a' not in text.lower() or 'href' not in text.lower():
             return text
-        import re, html
+
         # unescape HTML entities first
         text_un = html.unescape(text)
         # find href= followed by single or double quote
@@ -116,19 +165,19 @@ def extract_url_from_anchor(s):
         return s
 
 # --- Main script body ------------------------------------------------------
-# For now, the default number of record to process is small.
-# Pass None if you want them all
-# TODO: change this the default to None/ALL once the script is stable
-def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="Dump EJAM response and create a traffic subset CSV")
-    parser.add_argument('-n', '--limit', type=int, default=10,
-                        help='maximum number of DataFrame rows/JSON objects to process (default: 10)')
-    args = parser.parse_args()
-    limit = args.limit
+def main(argv=None) -> None:
+    # Use simplified config/CLI parsing
+    config = get_config(argv)
+
+    print(f"Will be writing to path: {config.path}")
+
+    out_path = join_path_and_file(config.path, config.output_file)
+    limit = config.number_rows
+    dry_run = config.dry_run
 
     # See EJAM API documentation: https://github.com/edgi-govdata-archiving/EJAM-API?tab=readme-ov-file
     url = "https://ejamapi-84652557241.us-central1.run.app/data"
+	# TODO: make state abbreviation a runtime parameter
     request_data = {"buffer": 0, "fips": "RI", "scale": "blockgroup"}
 
     resp = requests.post(url, json=request_data)
@@ -181,8 +230,6 @@ def main():
     else:
         print("All desired columns found in API response.")
 
-    out_path = ("./test_files/traffic_subset.csv")
-
     # Clean up fields to work better in Excel
     if 'EJAM Report' in out_df.columns:
         out_df['EJAM Report'] = out_df['EJAM Report'].apply(extract_url_from_anchor)
@@ -190,11 +237,17 @@ def main():
     if 'ejam_uniq_id' in out_df.columns:
         out_df['ejam_uniq_id'] = out_df['ejam_uniq_id'].apply(force_ejam_uniq_id_to_excel_text)
 
-    # Let'er rip
-    out_df.to_csv(out_path, index=False)
-    print(f"Wrote {len(out_df)} rows × {len(out_df.columns)} columns to {out_path}")
-    # print(out_df.head(10).to_string(index=False))
+    # Dry-run: don't write output file, just print preview and exit
+    if dry_run:
+        print(f"--dry-run: no files will be written. Would write to: {out_path}")
+        if not out_df.empty:
+            print(out_df.head(min(10, len(out_df))).to_string(index=False))
+    else:
+        # Let'er rip
+        out_df.to_csv(out_path, index=False)
+        print(f"Wrote {len(out_df)} rows × {len(out_df.columns)} columns to {out_path}")
+        # print(out_df.head(10).to_string(index=False))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

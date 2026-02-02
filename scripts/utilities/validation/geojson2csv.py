@@ -1,5 +1,6 @@
 import argparse
-from dataclasses import dataclass, asdict
+import boto3
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import pandas as pd
@@ -12,10 +13,10 @@ class Config:
     #TODO: when we start processing more than one state, filename prefix will need to be a parameter
     input_file: str = "ri_bg_summary.geojson"
     output_file: str = "ri_bg_summary.csv"
-    number_rows: int = 10  # <=0 means no limit
+    number_rows: int = 0  # <=0 means no limit
     dry_run: bool = False
     path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
-    path: str = "./test_files/"
+    #path: str = "./test_files/"
 
 def get_config(argv=None) -> Config:
 
@@ -38,6 +39,18 @@ def get_config(argv=None) -> Config:
     return Config(**overrides)
 
 # --- Helper functions ------------------------------------------------------
+def join_path_and_file(path: str, filename: str) -> str:
+    """Return a correctly-formed path:
+    - If `path` is an S3 URI (s3://...), join using '/' and preserve the s3:// scheme.
+    - Otherwise, use pathlib.Path to build a local filesystem path.
+    """
+    full_path = ''
+    if isinstance(path, str) and path.lower().startswith('s3://'):
+        full_path = path.rstrip('/') + '/' + filename.lstrip('/')
+    else:
+        full_path = str(Path(path) / filename)
+    return full_path
+
 def load_geojson_properties(path: str) -> pd.DataFrame:
     """Load a GeoJSON file and return a DataFrame made from feature properties.
 
@@ -50,17 +63,14 @@ def load_geojson_properties(path: str) -> pd.DataFrame:
     """
     obj = None
     # If the path is an S3 URI, stream the object from S3
+    print("path:", path)
     if isinstance(path, str) and path.lower().startswith('s3://'):
-        # parse s3://bucket/key
+        print("path is s3 uri")
         s3tail = path[5:]
         parts = s3tail.split('/', 1)
         if len(parts) != 2 or not parts[0] or not parts[1]:
             raise ValueError(f"Invalid S3 URI: {path}")
         bucket, key = parts[0], parts[1]
-        try:
-            import boto3
-        except Exception:
-            raise ImportError("To read from S3 you must install boto3 (pip install boto3)")
 
         s3 = boto3.client('s3')
         try:
@@ -70,8 +80,9 @@ def load_geojson_properties(path: str) -> pd.DataFrame:
             text = body.decode('utf-8')
             obj = json.loads(text)
         except Exception as e:
-            raise RuntimeError(f"Failed to read S3 object s3://{bucket}/{key}: {e}") from e
+            raise RuntimeError(f"***Failed to read S3 object s3://{bucket}/{key}: {e}") from e
     else:
+        print("path is local")
         p = Path(path)
         if not p.exists():
             raise FileNotFoundError(f"GeoJSON file not found: {path}")
@@ -115,20 +126,52 @@ def load_geojson_properties(path: str) -> pd.DataFrame:
 def write_csv(df: pd.DataFrame, out_path: str, limit: Optional[int] = 10) -> None:
     """Write df to CSV; if limit is None, write all rows. If limit > 0, write up to limit rows.
 
-    The CSV will include column names derived from the DataFrame fields.
+    Supports writing to local filesystem paths or to S3 URIs (s3://bucket/key).
+    For S3, the DataFrame is first written to a temporary local CSV and then
+    uploaded via boto3.upload_file. The temporary file is removed afterwards.
     """
-    out_p = Path(out_path)
-
-    if limit is None:
-        use_df = df
-    elif limit <= 0:
-        # treat non-positive as 'no limit'
+    # Determine which rows to write
+    if limit is None or limit <= 0:
         use_df = df
     else:
         use_df = df.head(limit)
 
+    # If destination is S3, write to a temp file then upload
+    if isinstance(out_path, str) and out_path.lower().startswith('s3://'):
+        import tempfile
+        import os
+        tmp_path = None
+        try:
+            # create a temp file to write the CSV
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.csv')
+            tmp_path = Path(tmp.name)
+            tmp.close()
+            use_df.to_csv(tmp_path, index=False)
+
+            # parse s3 uri
+            tail = out_path[5:]
+            parts = tail.split('/', 1)
+            if len(parts) != 2:
+                raise ValueError(f"Invalid S3 URI: {out_path}")
+            bucket, key = parts[0], parts[1]
+
+            s3 = boto3.client('s3')
+            s3.upload_file(Filename=str(tmp_path), Bucket=bucket, Key=key)
+            print(f"Wrote {len(use_df)} rows × {len(use_df.columns)} columns to {out_path}")
+        finally:
+            # clean up temp file if it was created
+            try:
+                if tmp_path is not None and tmp_path.exists():
+                    os.unlink(str(tmp_path))
+            except Exception:
+                pass
+        return
+
+    # Otherwise treat as local filesystem path
+    out_p = Path(out_path)
     out_p.parent.mkdir(parents=True, exist_ok=True)
     use_df.to_csv(out_p, index=False)
+    print(f"Wrote {len(use_df)} rows × {len(use_df.columns)} columns to {out_path}")
 
 
 # helper to format identifiers so Excel imports them as text (e.g. ="440010301001")
@@ -146,15 +189,15 @@ def main(argv=None) -> None:
     config = get_config(argv)
 
     print(f"Will be reading from and writing to path: {config.path}")
-    input_geojson = str(Path(config.path) / config.input_file)
-    output_csv = str(Path(config.path) / config.output_file)
+    input_geojson = join_path_and_file(config.path, config.input_file)
+    output_csv = join_path_and_file(config.path, config.output_file)
     limit = config.number_rows
     dry_run = config.dry_run
 
     try:
         df = load_geojson_properties(input_geojson)
     except Exception as e:
-        print(f"Error loading GeoJSON '{input_geojson}': {e}")
+        print(f"***Error loading GeoJSON '{input_geojson}': {e}")
         exit(1)
 
     orig_n = len(df)

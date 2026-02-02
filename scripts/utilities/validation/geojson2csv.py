@@ -1,3 +1,26 @@
+"""
+geojson2csv.py
+
+Purpose:
+  Read new-pipeline traffic GeoJSON (by default from S3) and extract feature properties
+  into a compact CSV to be written back to same location.
+  Geometry is ignored; only feature properties are output.
+
+Usage:
+  - Configure the `Config` dataclass or run with command-line options:
+      python geojson2csv.py -p <path-or-s3-prefix> -n <number-of-rows> [--dry-run]
+  - If `-p/--path` starts with `s3://`, input/output will be read/written on S3.
+
+Dependencies:
+  - Python 3.8+
+  - pandas
+  - boto3 (if reading/writing S3)
+  - python-dotenv (optional, for loading AWS creds from a .env file)
+
+Author / Credit:
+  Code written by Anne Gunn with help from EmmaLi, GitHub Copilot, and Gemini.
+"""
+
 import argparse
 import boto3
 from dataclasses import dataclass
@@ -122,7 +145,6 @@ def load_geojson_properties(path: str) -> pd.DataFrame:
     df = pd.DataFrame.from_records(props)
     return df
 
-
 def write_csv(df: pd.DataFrame, out_path: str, limit: Optional[int] = 10) -> None:
     """Write df to CSV; if limit is None, write all rows. If limit > 0, write up to limit rows.
 
@@ -230,4 +252,3 @@ def main(argv=None) -> None:
 
 if __name__ == '__main__':
     main()
-

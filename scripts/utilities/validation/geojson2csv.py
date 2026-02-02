@@ -131,7 +131,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Convert a GeoJSON (FeatureCollection) to CSV of properties (ignore geometry).')
-    parser.add_argument('-i', '--input', default='ri_bg_summary.geojson', help='input GeoJSON file path (default: ri_bg_summary.geojson)')
+    parser.add_argument('-i', '--input', default='./test_files/fromRC_ri_bg_summary.geojson', help='input GeoJSON file path (default: ri_bg_summary.geojson)')
     parser.add_argument('-o', '--output', default='ri_bg_summary.csv', help='output CSV file path (default: ri_bg_summary.csv)')
     parser.add_argument('-n', '--limit', type=int, default=10,
                         help='maximum number of rows to write to CSV; <=0 means no limit; default 10')

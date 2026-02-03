@@ -196,14 +196,13 @@ def write_csv(df: pd.DataFrame, out_path: str, limit: Optional[int] = 10) -> Non
     print(f"Wrote {len(use_df)} rows × {len(use_df.columns)} columns to {out_path}")
 
 
-# helper to format identifiers so Excel imports them as text (e.g. ="440010301001")
-def _format_id_for_excel_col(v):
+# This is a hack but ChatGPT says it is a common one and works better than quoting
+def force_ejam_uniq_id_to_excel_text(v):
     if pd.isna(v):
         return v
     s = str(v)
-    if s.startswith('="') and s.endswith('"'):
-        return s
-    return f'="{s}"'
+    # preface the long string of digits with a tab and Excel will see it as text
+    return f"\t{s}"
 
 
 # --- Main ------------------------------------------------------------------
@@ -238,7 +237,7 @@ def main(argv=None) -> None:
 
     # Force Excel to import block_group_geoid as text if present
     if 'block_group_geoid' in used_df.columns:
-        used_df['block_group_geoid'] = used_df['block_group_geoid'].apply(_format_id_for_excel_col)
+        used_df['block_group_geoid'] = used_df['block_group_geoid'].apply(force_ejam_uniq_id_to_excel_text)
 
     # Dry-run: don't write files, just print preview and exit
     if dry_run:

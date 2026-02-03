@@ -139,7 +139,6 @@ def _format_id_for_excel_col(v):
 
 # This is a hack but ChatGPT says it is a common one and works better than quoting
 def force_ejam_uniq_id_to_excel_text(v):
-    """Return the value wrapped in single quotes unless it's NA or already quoted."""
     if pandas.isna(v):
         return v
     s = str(v)

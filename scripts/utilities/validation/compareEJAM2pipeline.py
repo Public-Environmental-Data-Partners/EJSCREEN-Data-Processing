@@ -1,28 +1,42 @@
 """
 compareEJAM2pipeline.py
 
-Small utility to load EJAM-export CSV and pipeline CSV (local or S3),
-compare their shapes and keys, and print a concise summary useful for
-validation and debugging.
+EJAM pipeline value comparison utility
 
-Behavior (current):
- - Accepts a path prefix (S3 or local) and two filenames (defaults match
-   repository naming used elsewhere).
- - Loads both CSV files into pandas.DataFrame objects (S3 support via boto3).
- - Prints row/column counts, column-name diffs, null counts, and if a
-   sensible key column is detected (ejam_uniq_id, GEOID, geoid, id) reports
-   overlap statistics between the two datasets.
+This small, focused script loads two CSV exports (an EJAM reference
+export and a separate pipeline output), merges them on a provided key
+(possibly with different column names in each file), computes per-field
+bias deltas (residual, absolute difference, ratio, percent difference),
+and produces concise artifacts useful for validation and debugging.
 
-Usage:
-  python compareEJAM2pipeline.py [-p PATH] [--input-ejam FILE] [--input-pipe FILE]
+Features
+- Load CSVs from local filesystem or from S3 (requires boto3 and AWS creds).
+- Merge EJAM and pipeline rows (supports different join-key names).
+- Compute deltas for mapped pairs of columns (e.g. traffic score, population).
+- Produce a reduced merged CSV containing only the key and compared
+  columns, a summary JSON with bias statistics, and a plain-text
+  `simpleReport.txt` with top/bottom absolute-difference tables.
 
-Defaults:
- - input_ejam: ri_ejam_traffic_subset.csv
- - input_pipe: ri_bg_summary.csv
- - path: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
+Usage (examples)
+  python compareEJAM2pipeline.py -p ./scripts/utilities/validation/test_files/ --dry-run
+  python compareEJAM2pipeline.py -p s3://my-bucket/prefix/ --input-ejam ejam.csv --input-pipe pipe.csv
 
-The script aims to be simple and non-destructive. It prints results to
-stdout and does not write any files.
+Defaults
+- input_ejam: ri_ejam_traffic_subset.csv
+- input_pipe: ri_bg_summary.csv
+- default path: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
+
+Outputs
+- {path}/{output_prefix}/merged_reduced.csv  (key + compared columns)
+- {path}/{output_prefix}/summary.json        (numeric summaries and orphan counts)
+- {path}/{output_prefix}/simpleReport.txt    (human-readable top/bottom diffs)
+
+Credits
+- Design: Gemini and Anne Gunn
+- Implementation: GitHub Copilot (GPT-5 mini) and Anne Gunn
+
+Non-destructive of the input files: the script reads inputs and writes only the specified
+outputs; it is safe to run in a CI/manual validation workflow.
 """
 
 from dataclasses import dataclass
@@ -41,8 +55,8 @@ class Config:
     input_ejam: str = "ri_ejam_traffic_subset.csv"
     input_pipe: str = "ri_bg_summary.csv"
     path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
-    # keep the local test path line present for testing (intentionally duplicated)
-    path = "./test_files/"
+    # local test path to eliminate needing the runtime override
+    # path = "./test_files/"
     # Join key names may differ between EJAM and pipeline outputs
     join_key_ejam: str = "ejam_uniq_id"      # column name in EJAM CSV
     join_key_pipe: str = "block_group_geoid"  # column name in pipeline CSV (ri_bg_summary.csv)
@@ -325,47 +339,73 @@ def export_comparison_results(df_final: pd.DataFrame, summary_data: dict, out_pr
 
     # Create a simple text report if requested
     if report_specs:
-        lines = ["SIMPLE COMPARISON REPORT, five largest differences\n"]
-        # For each requested section (e.g. 'score', 'population') create a heading and table
+        lines = []
+        lines.append("SIMPLE COMPARISON REPORT")
+        lines.append("")
+        # For each requested section (e.g. 'score', 'population') create headings and two tables
         for section_name, spec in report_specs.items():
             label = spec.get('label')
             ref_col = spec.get('ref')
             new_col = spec.get('new')
+            id_col = spec.get('id_col', list(df_final.columns)[0])
             abs_col = f"{label}_abs_diff"
-            header = f"SECTION: {section_name.upper()}\n"
-            lines.append(header)
-            # table header
-            hdr = ["id", ref_col, new_col, "abs_diff"]
-            # Collect rows sorted by abs_diff descending
-            if abs_col in df_final.columns:
-                df_tmp = df_final[[spec.get('id_col', list(df_final.columns)[0]), ref_col, new_col, abs_col]].copy()
-                # ensure numeric formatting
+
+            lines.append(f"SECTION: {section_name.upper()}")
+            lines.append("")
+
+            if abs_col in df_final.columns and ref_col in df_final.columns and new_col in df_final.columns:
+                df_tmp = df_final[[id_col, ref_col, new_col, abs_col]].copy()
                 df_tmp[ref_col] = pd.to_numeric(df_tmp[ref_col], errors='coerce')
                 df_tmp[new_col] = pd.to_numeric(df_tmp[new_col], errors='coerce')
                 df_tmp[abs_col] = pd.to_numeric(df_tmp[abs_col], errors='coerce')
-                df_tmp = df_tmp.sort_values(by=abs_col, ascending=False).head(5)
-                # compute column widths
-                col_names = [hdr[0], hdr[1], hdr[2], hdr[3]]
+
+                # 5 largest absolute differences
+                top = df_tmp.sort_values(by=abs_col, ascending=False).head(5)
+                lines.append("5 largest absolute differences")
+                col_names = ["id", ref_col, new_col, "abs_diff"]
                 rows = []
-                # prepare string rows
-                for _, r in df_tmp.iterrows():
-                    idv = str(r.iloc[0])
+                for _, r in top.iterrows():
+                    idv = str(r[id_col])
                     refv = f"{r[ref_col]:.6g}" if pd.notna(r[ref_col]) else ""
                     newv = f"{r[new_col]:.6g}" if pd.notna(r[new_col]) else ""
                     absv = f"{r[abs_col]:.6g}" if pd.notna(r[abs_col]) else ""
                     rows.append([idv, refv, newv, absv])
-                # determine widths
-                widths = [max(len(str(c)), max((len(row[i]) for row in rows), default=0)) for i, c in enumerate(col_names)]
-                # header line
-                header_line = '  '.join(col_names[i].ljust(widths[i]) for i in range(len(col_names)))
-                lines.append(header_line)
-                lines.append('-' * (sum(widths) + 2 * (len(widths)-1)))
-                for row in rows:
-                    line = '  '.join(row[i].ljust(widths[i]) for i in range(len(row)))
-                    lines.append(line)
+                if rows:
+                    widths = [max(len(str(c)), max((len(row[i]) for row in rows), default=0)) for i, c in enumerate(col_names)]
+                    header_line = '  '.join(col_names[i].ljust(widths[i]) for i in range(len(col_names)))
+                    lines.append(header_line)
+                    lines.append('-' * (sum(widths) + 2 * (len(widths)-1)))
+                    for row in rows:
+                        line = '  '.join(row[i].ljust(widths[i]) for i in range(len(row)))
+                        lines.append(line)
+                else:
+                    lines.append("(no rows)")
+
+                lines.append("")
+                # Bottom 5 smallest absolute differences
+                bottom = df_tmp.sort_values(by=abs_col, ascending=True).head(5)
+                lines.append("5 smallest absolute differences")
+                rows = []
+                for _, r in bottom.iterrows():
+                    idv = str(r[id_col])
+                    refv = f"{r[ref_col]:.6g}" if pd.notna(r[ref_col]) else ""
+                    newv = f"{r[new_col]:.6g}" if pd.notna(r[new_col]) else ""
+                    absv = f"{r[abs_col]:.6g}" if pd.notna(r[abs_col]) else ""
+                    rows.append([idv, refv, newv, absv])
+                if rows:
+                    widths = [max(len(str(c)), max((len(row[i]) for row in rows), default=0)) for i, c in enumerate(col_names)]
+                    header_line = '  '.join(col_names[i].ljust(widths[i]) for i in range(len(col_names)))
+                    lines.append(header_line)
+                    lines.append('-' * (sum(widths) + 2 * (len(widths)-1)))
+                    for row in rows:
+                        line = '  '.join(row[i].ljust(widths[i]) for i in range(len(row)))
+                        lines.append(line)
+                else:
+                    lines.append("(no rows)")
             else:
-                lines.append(f"No delta column found for label '{label}' (expected {abs_col})")
-            lines.append('\n')
+                lines.append(f"No delta column found for label '{label}' (expected {abs_col}, {ref_col}, {new_col})")
+
+            lines.append('')
 
         report_text = '\n'.join(lines)
         report_path = out_prefix_path.rstrip('/') + '/' + 'simpleReport.txt'

@@ -27,11 +27,12 @@ stdout and does not write any files.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 import argparse
 import pandas as pd
 from dotenv import load_dotenv
 import io
+import json
+import numpy as np
 
 
 # --- Configuration --------------------------------------------------------
@@ -40,20 +41,35 @@ class Config:
     input_ejam: str = "ri_ejam_traffic_subset.csv"
     input_pipe: str = "ri_bg_summary.csv"
     path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
+    path: str = "./test_files/"
+    # Join key names may differ between EJAM and pipeline outputs
+    join_key_ejam: str = "ejam_uniq_id"      # column name in EJAM CSV
+    join_key_pipe: str = "block_group_geoid"  # column name in pipeline CSV (ri_bg_summary.csv)
+    # mapping: JSON string mapping new_pipe column names -> ejam column names
+    mapping: str = json.dumps({"blk_grp_score":"traffic.score", "total_pop":"pop"})
+    output_prefix: str = "comparison_results"
     dry_run: bool = False
 
 
 def get_config(argv=None) -> Config:
     """Parse CLI args and environment into a Config object."""
     load_dotenv()
-    parser = argparse.ArgumentParser(description="Compare EJAM CSV and pipeline CSV (local or S3)")
+    parser = argparse.ArgumentParser(description="Compare EJAM CSV and pipeline CSV (local or S3) with bias summaries")
     parser.add_argument('-p', '--path', type=str, default=Config.path,
                         help='S3 prefix or local folder containing the CSVs')
     parser.add_argument('--input-ejam', type=str, default=Config.input_ejam,
                         help='EJAM CSV filename')
     parser.add_argument('--input-pipe', type=str, default=Config.input_pipe,
                         help='Pipeline CSV filename')
-    parser.add_argument('--dry-run', action='store_true', help='No effect; present for CLI parity')
+    parser.add_argument('--join-key-ejam', type=str, default=Config.join_key_ejam,
+                        help='Column name used as unique join key in EJAM CSV (default: ejam_uniq_id)')
+    parser.add_argument('--join-key-pipe', type=str, default=Config.join_key_pipe,
+                        help='Column name used as unique join key in pipeline CSV (default: block_group_geoidz)')
+    parser.add_argument('--mapping', type=str, default=Config.mapping,
+                        help='JSON string mapping new_pipe columns to ejam columns, e.g. "{\"traffic_new\": \"traffic\"}"')
+    parser.add_argument('--output-prefix', type=str, default=Config.output_prefix,
+                        help='Prefix for output filenames written to the path')
+    parser.add_argument('--dry-run', action='store_true', help='If set, do not write outputs; only compute and print summaries')
     args = parser.parse_args(argv)
     overrides = {k: v for k, v in vars(args).items() if v is not None}
     return Config(**overrides)
@@ -100,8 +116,203 @@ def load_csv(path: str) -> pd.DataFrame:
         raise FileNotFoundError(f"Local CSV not found: {path}")
     return pd.read_csv(p)
 
+# --- Bias Analysis functions ---------------------------------------------
 
-# --- Comparison helpers --------------------------------------------------
+def identify_orphans(df_ejam: pd.DataFrame, df_new_pipe: pd.DataFrame, key_ejam: str, key_new: str) -> dict:
+    """Return dict with lists of IDs missing in either dataset before merging.
+
+    key_ejam: column name in EJAM (reference) DataFrame
+    key_new: column name in pipeline (new) DataFrame
+    """
+    a_ids = set(df_ejam[key_ejam].dropna().astype(str).unique()) if key_ejam in df_ejam.columns else set()
+    b_ids = set(df_new_pipe[key_new].dropna().astype(str).unique()) if key_new in df_new_pipe.columns else set()
+    missing_in_new = sorted(list(a_ids - b_ids))
+    missing_in_ejam = sorted(list(b_ids - a_ids))
+    return {"missing_in_new": missing_in_new, "missing_in_ejam": missing_in_ejam}
+
+
+def merge_and_clean(df_ejam: pd.DataFrame, df_new_pipe: pd.DataFrame, key_ejam: str, key_new: str) -> pd.DataFrame:
+    """Inner join on the provided keys (which may have different names) and return merged DataFrame.
+
+    The function performs merge with left_on=key_ejam and right_on=key_new and uses suffixes
+    to keep columns distinct when names collide.
+    """
+    if key_ejam not in df_ejam.columns:
+        raise KeyError(f"Join key '{key_ejam}' not found in EJAM DataFrame")
+    if key_new not in df_new_pipe.columns:
+        raise KeyError(f"Join key '{key_new}' not found in new pipeline DataFrame")
+    merged = pd.merge(df_ejam, df_new_pipe, left_on=key_ejam, right_on=key_new, how='inner', suffixes=('_ref', '_new'))
+    return merged
+
+
+def _resolve_merged_col(merged: pd.DataFrame, ref_name: str, new_name: str) -> tuple:
+    """Given original column names, determine actual merged column names.
+
+    Returns (ref_col, new_col) as they appear in merged DataFrame.
+    """
+    # Prefer exact appearances first
+    ref_col = ref_name if ref_name in merged.columns else None
+    new_col = new_name if new_name in merged.columns else None
+    # If not found, try suffixes
+    if ref_col is None and f"{ref_name}_ref" in merged.columns:
+        ref_col = f"{ref_name}_ref"
+    if new_col is None and f"{new_name}_new" in merged.columns:
+        new_col = f"{new_name}_new"
+    # Also try the opposite (in case mapping used same name)
+    if ref_col is None and f"{ref_name}_new" in merged.columns:
+        ref_col = f"{ref_name}_new"
+    if new_col is None and f"{new_name}_ref" in merged.columns:
+        new_col = f"{new_name}_ref"
+    return ref_col, new_col
+
+
+def calculate_deltas(df_merged: pd.DataFrame, ref_col: str, new_col: str, label: str) -> pd.DataFrame:
+    """Append delta columns for a specific ref/new column pair.
+
+    Creates columns: {label}_residual, {label}_abs_diff, {label}_ratio, {label}_pct_diff
+    Uses NaN for ratios where ref is zero or missing. Coerces values to numeric.
+    """
+    if ref_col not in df_merged.columns or new_col not in df_merged.columns:
+        raise KeyError(f"Columns not found in merged DataFrame: {ref_col}, {new_col}")
+
+    # Coerce to numeric (float), preserving NaN for non-numeric values
+    ref_vals = pd.to_numeric(df_merged[ref_col], errors='coerce').astype('float64')
+    new_vals = pd.to_numeric(df_merged[new_col], errors='coerce').astype('float64')
+
+    residual = new_vals - ref_vals
+    # abs_diff using numpy to be robust if residual is ndarray-like
+    abs_diff = np.abs(residual)
+
+    # Compute ratio safely: use NaN where ref_vals == 0 or ref is NaN
+    with np.errstate(divide='ignore', invalid='ignore'):
+        raw_ratio = new_vals / ref_vals
+    # Ensure we have a pandas Series so .replace is available and index preserved
+    ratio = pd.Series(raw_ratio, index=df_merged.index)
+    ratio = ratio.replace([np.inf, -np.inf], np.nan)
+
+    # Percentage difference relative to ref; NaN when ref is zero/NaN
+    raw_pct = (residual / ref_vals) * 100
+    pct_diff = pd.Series(raw_pct, index=df_merged.index)
+    pct_diff = pct_diff.replace([np.inf, -np.inf], np.nan)
+
+    df_merged[f"{label}_residual"] = residual
+    df_merged[f"{label}_abs_diff"] = abs_diff
+    df_merged[f"{label}_ratio"] = ratio
+    df_merged[f"{label}_pct_diff"] = pct_diff
+    # Valid-ratio mask: True where reference > 0 and both values are finite
+    try:
+        # ensure a pandas Series so .notna() is available to static checkers
+        ref_numeric = pd.Series(pd.to_numeric(df_merged[ref_col], errors='coerce'), index=df_merged.index)
+        valid_ratio_mask = (ref_numeric > 0) & ref_numeric.notna()
+    except Exception:
+        valid_ratio_mask = pd.Series([False] * len(df_merged), index=df_merged.index)
+    df_merged[f"{label}_valid_ratio"] = valid_ratio_mask
+
+    return df_merged
+
+
+def summarize_bias(df_deltas: pd.DataFrame, label: str) -> dict:
+    """Aggregate bias statistics for the given label from delta columns."""
+    res = {}
+    res['label'] = label
+    res_cols = {
+        'residual': f"{label}_residual",
+        'abs_diff': f"{label}_abs_diff",
+        'ratio': f"{label}_ratio",
+        'pct_diff': f"{label}_pct_diff",
+    }
+    # Ensure columns exist
+    for k, col in res_cols.items():
+        if col not in df_deltas.columns:
+            res[f"error_{k}"] = f"Missing column {col}"
+            return res
+
+    residual = df_deltas[res_cols['residual']]
+    ratio = df_deltas[res_cols['ratio']]
+    abs_diff = df_deltas[res_cols['abs_diff']]
+    pct_diff = df_deltas[res_cols['pct_diff']]
+
+    # Mean Bias Error (MBE)
+    res['mbe'] = float(residual.mean(skipna=True)) if len(residual) > 0 else None
+    # Mean Ratio: prefer using the precomputed valid-ratio mask (ref > 0)
+    valid_mask_col = f"{label}_valid_ratio"
+    if valid_mask_col in df_deltas.columns:
+        valid_ratio_mask = df_deltas[valid_mask_col].astype(bool)
+    else:
+        valid_ratio_mask = ~ratio.isna()
+
+    if valid_ratio_mask.any():
+        mean_ratio = float(ratio[valid_ratio_mask].mean())
+    else:
+        mean_ratio = None
+    res['mean_ratio'] = mean_ratio
+
+    # Outliers and consistency
+    res['abs_diff_max'] = float(abs_diff.max(skipna=True)) if len(abs_diff) > 0 else None
+    res['abs_diff_min'] = float(abs_diff.min(skipna=True)) if len(abs_diff) > 0 else None
+    res['pct_diff_max'] = float(pct_diff.max(skipna=True)) if len(pct_diff) > 0 else None
+    res['pct_diff_min'] = float(pct_diff.min(skipna=True)) if len(pct_diff) > 0 else None
+    res['ratio_std'] = float(ratio.std(skipna=True)) if len(ratio) > 0 else None
+
+    # counts
+    res['n_rows'] = int(len(df_deltas))
+    res['n_valid_ratio'] = int(valid_ratio_mask.sum())
+
+    return res
+
+
+def _write_text_to_path(text: str, out_path: str) -> None:
+    """Write text to local path or S3 key."""
+    if is_s3_uri(out_path):
+        tail = out_path[5:]
+        parts = tail.split('/', 1)
+        if len(parts) != 2:
+            raise ValueError(f"Invalid S3 URI: {out_path}")
+        bucket, key = parts[0], parts[1]
+        import boto3
+        s3 = boto3.client('s3')
+        s3.put_object(Bucket=bucket, Key=key, Body=text.encode('utf-8'))
+        return
+    p = Path(out_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, 'w', encoding='utf-8') as fh:
+        fh.write(text)
+
+
+def export_comparison_results(df_final: pd.DataFrame, summary_data: dict, out_prefix_path: str) -> None:
+    """Write merged DataFrame and summary JSON to out_prefix_path (S3 or local).
+
+    out_prefix_path is a folder/prefix; the function will create two files:
+      {out_prefix_path.rstrip('/')}/merged.csv
+      {out_prefix_path.rstrip('/')}/summary.json
+    If out_prefix_path is an S3 URI the files will be uploaded to that bucket/key prefix.
+    """
+    merged_name = out_prefix_path.rstrip('/') + '/' + 'merged.csv'
+    summary_name = out_prefix_path.rstrip('/') + '/' + 'summary.json'
+
+    # Write merged DataFrame
+    if is_s3_uri(merged_name):
+        # write to buffer and upload
+        buf = io.StringIO()
+        df_final.to_csv(buf, index=False)
+        buf.seek(0)
+        tail = merged_name[5:]
+        parts = tail.split('/', 1)
+        bucket, key = parts[0], parts[1]
+        import boto3
+        s3 = boto3.client('s3')
+        s3.put_object(Bucket=bucket, Key=key, Body=buf.getvalue().encode('utf-8'))
+        print(f"Uploaded merged CSV to {merged_name}")
+    else:
+        p = Path(merged_name)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        df_final.to_csv(p, index=False)
+        print(f"Wrote merged CSV to {merged_name}")
+
+    # Write summary JSON
+    summary_text = json.dumps(summary_data, indent=2)
+    _write_text_to_path(summary_text, summary_name)
+    print(f"Wrote summary JSON to {summary_name}")
 
 
 # --- Main ----------------------------------------------------------------
@@ -125,9 +336,62 @@ def main(argv=None) -> None:
         print(f"Error loading pipeline CSV at {pipe_path}: {e}")
         return
 
-    print(f"Loaded EJAM: {len(df_ejam)} rows × {len(df_ejam.columns)} cols")
-    print(f"Loaded Pipeline: {len(df_pipe)} rows × {len(df_pipe.columns)} cols")
+    # Ensure join keys exist (they may have different names in each file)
+    key_ejam = cfg.join_key_ejam
+    key_new = cfg.join_key_pipe
+    if key_ejam not in df_ejam.columns:
+        print(f"Join key '{key_ejam}' not found in EJAM dataframe columns: {df_ejam.columns.tolist()}")
+        return
+    if key_new not in df_pipe.columns:
+        print(f"Join key '{key_new}' not found in pipeline dataframe columns: {df_pipe.columns.tolist()}")
+        return
 
+    orphans = identify_orphans(df_ejam, df_pipe, key_ejam, key_new)
+    print(f"Orphans: {len(orphans['missing_in_new'])} missing in new pipeline, {len(orphans['missing_in_ejam'])} missing in ejam")
+
+    merged = merge_and_clean(df_ejam, df_pipe, key_ejam, key_new)
+    print(f"Merged rows (inner join): {len(merged)}")
+
+    # Parse mapping
+    try:
+        mapping = json.loads(cfg.mapping)
+    except Exception as e:
+        print(f"Invalid mapping JSON provided: {e}")
+        return
+
+    summaries = {}
+    # For each mapping pair (new_col -> ref_col)
+    for new_col, ref_col in mapping.items():
+        # Resolve how columns appear in merged dataframe
+        ref_col_merged, new_col_merged = _resolve_merged_col(merged, ref_col, new_col)
+        if not ref_col_merged or not new_col_merged:
+            print(f"Skipping pair (new={new_col}, ref={ref_col}) - couldn't find merged columns: ref={ref_col_merged}, new={new_col_merged}")
+            continue
+        label = new_col  # use new column name as label
+        merged = calculate_deltas(merged, ref_col_merged, new_col_merged, label)
+        summaries[label] = summarize_bias(merged, label)
+        print(f"Computed deltas and summary for {label}")
+
+    # Aggregate overall summary
+    overall_summary = {
+        'join_key': {'ejam': key_ejam, 'pipeline': key_new},
+        'input_ejam': ejam_path,
+        'input_pipe': pipe_path,
+        'orphans': {'missing_in_new': len(orphans['missing_in_new']), 'missing_in_ejam': len(orphans['missing_in_ejam'])},
+        'field_summaries': summaries,
+        'merged_rows': len(merged)
+    }
+
+    # Write outputs unless dry-run
+    out_prefix = cfg.path.rstrip('/') + '/' + cfg.output_prefix
+    if cfg.dry_run:
+        print(json.dumps(overall_summary, indent=2))
+    else:
+        try:
+            export_comparison_results(merged, overall_summary, out_prefix)
+        except Exception as e:
+            print(f"Error writing outputs: {e}")
+    #
 
 if __name__ == '__main__':
     main()

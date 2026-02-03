@@ -41,7 +41,8 @@ class Config:
     input_ejam: str = "ri_ejam_traffic_subset.csv"
     input_pipe: str = "ri_bg_summary.csv"
     path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
-    path: str = "./test_files/"
+    # keep the local test path line present for testing (intentionally duplicated)
+    path = "./test_files/"
     # Join key names may differ between EJAM and pipeline outputs
     join_key_ejam: str = "ejam_uniq_id"      # column name in EJAM CSV
     join_key_pipe: str = "block_group_geoid"  # column name in pipeline CSV (ri_bg_summary.csv)
@@ -64,7 +65,7 @@ def get_config(argv=None) -> Config:
     parser.add_argument('--join-key-ejam', type=str, default=Config.join_key_ejam,
                         help='Column name used as unique join key in EJAM CSV (default: ejam_uniq_id)')
     parser.add_argument('--join-key-pipe', type=str, default=Config.join_key_pipe,
-                        help='Column name used as unique join key in pipeline CSV (default: block_group_geoidz)')
+                        help='Column name used as unique join key in pipeline CSV (default: block_group_geoid)')
     parser.add_argument('--mapping', type=str, default=Config.mapping,
                         help='JSON string mapping new_pipe columns to ejam columns, e.g. "{\"traffic_new\": \"traffic\"}"')
     parser.add_argument('--output-prefix', type=str, default=Config.output_prefix,
@@ -279,7 +280,7 @@ def _write_text_to_path(text: str, out_path: str) -> None:
         fh.write(text)
 
 
-def export_comparison_results(df_final: pd.DataFrame, summary_data: dict, out_prefix_path: str) -> None:
+def export_comparison_results(df_final: pd.DataFrame, summary_data: dict, out_prefix_path: str, emit_columns=None, report_specs=None) -> None:
     """Write merged DataFrame and summary JSON to out_prefix_path (S3 or local).
 
     out_prefix_path is a folder/prefix; the function will create two files:
@@ -287,14 +288,22 @@ def export_comparison_results(df_final: pd.DataFrame, summary_data: dict, out_pr
       {out_prefix_path.rstrip('/')}/summary.json
     If out_prefix_path is an S3 URI the files will be uploaded to that bucket/key prefix.
     """
-    merged_name = out_prefix_path.rstrip('/') + '/' + 'merged.csv'
+    # write a reduced merged CSV (key and compared columns) to avoid large outputs
+    merged_name = out_prefix_path.rstrip('/') + '/' + 'merged_reduced.csv'
     summary_name = out_prefix_path.rstrip('/') + '/' + 'summary.json'
 
-    # Write merged DataFrame
+    # Write reduced merged CSV (only key and selected columns) if emit_columns provided,
+    # otherwise fall back to full merged DataFrame.
+    to_write_df = df_final
+    if emit_columns is not None:
+        # only include columns that actually exist in df_final
+        cols = [c for c in emit_columns if c in df_final.columns]
+        to_write_df = df_final[cols]
+
     if is_s3_uri(merged_name):
         # write to buffer and upload
         buf = io.StringIO()
-        df_final.to_csv(buf, index=False)
+        to_write_df.to_csv(buf, index=False)
         buf.seek(0)
         tail = merged_name[5:]
         parts = tail.split('/', 1)
@@ -306,13 +315,62 @@ def export_comparison_results(df_final: pd.DataFrame, summary_data: dict, out_pr
     else:
         p = Path(merged_name)
         p.parent.mkdir(parents=True, exist_ok=True)
-        df_final.to_csv(p, index=False)
-        print(f"Wrote merged CSV to {merged_name}")
+        to_write_df.to_csv(p, index=False)
+        print(f"Wrote reduced merged CSV to {merged_name}")
 
     # Write summary JSON
     summary_text = json.dumps(summary_data, indent=2)
     _write_text_to_path(summary_text, summary_name)
     print(f"Wrote summary JSON to {summary_name}")
+
+    # Create a simple text report if requested
+    if report_specs:
+        lines = ["SIMPLE COMPARISON REPORT, five largest differences\n"]
+        # For each requested section (e.g. 'score', 'population') create a heading and table
+        for section_name, spec in report_specs.items():
+            label = spec.get('label')
+            ref_col = spec.get('ref')
+            new_col = spec.get('new')
+            abs_col = f"{label}_abs_diff"
+            header = f"SECTION: {section_name.upper()}\n"
+            lines.append(header)
+            # table header
+            hdr = ["id", ref_col, new_col, "abs_diff"]
+            # Collect rows sorted by abs_diff descending
+            if abs_col in df_final.columns:
+                df_tmp = df_final[[spec.get('id_col', list(df_final.columns)[0]), ref_col, new_col, abs_col]].copy()
+                # ensure numeric formatting
+                df_tmp[ref_col] = pd.to_numeric(df_tmp[ref_col], errors='coerce')
+                df_tmp[new_col] = pd.to_numeric(df_tmp[new_col], errors='coerce')
+                df_tmp[abs_col] = pd.to_numeric(df_tmp[abs_col], errors='coerce')
+                df_tmp = df_tmp.sort_values(by=abs_col, ascending=False).head(5)
+                # compute column widths
+                col_names = [hdr[0], hdr[1], hdr[2], hdr[3]]
+                rows = []
+                # prepare string rows
+                for _, r in df_tmp.iterrows():
+                    idv = str(r.iloc[0])
+                    refv = f"{r[ref_col]:.6g}" if pd.notna(r[ref_col]) else ""
+                    newv = f"{r[new_col]:.6g}" if pd.notna(r[new_col]) else ""
+                    absv = f"{r[abs_col]:.6g}" if pd.notna(r[abs_col]) else ""
+                    rows.append([idv, refv, newv, absv])
+                # determine widths
+                widths = [max(len(str(c)), max((len(row[i]) for row in rows), default=0)) for i, c in enumerate(col_names)]
+                # header line
+                header_line = '  '.join(col_names[i].ljust(widths[i]) for i in range(len(col_names)))
+                lines.append(header_line)
+                lines.append('-' * (sum(widths) + 2 * (len(widths)-1)))
+                for row in rows:
+                    line = '  '.join(row[i].ljust(widths[i]) for i in range(len(row)))
+                    lines.append(line)
+            else:
+                lines.append(f"No delta column found for label '{label}' (expected {abs_col})")
+            lines.append('\n')
+
+        report_text = '\n'.join(lines)
+        report_path = out_prefix_path.rstrip('/') + '/' + 'simpleReport.txt'
+        _write_text_to_path(report_text, report_path)
+        print(f"Wrote simple report to {report_path}")
 
 
 # --- Main ----------------------------------------------------------------
@@ -382,16 +440,71 @@ def main(argv=None) -> None:
         'merged_rows': len(merged)
     }
 
+    # build emit_columns: include the ejam key and each resolved ref/new column pair
+    emit_columns = None
+    mapping_info = {}
+    try:
+        emit_pairs = []
+        for new_col, ref_col in mapping.items():
+            ref_col_merged, new_col_merged = _resolve_merged_col(merged, ref_col, new_col)
+            if ref_col_merged and new_col_merged:
+                emit_pairs.append((ref_col_merged, new_col_merged))
+                # store mapping info keyed by label (new_col)
+                mapping_info[new_col] = {'label': new_col, 'ref': ref_col_merged, 'new': new_col_merged}
+        if emit_pairs:
+            # prefer ejam key column name as the primary key in output
+            emit_columns = [key_ejam]
+            for a, b in emit_pairs:
+                # include ref then new
+                emit_columns.extend([a, b])
+    except Exception:
+        emit_columns = None
+
+    # prepare report_specs by heuristics: find which mapping entries correspond to score and population
+    report_specs = {}
+    # heuristics on names
+    def is_score(name):
+        n = name.lower()
+        return 'score' in n or 'traffic' in n
+    def is_pop(name):
+        n = name.lower()
+        return 'pop' in n or 'population' in n
+
+    # find candidates
+    score_spec = None
+    pop_spec = None
+    for k, info in mapping_info.items():
+        # check both ref and new names
+        if score_spec is None and (is_score(info['label']) or is_score(info['ref']) or is_score(info['new'])):
+            score_spec = {'label': info['label'], 'ref': info['ref'], 'new': info['new'], 'id_col': key_ejam}
+        if pop_spec is None and (is_pop(info['label']) or is_pop(info['ref']) or is_pop(info['new'])):
+            pop_spec = {'label': info['label'], 'ref': info['ref'], 'new': info['new'], 'id_col': key_ejam}
+
+    # fallback if not found
+    if score_spec is None and mapping_info:
+        first = next(iter(mapping_info.values()))
+        score_spec = {'label': first['label'], 'ref': first['ref'], 'new': first['new'], 'id_col': key_ejam}
+    if pop_spec is None and len(mapping_info) > 1:
+        # pick second if available
+        second = list(mapping_info.values())[1]
+        pop_spec = {'label': second['label'], 'ref': second['ref'], 'new': second['new'], 'id_col': key_ejam}
+
+    if score_spec:
+        report_specs['score'] = score_spec
+    if pop_spec:
+        report_specs['population'] = pop_spec
+
     # Write outputs unless dry-run
     out_prefix = cfg.path.rstrip('/') + '/' + cfg.output_prefix
     if cfg.dry_run:
         print(json.dumps(overall_summary, indent=2))
     else:
         try:
-            export_comparison_results(merged, overall_summary, out_prefix)
+            export_comparison_results(merged, overall_summary, out_prefix, emit_columns=emit_columns, report_specs=report_specs)
         except Exception as e:
             print(f"Error writing outputs: {e}")
-    #
+
 
 if __name__ == '__main__':
     main()
+

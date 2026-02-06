@@ -2,14 +2,26 @@
 geojson2csv.py
 
 Purpose:
-  Read new-pipeline traffic GeoJSON (by default from S3) and extract feature properties
-  into a compact CSV to be written back to same location.
-  Geometry is ignored; only feature properties are output.
+  Read a GeoJSON FeatureCollection (default from S3) and extract feature properties
+  into a compact CSV (geometry is ignored). Supports local filesystem and S3 I/O.
 
-Usage:
-  - Configure the `Config` dataclass or run with command-line options:
-      python geojson2csv.py -p <path-or-s3-prefix> -n <number-of-rows> [--dry-run]
-  - If `-p/--path` starts with `s3://`, input/output will be read/written on S3.
+Features:
+  - Load GeoJSON from local path or S3 URI (s3://bucket/key).
+  - Extract only the feature 'properties' into a pandas DataFrame.
+  - Write the result as a CSV to local filesystem or upload to S3.
+
+Usage examples:
+  python geojson2csv.py -p ./test_files/ --dry-run
+  python geojson2csv.py -p s3://my-bucket/prefix/ -n 100
+
+Defaults:
+  - input_file: ri_bg_summary.geojson
+  - output_file: ri_bg_summary.csv
+  - path: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
+  - number_rows: 0  (<=0 means no limit)
+
+Outputs:
+  - Writes a CSV containing the properties of each GeoJSON feature.
 
 Dependencies:
   - Python 3.8+
@@ -17,7 +29,7 @@ Dependencies:
   - boto3 (if reading/writing S3)
   - python-dotenv (optional, for loading AWS creds from a .env file)
 
-Author / Credit:
+Credits:
   Code written by Anne Gunn with help from EmmaLi, GitHub Copilot, and Gemini.
 """
 

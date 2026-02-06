@@ -2,31 +2,36 @@
 ejam2csv.py
 
 Purpose:
-  Request EJAM API data for a state and convert the JSON
-  list-of-dicts response into a compact CSV of selected fields
-  (traffic fields for now).
+  Request EJAM API data for a state and convert the JSON list-of-dicts
+  response into a compact CSV of selected fields (traffic fields by default).
 
-Usage:
-  - Configure defaults in the `Config` dataclass or run with command-line options:
-      python ejam2csv.py -p <path-or-s3-prefix> -n <number-of-rows> [--dry-run]
-  - If `-p/--path` starts with `s3://`, the output CSV will be uploaded to S3.
-  - `-n/--number_rows` accepts an integer; <=0 (or 0) means no limit (process all rows).
+Features:
+  - Send a POST request to the EJAM API and load the returned JSON into pandas.
+  - Select a known set of traffic-related columns and write them to CSV.
+  - Supports writing output to local filesystem or to S3 (s3://bucket/key).
 
-Behavior:
-  - Sends a POST request to the EJAM API (currently hardcoded to fips="RI" and scale="blockgroup").
-  - Dumps a small JSON sample for inspection (./test_files/ejam_response.json by default).
-  - Loads response into a pandas.DataFrame, normalizes selected columns, and writes a CSV.
-  - Supports writing to either the local filesystem or to an S3 URI using boto3.
+Usage examples:
+  python ejam2csv.py -p ./test_files/ --dry-run
+  python ejam2csv.py -p s3://my-bucket/prefix/ -n 100
+
+Defaults:
+  - output_file: ri_ejam_traffic_subset.csv
+  - path: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
+  - number_rows: 0 (<=0 means no limit)
+
+Outputs:
+  - Writes a CSV containing selected EJAM fields (traffic-related).
+  - Optionally writes a small JSON sample of the raw API response for inspection.
 
 Dependencies:
   - Python 3.8+
   - pandas
   - requests
-  - boto3 (required if writing to S3)
+  - boto3 (if writing to S3)
   - python-dotenv (optional; allows loading AWS creds from a .env file)
 
-Author / Credit:
-  Adapted to match project conventions and S3/local I/O handling (pattern taken from geojson2csv.py).
+Credits:
+    Code written by Anne Gunn with extensive help from Gemini and GitHub Copilot (GPT-5 mini).
 """
 
 # Inputs: none required (hardcoded API request), optional CLI `-n/--limit` to limit rows
@@ -91,17 +96,21 @@ def dumpRequestJson(obj, filename='./test_files/ejam_response.json', limit=None)
 
     This is currently hardcoded to a) write locally and b) limit output to first 10 records
     """
+    # Try to build a small sample representation (first 10 records) for the dump; fall back to full object
+    sample = None
     try:
-        # Try to coerce to a table of records using pandas (handles dict-of-lists and list-of-dicts)
-        try:
-            df_tmp = pandas.DataFrame.from_dict(obj)
-            recs = df_tmp.head(10).to_dict(orient='records')
-            to_dump = recs
-        except Exception:
-            print("Warning: couldn't coerce response to DataFrame for json dump")
+        df_tmp = pandas.DataFrame.from_dict(obj)
+        sample = df_tmp.head(10).to_dict(orient='records')
+    except Exception:
+        print("Warning: couldn't coerce response to DataFrame for json dump")
 
+    # Choose what to dump: prefer sample if available
+    to_write = sample if sample is not None else obj
+
+    # Write the dump to a file (separate try/except so failures are non-fatal)
+    try:
         with open(filename, 'w', encoding='utf-8') as fh:
-            json.dump(to_dump, fh, indent=2, ensure_ascii=False)
+            json.dump(to_write, fh, indent=2, ensure_ascii=False)
     except Exception as e:
         # non-fatal: print error and continue
         print(f"Warning: couldn't write JSON dump to {filename}: {e}")
@@ -170,7 +179,7 @@ def extract_url_from_anchor(s):
         m2 = re.search(r'(https?://\S+)', text_un)
         if m2:
             # strip trailing characters like '"' or '>'
-            url = m2.group(1).rstrip('"\'>)')
+            url = m2.group(1).rstrip("\"'>")
             return url
         return text_un
     except Exception:

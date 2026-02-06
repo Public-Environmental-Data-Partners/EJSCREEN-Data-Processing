@@ -1,37 +1,34 @@
 """
 compareEJAM2pipeline.py
 
-EJAM pipeline value comparison utility
+Purpose:
+  Compare EJAM reference CSV and a pipeline CSV to identify biases and missing rows.
+  The script merges the two inputs on a provided join key (which may have different
+  column names in each file), computes deltas for mapped column pairs, and emits
+  concise outputs for validation and debugging.
 
-This small, focused script loads two CSV exports (an EJAM reference
-export and a separate pipeline output), merges them on a provided key
-(possibly with different column names in each file), computes per-field
-bias deltas (residual, absolute difference, ratio, percent difference),
-and produces concise artifacts useful for validation and debugging.
+Features:
+  - Load CSVs from local filesystem or from S3 (requires boto3 and AWS creds).
+  - Identify 'orphan' IDs missing in either dataset before merging.
+  - Merge EJAM and pipeline rows (supports different join-key names).
+  - Compute deltas for mapped pairs of columns (residual, abs diff, ratio, pct diff).
+  - Produce a reduced merged CSV, a summary JSON, and a plain-text simple report.
 
-Features
-- Load CSVs from local filesystem or from S3 (requires boto3 and AWS creds).
-- Merge EJAM and pipeline rows (supports different join-key names).
-- Compute deltas for mapped pairs of columns (e.g. traffic score, population).
-- Produce a reduced merged CSV containing only the key and compared
-  columns, a summary JSON with bias statistics, and a plain-text
-  `simpleReport.txt` with top/bottom absolute-difference tables.
-
-Usage (examples)
+Usage examples:
   python compareEJAM2pipeline.py -p ./scripts/utilities/validation/test_files/ --dry-run
   python compareEJAM2pipeline.py -p s3://my-bucket/prefix/ --input-ejam ejam.csv --input-pipe pipe.csv
 
-Defaults
-- input_ejam: ri_ejam_traffic_subset.csv
-- input_pipe: ri_bg_summary.csv
-- default path: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
+Defaults:
+  - input_ejam: ri_ejam_traffic_subset.csv
+  - input_pipe: ri_bg_summary.csv
+  - default path: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
 
-Outputs
-- {path}/{output_prefix}/merged_reduced.csv  (key + compared columns)
-- {path}/{output_prefix}/summary.json        (numeric summaries and orphan counts)
-- {path}/{output_prefix}/simpleReport.txt    (human-readable top/bottom diffs)
+Outputs:
+  - {path}/{output_prefix}/merged_reduced.csv  (key + compared columns)
+  - {path}/{output_prefix}/summary.json        (numeric summaries and orphan counts)
+  - {path}/{output_prefix}/simpleReport.txt    (human-readable top/bottom diffs)
 
-Credits
+Credits:
 - Design: Gemini and Anne Gunn
 - Implementation: GitHub Copilot (GPT-5 mini) and Anne Gunn
 

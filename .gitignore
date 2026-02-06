@@ -19,3 +19,12 @@ __pycache__/
 *.Rproj
 scripts/traffic/.Rhistory
 .Rhistory
+
+# Local files for testing input and output
+# I don't think we want to commit any of these to the repo
+scripts/utilities/validation/test_files/
+test.out
+
+# Dev-specific experiments and temp tools
+scripts/utilities/agScratch/
+

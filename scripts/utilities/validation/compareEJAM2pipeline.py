@@ -49,8 +49,10 @@ import numpy as np
 # --- Configuration --------------------------------------------------------
 @dataclass
 class Config:
-    input_ejam: str = "ri_ejam_traffic_subset.csv"
-    input_pipe: str = "ri_bg_summary.csv"
+    # State code for per-state subfolder (USPS-style short code), upper-cased
+    state_code: str = ""
+    input_ejam: str = "ejam_traffic_subset.csv"
+    input_pipe: str = "bg_summary.csv"
     path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
     # local test path to eliminate needing the runtime override
     # path = "./test_files/"
@@ -67,8 +69,12 @@ def get_config(argv=None) -> Config:
     """Parse CLI args and environment into a Config object."""
     load_dotenv()
     parser = argparse.ArgumentParser(description="Compare EJAM CSV and pipeline CSV (local or S3) with bias summaries")
+    # Preferred order: state_code, path, dry_run, then others
+    parser.add_argument('--state', '--state-code', dest='state_code', type=str, required=True,
+                        help='State code (e.g. RI); will be upper-cased and used to select the state subfolder')
     parser.add_argument('-p', '--path', type=str, default=Config.path,
                         help='S3 prefix or local folder containing the CSVs')
+    parser.add_argument('--dry-run', action='store_true', help='If set, do not write outputs; only compute and print summaries')
     parser.add_argument('--input-ejam', type=str, default=Config.input_ejam,
                         help='EJAM CSV filename')
     parser.add_argument('--input-pipe', type=str, default=Config.input_pipe,
@@ -81,8 +87,18 @@ def get_config(argv=None) -> Config:
                         help='JSON string mapping new_pipe columns to ejam columns, e.g. "{\"traffic_new\": \"traffic\"}"')
     parser.add_argument('--output-prefix', type=str, default=Config.output_prefix,
                         help='Prefix for output filenames written to the path')
-    parser.add_argument('--dry-run', action='store_true', help='If set, do not write outputs; only compute and print summaries')
+    # If script invoked with no args, print a one-line error and the full help text, then exit non-zero
+    import sys
+    if argv is None and len(sys.argv) <= 1:
+        print("\n***Error: missing required parameters; at minimum --state must be provided.\n", file=sys.stderr)
+        parser.print_help()
+        sys.exit(2)
     args = parser.parse_args(argv)
+
+    # Force state code to uppercase if provided
+    if hasattr(args, 'state_code') and args.state_code is not None:
+        args.state_code = str(args.state_code).upper()
+
     overrides = {k: v for k, v in vars(args).items() if v is not None}
     return Config(**overrides)
 
@@ -416,8 +432,9 @@ def main(argv=None) -> None:
     cfg = get_config(argv)
     print(f"Using path: {cfg.path}")
 
-    ejam_path = join_path_and_file(cfg.path, cfg.input_ejam)
-    pipe_path = join_path_and_file(cfg.path, cfg.input_pipe)
+    # Assume inputs live under a per-state subfolder
+    ejam_path = join_path_and_file(cfg.path, f"{cfg.state_code}/{cfg.input_ejam}")
+    pipe_path = join_path_and_file(cfg.path, f"{cfg.state_code}/{cfg.input_pipe}")
 
     try:
         df_ejam = load_csv(ejam_path)
@@ -532,7 +549,8 @@ def main(argv=None) -> None:
         report_specs['population'] = pop_spec
 
     # Write outputs unless dry-run
-    out_prefix = cfg.path.rstrip('/') + '/' + cfg.output_prefix
+    # write outputs under the per-state subfolder
+    out_prefix = join_path_and_file(cfg.path, f"{cfg.state_code}/{cfg.output_prefix}")
     if cfg.dry_run:
         print(json.dumps(overall_summary, indent=2))
     else:

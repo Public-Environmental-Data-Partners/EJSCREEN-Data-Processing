@@ -45,13 +45,15 @@ from dotenv import load_dotenv # needed for AWS access via .env file
 
 @dataclass
 class Config:
-    #TODO: when we start processing more than one state, filename prefix will need to be a parameter
-    input_file: str = "ri_bg_summary.geojson"
-    output_file: str = "ri_bg_summary.csv"
+    # State code (USPS-style short code); used for locating input and output in a per-state folder
+    state_code: str = ""
+    input_file: str = "bg_summary.geojson"
+    output_file: str = "bg_summary.csv"
     number_rows: int = 0  # <=0 means no limit
     dry_run: bool = False
     path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
     #path: str = "./test_files/"
+
 
 def get_config(argv=None) -> Config:
 
@@ -60,12 +62,25 @@ def get_config(argv=None) -> Config:
 
     # Build config by merging defaults with CLI arguments.
     parser = argparse.ArgumentParser(description="GeoJSON to CSV converter (properties only, no geometry).")
-    # We only add arguments for things we actually want to override at runtime
+    # Preferred order: state_code, path, number_rows, dry_run, then others
+    parser.add_argument('--state', '--state-code', dest='state_code', type=str, required=True,
+                        help='State code (e.g. RI); will be upper-cased and used to select the state subfolder')
     parser.add_argument('-p', '--path', type=str, default=Config.path, help='S3 path prefix for input/output files')
     parser.add_argument('-n', '--number_rows', type=int, default=Config.number_rows, help='Number of rows to write to CSV; <=0 means no limit (default: 10)')
     parser.add_argument('--dry-run', action='store_true', help='If set, do not write any files, just show what would be done')
 
+    # If script invoked with no args, print a one-line error and the full help text, then exit non-zero
+    import sys
+    if argv is None and len(sys.argv) <= 1:
+        print("\n***Error: missing required parameters; at minimum --state must be provided.\n", file=sys.stderr)
+        parser.print_help()
+        sys.exit(2)
+
     args = parser.parse_args(argv)
+
+    # Force state code to uppercase if provided
+    if hasattr(args, 'state_code') and args.state_code is not None:
+        args.state_code = str(args.state_code).upper()
 
     # Filter out 'None' values so they don't overwrite our Dataclass defaults
     overrides = {k: v for k, v in vars(args).items() if v is not None}
@@ -222,8 +237,9 @@ def main(argv=None) -> None:
     config = get_config(argv)
 
     print(f"Will be reading from and writing to path: {config.path}")
-    input_geojson = join_path_and_file(config.path, config.input_file)
-    output_csv = join_path_and_file(config.path, config.output_file)
+    # Assume input/output live under a per-state folder
+    input_geojson = join_path_and_file(config.path, f"{config.state_code}/{config.input_file}")
+    output_csv = join_path_and_file(config.path, f"{config.state_code}/{config.output_file}")
     limit = config.number_rows
     dry_run = config.dry_run
 

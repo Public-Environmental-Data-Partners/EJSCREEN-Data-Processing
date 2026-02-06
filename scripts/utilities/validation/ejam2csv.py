@@ -49,13 +49,15 @@ from typing import Optional
 # --- Configuration and CLI parsing (moved/simplified to mirror geojson2csv.py) ---
 @dataclass
 class Config:
-    # output filename (will be joined with `path`); default writes locally under ./test_files/
-    output_file: str = "ri_ejam_traffic_subset.csv"
+    # State code (USPS or FIPS-style short code); user must supply on CLI
+    state_code: str = ""
+    # destination path for the csv file
+    path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
     # number of rows to process; <=0 or None means process all rows
     number_rows: Optional[int] = 0
     dry_run: bool = False
-    # destination path for the csv file
-    path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
+    # output filename (will be joined with `path`); default writes locally under ./test_files/
+    output_file: str = "ejam_traffic_subset.csv"
     #path: str = "./test_files/"
 
 
@@ -66,13 +68,27 @@ def get_config(argv=None) -> Config:
 
 
     parser = argparse.ArgumentParser(description="Request EJAM API response and create a traffic subset CSV")
+    # Order: state_code, path, number_rows, dry_run, then others
+    parser.add_argument('--state', '--state-code', dest='state_code', type=str, required=True,
+                        help='State code (e.g. RI); will be upper-cased and used for API request and as output folder')
     parser.add_argument('-p', '--path', type=str, default=Config.path,
                         help='S3 path prefix or local folder for output (default: ./test_files/)')
     parser.add_argument('-n', '--number_rows', type=int, default=Config.number_rows,
                         help='maximum number of rows to process (default: 10); <=0 means no limit')
     parser.add_argument('--dry-run', action='store_true', help='If set, do not write any files, just show what would be done')
 
+    # If script invoked with no args, print a one-line error and the full help text, then exit non-zero
+    import sys
+    if argv is None and len(sys.argv) <= 1:
+        print("\n***Error: missing required parameters; at minimum --state must be provided.\n", file=sys.stderr)
+        parser.print_help()
+        sys.exit(2)
+
     args = parser.parse_args(argv)
+
+    # Force state code to uppercase if provided
+    if hasattr(args, 'state_code') and args.state_code is not None:
+        args.state_code = str(args.state_code).upper()
 
     # Filter out 'None' values so they don't overwrite our Dataclass defaults
     overrides = {k: v for k, v in vars(args).items() if v is not None}
@@ -91,29 +107,57 @@ def join_path_and_file(path: str, filename: str) -> str:
     return str(Path(path) / filename)
 
 # --- Helper functions (moved to top) ---------------------------------------
-def dumpRequestJson(obj, filename='./test_files/ejam_response.json', limit=None):
+def dumpRequestJson(obj, filename='ejam_response.json', path=None, state_code=None, limit=None):
     """Pretty-print the response JSON to a file for debugging/inspection.
 
-    This is currently hardcoded to a) write locally and b) limit output to first 10 records
+    Writes a small sample (first 10 records) of the response to
+    {path}/{state_code}/{filename} when `path` and `state_code` are provided.
+    If `path` is an S3 URI (s3://...), the file is uploaded to S3. Failures are
+    non-fatal and only produce a warning.
     """
-    # Try to build a small sample representation (first 10 records) for the dump; fall back to full object
+    # Build content to write: prefer a small sample if possible
     sample = None
     try:
         df_tmp = pandas.DataFrame.from_dict(obj)
         sample = df_tmp.head(10).to_dict(orient='records')
     except Exception:
-        print("Warning: couldn't coerce response to DataFrame for json dump")
+        # fall back to writing the full object
+        sample = None
 
-    # Choose what to dump: prefer sample if available
     to_write = sample if sample is not None else obj
 
-    # Write the dump to a file (separate try/except so failures are non-fatal)
+    # If no path/state provided, default to local ./test_files/ folder
+    if path is None:
+        dest_base = './test_files/'
+        dest_key = f"{dest_base.rstrip('/')}/{filename}"
+        is_s3 = False
+    else:
+        # ensure state_code is uppercased if provided
+        sc = (str(state_code).upper() if state_code is not None else '')
+        dest_key = join_path_and_file(path, f"{sc}/{filename}") if sc else join_path_and_file(path, filename)
+        is_s3 = isinstance(dest_key, str) and dest_key.lower().startswith('s3://')
+
     try:
-        with open(filename, 'w', encoding='utf-8') as fh:
-            json.dump(to_write, fh, indent=2, ensure_ascii=False)
+        if is_s3:
+            # upload to S3 using boto3
+            tail = dest_key[5:]
+            parts = tail.split('/', 1)
+            if len(parts) != 2:
+                raise ValueError(f"Invalid S3 URI: {dest_key}")
+            bucket, key = parts[0], parts[1]
+            import boto3
+            s3 = boto3.client('s3')
+            s3.put_object(Bucket=bucket, Key=key, Body=json.dumps(to_write, indent=2, ensure_ascii=False).encode('utf-8'))
+            print(f"Wrote JSON dump to {dest_key}")
+        else:
+            # local filesystem: ensure parent dir exists
+            p = Path(dest_key)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, 'w', encoding='utf-8') as fh:
+                json.dump(to_write, fh, indent=2, ensure_ascii=False)
+            print(f"Wrote JSON dump to {dest_key}")
     except Exception as e:
-        # non-fatal: print error and continue
-        print(f"Warning: couldn't write JSON dump to {filename}: {e}")
+        print(f"Warning: couldn't write JSON dump to {dest_key}: {e}")
 
 
 def row_to_text_space(row):
@@ -241,14 +285,15 @@ def main(argv=None) -> None:
 
     print(f"Will be writing to path: {config.path}")
 
-    out_path = join_path_and_file(config.path, config.output_file)
+    # write into a state-specific folder and use a short filename
+    out_path = join_path_and_file(config.path, f"{config.state_code}/{config.output_file}")
     limit = config.number_rows
     dry_run = config.dry_run
 
     # See EJAM API documentation: https://github.com/edgi-govdata-archiving/EJAM-API?tab=readme-ov-file
     url = "https://ejamapi-84652557241.us-central1.run.app/data"
-    # TODO: make state abbreviation a runtime parameter
-    request_data = {"buffer": 0, "fips": "RI", "scale": "blockgroup"}
+    # Use configured state code (uppercased)
+    request_data = {"buffer": 0, "fips": config.state_code, "scale": "blockgroup"}
 
     resp = requests.post(url, json=request_data)
     resp.raise_for_status()
@@ -256,7 +301,7 @@ def main(argv=None) -> None:
 
     data = resp.json()
     # dump the raw JSON response to a file for inspection (limited)
-    dumpRequestJson(data, limit=limit)
+    dumpRequestJson(data, path=config.path, state_code=config.state_code, limit=limit)
     print("response type:", type(data))
 
     # The API returns a list-of-dicts; construct DataFrame directly

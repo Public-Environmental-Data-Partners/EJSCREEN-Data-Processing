@@ -2,26 +2,38 @@
 geojson2csv.py
 
 Purpose:
-  Read a GeoJSON FeatureCollection (default from S3) and extract feature properties
-  into a compact CSV (geometry is ignored). Supports local filesystem and S3 I/O.
+  Read a GeoJSON FeatureCollection for a single US state and extract feature
+  properties into a compact CSV (geometry is ignored). Supports local
+  filesystem and S3 I/O.
 
 Features:
-  - Load GeoJSON from local path or S3 URI (s3://bucket/key).
+  - Load GeoJSON from local path or S3 URI (s3://bucket/prefix/).
   - Extract only the feature 'properties' into a pandas DataFrame.
   - Write the result as a CSV to local filesystem or upload to S3.
+  - Uses a per-state folder convention: read input from {path}/{STATE}/bg_summary.geojson
+    and write output to {path}/{STATE}/bg_summary.csv by default.
 
 Usage examples:
-  python geojson2csv.py -p ./test_files/ --dry-run
-  python geojson2csv.py -p s3://my-bucket/prefix/ -n 100
+  # REQUIRED: specify --state
+  python geojson2csv.py --state RI -p ./scripts/utilities/validation/test_files/
+  python geojson2csv.py --state RI -p s3://my-bucket/prefix/ --dry-run
 
-Defaults:
-  - input_file: ri_bg_summary.geojson
-  - output_file: ri_bg_summary.csv
-  - path: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
-  - number_rows: 0  (<=0 means no limit)
+Runtime parameters:
+  --state / --state-code  REQUIRED. Two-letter state short code (e.g. RI). The
+                          value will be upper-cased and used to form the per-state
+                          folder under the configured `--path`.
+  -p / --path             S3 prefix or local folder. Files are read/written under
+                          `{path}/{STATE}/`.
+  -n / --number_rows      Optional limit on rows to write; <=0 means no limit.
+  --dry-run               If set, do not write files; print what would be done.
+
+Defaults (code-level):
+  - input:  {path}/{STATE}/bg_summary.geojson
+  - output: {path}/{STATE}/bg_summary.csv
+  - path default: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
 
 Outputs:
-  - Writes a CSV containing the properties of each GeoJSON feature.
+  - CSV: bg_summary.csv (feature properties) written to {path}/{STATE}/
 
 Dependencies:
   - Python 3.8+

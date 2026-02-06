@@ -2,10 +2,11 @@
 compareEJAM2pipeline.py
 
 Purpose:
-  Compare EJAM reference CSV and a pipeline CSV to identify biases and missing rows.
-  The script merges the two inputs on a provided join key (which may have different
-  column names in each file), computes deltas for mapped column pairs, and emits
-  concise outputs for validation and debugging.
+  Compare an EJAM reference CSV and a pipeline CSV for a single US state to
+  identify biases and missing rows. The script merges the two inputs on a
+  provided join key (which may have different column names in each file),
+  computes deltas for mapped column pairs, and emits concise outputs for
+  validation and debugging.
 
 Features:
   - Load CSVs from local filesystem or from S3 (requires boto3 and AWS creds).
@@ -13,27 +14,41 @@ Features:
   - Merge EJAM and pipeline rows (supports different join-key names).
   - Compute deltas for mapped pairs of columns (residual, abs diff, ratio, pct diff).
   - Produce a reduced merged CSV, a summary JSON, and a plain-text simple report.
+  - Uses a per-state folder convention: read inputs from {path}/{STATE}/ and
+    write outputs to {path}/{STATE}/{output_prefix}/ by default.
 
 Usage examples:
-  python compareEJAM2pipeline.py -p ./scripts/utilities/validation/test_files/ --dry-run
-  python compareEJAM2pipeline.py -p s3://my-bucket/prefix/ --input-ejam ejam.csv --input-pipe pipe.csv
+  # REQUIRED: specify --state
+  python compareEJAM2pipeline.py --state RI -p ./scripts/utilities/validation/test_files/
+  python compareEJAM2pipeline.py --state RI -p s3://my-bucket/prefix/ --dry-run
 
-Defaults:
-  - input_ejam: ri_ejam_traffic_subset.csv
-  - input_pipe: ri_bg_summary.csv
-  - default path: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
+Runtime parameters:
+  --state / --state-code  REQUIRED. Two-letter state short code (e.g. RI). The
+                          value will be upper-cased and used to build the
+                          per-state folder under the configured `--path`.
+  -p / --path             S3 prefix or local folder. Inputs are read from
+                          `{path}/{STATE}/` and outputs are written to
+                          `{path}/{STATE}/{output_prefix}/`.
+  --dry-run               If set, do not write outputs; only compute and print
+                          summaries.
+  --input-ejam            EJAM CSV filename (default: ejam_traffic_subset.csv)
+  --input-pipe            Pipeline CSV filename (default: bg_summary.csv)
+
+Defaults (code-level):
+  - input_ejam: ejam_traffic_subset.csv (looked for under {path}/{STATE}/)
+  - input_pipe: bg_summary.csv (looked for under {path}/{STATE}/)
+  - outputs written to: {path}/{STATE}/{output_prefix}/
+  - path default: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
 
 Outputs:
-  - {path}/{output_prefix}/merged_reduced.csv  (key + compared columns)
-  - {path}/{output_prefix}/summary.json        (numeric summaries and orphan counts)
-  - {path}/{output_prefix}/simpleReport.txt    (human-readable top/bottom diffs)
+  - merged_reduced.csv — reduced merged CSV (key + compared columns) under
+    {path}/{STATE}/{output_prefix}/
+  - summary.json        — numeric summaries and orphan counts under same folder
+  - simpleReport.txt    — human-readable top/bottom differences under same folder
 
 Credits:
 - Design: Gemini and Anne Gunn
 - Implementation: GitHub Copilot (GPT-5 mini) and Anne Gunn
-
-Non-destructive of the input files: the script reads inputs and writes only the specified
-outputs; it is safe to run in a CI/manual validation workflow.
 """
 
 from dataclasses import dataclass

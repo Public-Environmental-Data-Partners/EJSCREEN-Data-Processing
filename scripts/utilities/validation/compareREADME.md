@@ -17,27 +17,31 @@ expects.
 - `ejam2csv.py` independently fetches and produces the EJAM reference CSV. 
 - `compareEJAM2pipeline.py` merges and analyzes the two CSVs.
 
+Important runtime note
+----------------------
+All three scripts now require a `--state` (or `--state-code`) parameter. This is a REQUIRED two-letter state short code (for example `RI`). The scripts will uppercase the value and read/write files inside a per-state subfolder under the configured `--path`, e.g. `{path}/RI/`.
+
 Quick start (local test files)
 -----------------------------
 ### 1) Convert pipeline GeoJSON to CSV (run on the pipeline developer's GeoJSON input)
-python geojson2csv.py -p ./test_files/ --dry-run
+python geojson2csv.py --state RI -p ./test_files/ --dry-run
 
 ### 2) Fetch EJAM API and produce EJAM CSV
-python ejam2csv.py -p ./test_files/ --dry-run
+python ejam2csv.py --state RI -p ./test_files/ --dry-run
 
 ### 3) Compare EJAM CSV and pipeline CSV
-python compareEJAM2pipeline.py -p ./test_files/ --dry-run
+python compareEJAM2pipeline.py --state RI -p ./test_files/ --dry-run
 
 Notes on options and defaults
 ----------------------------
 - All three scripts accept `-p/--path` (S3 prefix or local folder). If the path starts with `s3://` the scripts will read/write to S3 (boto3 + credentials required).
-- `geojson2csv.py` defaults: input `ri_bg_summary.geojson`, output `ri_bg_summary.csv`.
-- `ejam2csv.py` defaults: output `ri_ejam_traffic_subset.csv` and writes a small JSON sample (by default to `./test_files/ejam_response.json`) for inspection.
-- `compareEJAM2pipeline.py` defaults: EJAM input `ri_ejam_traffic_subset.csv`, pipeline input `ri_bg_summary.csv`. Default join keys: `ejam_uniq_id` (EJAM) and `block_group_geoid` (pipeline). Default mapping (new_pipe -> ejam): `{"blk_grp_score":"traffic.score", "total_pop":"pop"}`.
+- `geojson2csv.py` defaults: input `bg_summary.geojson`, output `bg_summary.csv`; both are expected under `{path}/{STATE}/` unless overridden.
+- `ejam2csv.py` defaults: output `ejam_traffic_subset.csv` and writes a small JSON sample `ejam_response.json` in the same `{path}/{STATE}/` folder for inspection.
+- `compareEJAM2pipeline.py` defaults: EJAM input `ejam_traffic_subset.csv`, pipeline input `bg_summary.csv` (looked up under `{path}/{STATE}/`). Default join keys: `ejam_uniq_id` (EJAM) and `block_group_geoid` (pipeline). Default mapping (new_pipe -> ejam): `{"blk_grp_score":"traffic.score", "total_pop":"pop"}`.
 
 Outputs from `compareEJAM2pipeline.py`
 -------------------------------------
-When run (not dry-run) it writes under `{path}/{output_prefix}/` (default `comparison_results`):
+When run (not dry-run) it writes under `{path}/{STATE}/{output_prefix}/` (default `comparison_results`):
 - `merged_reduced.csv` — reduced merged CSV containing the join key plus the compared columns.
 - `summary.json` — numeric summaries and orphan counts.
 - `simpleReport.txt` — readable top/bottom absolute-difference tables for population and score.

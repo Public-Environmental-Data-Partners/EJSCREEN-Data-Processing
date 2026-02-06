@@ -2,26 +2,38 @@
 ejam2csv.py
 
 Purpose:
-  Request EJAM API data for a state and convert the JSON list-of-dicts
+  Request EJAM API data for a single US state and convert the JSON list-of-dicts
   response into a compact CSV of selected fields (traffic fields by default).
 
 Features:
   - Send a POST request to the EJAM API and load the returned JSON into pandas.
   - Select a known set of traffic-related columns and write them to CSV.
-  - Supports writing output to local filesystem or to S3 (s3://bucket/key).
+  - Supports writing output to local filesystem or to S3 (s3://bucket/prefix/).
+  - Writes output into a per-state subfolder: {path}/{STATE}/ejam_traffic_subset.csv.
 
 Usage examples:
-  python ejam2csv.py -p ./test_files/ --dry-run
-  python ejam2csv.py -p s3://my-bucket/prefix/ -n 100
+  # Required: specify state code
+  python ejam2csv.py --state RI -p ./scripts/utilities/validation/test_files/
+  python ejam2csv.py --state RI -p s3://my-bucket/prefix/ --dry-run
 
-Defaults:
-  - output_file: ri_ejam_traffic_subset.csv
-  - path: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
-  - number_rows: 0 (<=0 means no limit)
+Runtime parameters:
+  --state / --state-code  REQUIRED. Two-letter state short code (e.g. RI). The
+                          value will be upper-cased and used to form the
+                          per-state folder under the configured `--path`.
+  -p / --path             S3 prefix or local folder. Files are read/written under
+                          `{path}/{STATE}/`. If the path starts with s3:// the
+                          script will upload to S3 (boto3 required).
+  -n / --number_rows      Optional limit on rows to process; <=0 means no limit.
+  --dry-run               If set, do not write files; print what would be done.
+
+Defaults (code-level):
+  - output file written as: {path}/{STATE}/ejam_traffic_subset.csv
+  - JSON sample dump written as: {path}/{STATE}/ejam_response.json
+  - path default: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
 
 Outputs:
-  - Writes a CSV containing selected EJAM fields (traffic-related).
-  - Optionally writes a small JSON sample of the raw API response for inspection.
+  - CSV: ejam_traffic_subset.csv (selected EJAM fields) written to {path}/{STATE}/
+  - JSON: ejam_response.json (small sample of raw API response) in same folder
 
 Dependencies:
   - Python 3.8+

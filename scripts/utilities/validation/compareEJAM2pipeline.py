@@ -78,6 +78,9 @@ class Config:
     # Worry about this if more comparisons are added.
     mapping: str = json.dumps({
         "blk_grp_score": "traffic.score",
+        # TODO: if you want to compare more than one column to traffic.score,
+        # simply add it here, like:
+        # "mean_score": "traffic.score",
         "total_pop": "pop"
     })
 
@@ -352,3 +355,4 @@ def main(argv=None) -> None:
 
 if __name__ == '__main__':
     main()
+

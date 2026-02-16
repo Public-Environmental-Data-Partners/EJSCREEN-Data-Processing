@@ -23,6 +23,7 @@ scripts/traffic/.Rhistory
 # Local files for testing input and output
 # I don't think we want to commit any of these to the repo
 scripts/utilities/validation/test_files/
+scripts/superfund/inputs
 test.out
 
 # Dev-specific experiments and temp tools

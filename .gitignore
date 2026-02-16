@@ -5,5 +5,26 @@
 .venv/
 venv/
 
+# Hold project-specific environment variables,
+# needed for Python access to some APIs such as AWS
+.env
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
 # OS cruft
 .DS_Store
+/.Rproj.user
+*.Rproj
+scripts/traffic/.Rhistory
+.Rhistory
+
+# Local files for testing input and output
+# I don't think we want to commit any of these to the repo
+scripts/utilities/validation/test_files/
+test.out
+
+# Dev-specific experiments and temp tools
+scripts/utilities/agScratch/
+

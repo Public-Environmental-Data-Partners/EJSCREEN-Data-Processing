@@ -31,22 +31,89 @@ import argparse
 import logging
 import pandas as pd
 from typing import Tuple, List, Set
+import io
+from dotenv import load_dotenv
+
+
+# --- S3/local path helpers -----------------------------------------------
+def is_s3_uri(path: str) -> bool:
+    return isinstance(path, str) and path.lower().startswith('s3://')
+
+
+def join_path_and_file(path: str, filename: str) -> str:
+    """Join a path (S3 or local) with a filename into a usable path string."""
+    if is_s3_uri(path):
+        return path.rstrip('/') + '/' + filename.lstrip('/')
+    return str(Path(path) / filename)
+
+
+def read_npl_csv(path: str, skip_rows: int) -> pd.DataFrame:
+    """Read CSV either from local filesystem or from S3 (via boto3) depending on path.
+
+    `path` may be a local path or an S3 URI like s3://bucket/prefix/file.csv
+    """
+    if is_s3_uri(path):
+        # parse bucket/key
+        tail = path[5:]
+        parts = tail.split('/', 1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise ValueError(f"Invalid S3 URI: {path}")
+        bucket, key = parts[0], parts[1]
+        try:
+            import boto3
+            s3 = boto3.client('s3')
+            obj = s3.get_object(Bucket=bucket, Key=key)
+            return pd.read_csv(io.BytesIO(obj['Body'].read()), skiprows=skip_rows)
+        except Exception as e:
+            raise RuntimeError(f"Failed to read S3 CSV {path}: {e}") from e
+
+    # local file
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Local CSV not found: {path}")
+    return pd.read_csv(p, skiprows=skip_rows)
+
+
+def write_df_to_path(df: pd.DataFrame, out_path: str) -> None:
+    """Write DataFrame to local file or upload to S3 depending on out_path."""
+    if is_s3_uri(out_path):
+        tail = out_path[5:]
+        parts = tail.split('/', 1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise ValueError(f"Invalid S3 URI: {out_path}")
+        bucket, key = parts[0], parts[1]
+        try:
+            import boto3
+            s3 = boto3.client('s3')
+            csv_text = df.to_csv(index=False)
+            s3.put_object(Bucket=bucket, Key=key, Body=csv_text.encode('utf-8'))
+            return
+        except Exception as e:
+            raise RuntimeError(f"Failed to write CSV to S3 {out_path}: {e}") from e
+
+    out_p = Path(out_path)
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_p, index=False)
+    return
 
 
 # --- Configuration dataclass ---------------------------------------------
 @dataclass
 class Config:
-    input_path: str = "./inputs/test_data/"
-    output_path: str = "./inputs/test_data/"
-    current_filename: str = "current_npl.csv"
-    proposed_filename: str = "proposed_npl.csv"
-    combined_filename: str = "combined_npl.csv"
+    # default to the s3 prefix used elsewhere in the project; can be overridden on CLI
+    input_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/downloads"
+    output_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
+    current_filename: str = "superfund_active_currentlyOnNPL_20260213.csv"
+    proposed_filename: str = "superfund_active_proposedForNPL_20260213.csv"
+    combined_filename: str = "combined_npl_20260213.csv"
     skip_rows: int = 10
     id_col: str = "EPA_ID"
 
 
 # --- Helper functions ----------------------------------------------------
 def get_config(argv=None) -> Config:
+    # Load environment variables from a .env file so boto3 can pick up AWS creds if present
+    load_dotenv()
     parser = argparse.ArgumentParser(description="Combine Current and Proposed NPL CSVs; prefer Current on EPA_ID collisions")
     parser.add_argument('--input-path', dest='input_path', default=Config.input_path,
                         help='Folder containing input CSVs (default: ./inputs/test_data/)')
@@ -73,11 +140,6 @@ def get_config(argv=None) -> Config:
         skip_rows=args.skip_rows,
         id_col=args.id_col,
     )
-
-
-def read_npl_csv(path: str, skip_rows: int) -> pd.DataFrame:
-    """Read CSV skipping preamble rows so the header is read correctly."""
-    return pd.read_csv(path, skiprows=skip_rows)
 
 
 def standardize_columns(df_current: pd.DataFrame, df_proposed: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, List[str]]:
@@ -120,18 +182,16 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     cfg = get_config(argv)
 
-    # Build input/output file paths
-    input_dir = Path(cfg.input_path)
-    output_dir = Path(cfg.output_path)
-    current_path = input_dir / cfg.current_filename
-    proposed_path = input_dir / cfg.proposed_filename
+    # Build input/output file paths (works for both local and s3 prefixes)
+    current_path = join_path_and_file(cfg.input_path, cfg.current_filename)
+    proposed_path = join_path_and_file(cfg.input_path, cfg.proposed_filename)
 
     # Read inputs
     logging.info(f"Reading Current CSV: {current_path} (skip {cfg.skip_rows} rows)")
-    df_current = read_npl_csv(str(current_path), cfg.skip_rows)
+    df_current = read_npl_csv(current_path, cfg.skip_rows)
     logging.info(f"Current CSV rows (after header): {len(df_current)}")
     logging.info(f"Reading Proposed CSV: {proposed_path} (skip {cfg.skip_rows} rows)")
-    df_proposed = read_npl_csv(str(proposed_path), cfg.skip_rows)
+    df_proposed = read_npl_csv(proposed_path, cfg.skip_rows)
     logging.info(f"Proposed CSV rows (after header): {len(df_proposed)}")
 
     # Standardize columns
@@ -149,10 +209,9 @@ def main(argv=None) -> int:
     df_clean = combine_and_dedup(df_current_std, df_proposed_std, cfg.id_col)
     logging.info(f"Final combined rows (after dedup on {cfg.id_col}): {len(df_clean)}")
 
-    # Write output
-    out_path = Path(cfg.output_path) / cfg.combined_filename
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    df_clean.to_csv(out_path, index=False)
+    # Write output (s3 or local)
+    out_path = join_path_and_file(cfg.output_path, cfg.combined_filename)
+    write_df_to_path(df_clean, out_path)
     logging.info(f"Wrote combined CSV to: {out_path}")
     return 0
 

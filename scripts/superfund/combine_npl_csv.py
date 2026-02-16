@@ -17,7 +17,7 @@ Behavior summary:
   - Writes a single output CSV with standard headers (no preamble).
 
 Usage (example):
-  python combine_npl_csv.py --current-filename current_npl.csv --proposed-filename proposed_npl.csv --output-filename combined_npl.csv
+  python combine_npl_csv.py --input-path ./inputs/test_data/ --current-filename current_npl.csv --proposed-filename proposed_npl.csv --combined-filename combined_npl.csv
 
 Technical notes:
   - Uses pandas for data manipulation.
@@ -40,7 +40,7 @@ class Config:
     output_path: str = "./inputs/test_data/"
     current_filename: str = "current_npl.csv"
     proposed_filename: str = "proposed_npl.csv"
-    output_filename: str = "combined_npl.csv"
+    combined_filename: str = "combined_npl.csv"
     skip_rows: int = 10
     id_col: str = "EPA_ID"
 
@@ -56,7 +56,7 @@ def get_config(argv=None) -> Config:
                         help='Current CSV filename (default: current_npl.csv)')
     parser.add_argument('--proposed-filename', dest='proposed_filename', default=Config.proposed_filename,
                         help='Proposed CSV filename (default: proposed_npl.csv)')
-    parser.add_argument('--output-filename', dest='output_filename', default=Config.output_filename,
+    parser.add_argument('--combined-filename', dest='combined_filename', default=Config.combined_filename,
                         help='Output combined CSV filename (default: combined_npl.csv)')
     parser.add_argument('--skip-rows', dest='skip_rows', type=int, default=Config.skip_rows,
                         help='Number of rows to skip before the header in input CSVs (default: 10)')
@@ -69,7 +69,7 @@ def get_config(argv=None) -> Config:
         output_path=args.output_path,
         current_filename=args.current_filename,
         proposed_filename=args.proposed_filename,
-        output_filename=args.output_filename,
+        combined_filename=args.combined_filename,
         skip_rows=args.skip_rows,
         id_col=args.id_col,
     )
@@ -129,8 +129,10 @@ def main(argv=None) -> int:
     # Read inputs
     logging.info(f"Reading Current CSV: {current_path} (skip {cfg.skip_rows} rows)")
     df_current = read_npl_csv(str(current_path), cfg.skip_rows)
+    logging.info(f"Current CSV rows (after header): {len(df_current)}")
     logging.info(f"Reading Proposed CSV: {proposed_path} (skip {cfg.skip_rows} rows)")
     df_proposed = read_npl_csv(str(proposed_path), cfg.skip_rows)
+    logging.info(f"Proposed CSV rows (after header): {len(df_proposed)}")
 
     # Standardize columns
     df_current_std, df_proposed_std, combined_cols = standardize_columns(df_current, df_proposed)
@@ -140,12 +142,15 @@ def main(argv=None) -> int:
     overlaps = find_overlaps(df_current_std, df_proposed_std, cfg.id_col)
     if overlaps:
         logging.warning(f"Found {len(overlaps)} overlapping {cfg.id_col} values between Current and Proposed; Current records will be kept.")
+    else:
+        logging.info(f"No overlapping {cfg.id_col} values found between Current and Proposed.")
 
     # Combine deterministically and drop duplicates (Current first)
     df_clean = combine_and_dedup(df_current_std, df_proposed_std, cfg.id_col)
+    logging.info(f"Final combined rows (after dedup on {cfg.id_col}): {len(df_clean)}")
 
     # Write output
-    out_path = Path(cfg.output_path) / cfg.output_filename
+    out_path = Path(cfg.output_path) / cfg.combined_filename
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df_clean.to_csv(out_path, index=False)
     logging.info(f"Wrote combined CSV to: {out_path}")

@@ -559,20 +559,21 @@ test_weight_all <- test_no_split %>%
             score_lt = mean(score)) %>%
   mutate(score_wt = score_lt * fraction_of_total) %>%
   group_by(block_group_geoid) %>%
-  summarize(weighted_score = sum(score_wt)) %>%
-  mutate(diff = blockgroup_score - weighted_score)
+  summarize(weighted_score = sum(score_wt)) 
 
 # mapping: 
 test_weight_all_sf <- test_weight_all %>%
   merge(., ri_bg %>% select(GEOID), by.x = "block_group_geoid", 
         by.y = "GEOID") %>%
-  st_as_sf() 
+  merge(., ptraf, by.x = "block_group_geoid", by.y = "block_group_geoid") %>%
+  st_as_sf() %>%
+  mutate(diff = weighted_score - PTRAF)
+
 mapview(test_weight_all_sf, zcol = "weighted_score") + 
   mapview(prepro_ri_2020, color = "black", lwd = 1.5)
 
 test_weight_all_df <- test_weight_all_sf %>%
-  as.data.frame() %>%
-  merge(., ptraf, by.x = "block_group_geoid", by.y = "block_group_geoid")
+  as.data.frame() 
 ggplot(test_weight_all_df, aes(x = PTRAF, y = weighted_score)) + 
   geom_point() + 
   geom_abline(intercept = 0, slope = 1, color = "red", lty = "dashed") + 
@@ -580,3 +581,10 @@ ggplot(test_weight_all_df, aes(x = PTRAF, y = weighted_score)) +
   labs(x = "EJScreen Traffic Prox Score", y = "Estimated Weighted Score") + 
   ggtitle("EJScreen Score Test - No 500m Split, mean inverse dist * aadt for blocks before grouping by block group * pop weight")
   
+# adding to s3 for comparisons 
+# st_write(test_weight_all_sf, "./outputs/traffic/processing/ri_bg_summary_v5.geojson")
+# put_object(
+#   file = "./outputs/traffic/processing/ri_bg_summary_v5.geojson",
+#   object = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/RI/bg_summary_test_v5.geojson",
+#   multipart = T
+# )

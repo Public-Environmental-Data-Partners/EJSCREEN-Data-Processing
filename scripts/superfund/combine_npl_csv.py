@@ -2,37 +2,70 @@
 combine_npl_csv.py
 
 Purpose:
-  Read two NPL CSV files (Current and Proposed), normalize their columns,
-  concatenate them with Current prioritized, remove any duplicate EPA_IDs
-  (none are expected) keeping only the Current record, and
-  write out a clean combined CSV.
+  Read two National Priorities List (NPL) CSV files (Current and Proposed),
+  normalize and concatenate them, prefer Current records when EPA_ID duplicates
+  occur, and write a clean combined CSV.
 
 Behavior summary:
-  - Reads `current_npl.csv` and `proposed_npl.csv`, skipping the
-    first 10 rows of each file to reach the header row.
-  - Ensures both DataFrames share the same set of columns before concatenation.
-  - Concatenates Current first, then Proposed, so that drop_duplicates(keep='first')
-    will prefer Current records if EPA_ID collisions occur (not expected).
-  - Logs warnings if there are EPA_ID overlaps and reports how many were found.
-  - Writes a single output CSV with standard headers (no preamble).
+  - By default the script reads/writes under S3 prefixes (uses boto3):
+      input_path default: s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/downloads
+      output_path default: s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/
+    Supply --input-path and --output-path to override; those paths may be local
+    directories or S3 URIs (starting with s3://).
+  - Default filenames (overrideable via CLI):
+      current:  superfund_active_currentlyOnNPL_20260213.csv
+      proposed: superfund_active_proposedForNPL_20260213.csv
+      combined: combined_npl_20260213.csv
+  - The script skips a configurable number of preamble rows (default: 10) to reach
+    the CSV header.
+  - It standardizes columns (Current columns first), concatenates Current + Proposed,
+    and uses drop_duplicates(subset=[EPA_ID], keep='first') so Current records win
+    on ID collisions.
+  - When S3 URIs are used the script uses boto3 for GET/PUT; the script loads
+    environment variables from a .env file (via python-dotenv) so AWS creds in
+    .env are available to boto3.
 
-Usage (example):
-  python combine_npl_csv.py --input-path ./inputs/test_data/ --current-filename current_npl.csv --proposed-filename proposed_npl.csv --combined-filename combined_npl.csv
+Usage examples:
+  # Default (uses S3 defaults):
+  python scripts/superfund/combine_npl_csv.py
 
-Technical notes:
-  - Uses pandas for data manipulation.
-  - Uses argparse and a dataclass `Config` for runtime parameters.
-  - The key column used to detect collisions is `EPA ID` (case-sensitive).
+  # Local override example:
+  python scripts/superfund/combine_npl_csv.py \
+    --input-path ./inputs/test_data/ \
+    --output-path ./outputs/ \
+    --current-filename current_npl.csv \
+    --proposed-filename proposed_npl.csv \
+    --combined-filename combined_npl.csv
+
+Notes:
+  - The unique ID column default is EPA_ID (underscore). Use --id-col to change.
+  - Logging is to stderr by default (basicConfig); the script logs input row counts,
+    number of overlaps (and samples of overlapping IDs), and the final output row count.
+  - boto3 must be installed to access S3; S3 read/write errors raise RuntimeError.
+
+Credits:
+  - Designed by Anne Gunn and Gemimi
+  - Implemented by GitHub Copilot, GPT-5 mini, and Anne Gunn
 
 """
 from dataclasses import dataclass
 from pathlib import Path
 import argparse
 import logging
-import pandas as pd
-from typing import Tuple, List, Set
 import io
+from typing import Tuple, List, Set
+
+# Third-party
+import pandas as pd
 from dotenv import load_dotenv
+
+# Optional/cloud SDK; boto3 is required for S3 access. Import at module level
+# so failures surface early. If boto3 is missing, operations that need it will
+# raise NameError when attempted; this also makes debugging easier.
+try:
+    import boto3
+except Exception as _e:  # pragma: no cover - environment dependent
+    boto3 = None
 
 
 # --- S3/local path helpers -----------------------------------------------
@@ -60,7 +93,8 @@ def read_npl_csv(path: str, skip_rows: int) -> pd.DataFrame:
             raise ValueError(f"Invalid S3 URI: {path}")
         bucket, key = parts[0], parts[1]
         try:
-            import boto3
+            if boto3 is None:
+                raise RuntimeError('boto3 not available; cannot read from S3')
             s3 = boto3.client('s3')
             obj = s3.get_object(Bucket=bucket, Key=key)
             return pd.read_csv(io.BytesIO(obj['Body'].read()), skiprows=skip_rows)
@@ -83,7 +117,8 @@ def write_df_to_path(df: pd.DataFrame, out_path: str) -> None:
             raise ValueError(f"Invalid S3 URI: {out_path}")
         bucket, key = parts[0], parts[1]
         try:
-            import boto3
+            if boto3 is None:
+                raise RuntimeError('boto3 not available; cannot write to S3')
             s3 = boto3.client('s3')
             csv_text = df.to_csv(index=False)
             s3.put_object(Bucket=bucket, Key=key, Body=csv_text.encode('utf-8'))
@@ -202,6 +237,7 @@ def main(argv=None) -> int:
     overlaps = find_overlaps(df_current_std, df_proposed_std, cfg.id_col)
     if overlaps:
         logging.warning(f"Found {len(overlaps)} overlapping {cfg.id_col} values between Current and Proposed; Current records will be kept.")
+        logging.warning(f"Overlapping IDs are: {list(overlaps)[:10]}...")  # Log first 10
     else:
         logging.info(f"No overlapping {cfg.id_col} values found between Current and Proposed.")
 

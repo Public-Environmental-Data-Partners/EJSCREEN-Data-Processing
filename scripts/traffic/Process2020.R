@@ -205,7 +205,7 @@ less_than_500 <- dist_pair_df %>%
 # After this, I think the script is simply removing block x highways 
 # segments that are in the < 500 group
 greater_than_500 <- dist_pair_df %>%
-  mutate(dist_pair_num = as.numeric(dist_pair)) %>%
+  # mutate(dist_pair_num = as.numeric(dist_pair)) %>%
   filter(!(GEOID20 %in% less_than_500$GEOID20))
 
 # find the closest segment to the >500m blocks; multiple inverse distance 
@@ -214,6 +214,7 @@ greater_than_500_nearest <- greater_than_500 %>%
   as.data.frame() %>%
   # for each block, grab the closest segment
   group_by(GEOID20) %>%
+  mutate(dist_pair_num = as.numeric(distance)) %>%
   arrange(dist_pair_num, desc = T) %>%
   slice(1) %>%
   mutate(dist_pair_km = dist_pair_num/1000, 
@@ -536,6 +537,15 @@ scores_filt %>%
   summarize(weighted_score = sum(score_wt)) %>%
   mutate(diff = blockgroup_score - weighted_score)
 
+###############################################################################
+## what if there is no < 500 and > 500m split 
+###############################################################################
+# pulling in OG RI numbers from EJScreen: 
+ptraf <- aws.s3::s3read_using(read.csv, 
+                              object = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/ri_bg_ptraf.csv") %>%
+  select(-X) %>%
+  mutate(ID = as.character(ID)) %>%
+  rename(block_group_geoid = ID)
 
 # what if there is no < 500 and > 500m split? 
 test_no_split <- dist_pair_df %>%
@@ -552,11 +562,11 @@ test_no_split <- dist_pair_df %>%
 test_weight_all <- test_no_split %>%
   # bring in some of the extra information from census blocks 
   merge(., ri_b_weights, by = c("GEOID20", "block_group_geoid", 
-                        "POP20", "fraction_of_total")) %>%
+                                "POP20", "fraction_of_total")) %>%
   group_by(GEOID20, block_group_geoid, fraction_of_total, POP20, 
            ALAND20, AWATER20) %>%
-  summarize(pct_land = ALAND20 / (ALAND20 + AWATER20), 
-            score_lt = mean(score)) %>%
+  # this is a sum!!! 
+  summarize(score_lt = sum(score)) %>%
   mutate(score_wt = score_lt * fraction_of_total) %>%
   group_by(block_group_geoid) %>%
   summarize(weighted_score = sum(score_wt)) 
@@ -567,9 +577,11 @@ test_weight_all_sf <- test_weight_all %>%
         by.y = "GEOID") %>%
   merge(., ptraf, by.x = "block_group_geoid", by.y = "block_group_geoid") %>%
   st_as_sf() %>%
-  mutate(diff = weighted_score - PTRAF)
+  mutate(diff_estimate_minus_ptraf = weighted_score - PTRAF, 
+         abs_diff_estimate_minus_ptraf = abs(weighted_score - PTRAF))
 
-mapview(test_weight_all_sf, zcol = "weighted_score") + 
+mapview(test_weight_all_sf, zcol = "diff_estimate_minus_ptraf", 
+        col.regions = RColorBrewer::brewer.pal(9, "RdBu")) + 
   mapview(prepro_ri_2020, color = "black", lwd = 1.5)
 
 test_weight_all_df <- test_weight_all_sf %>%
@@ -579,7 +591,7 @@ ggplot(test_weight_all_df, aes(x = PTRAF, y = weighted_score)) +
   geom_abline(intercept = 0, slope = 1, color = "red", lty = "dashed") + 
   theme_bw() + 
   labs(x = "EJScreen Traffic Prox Score", y = "Estimated Weighted Score") + 
-  ggtitle("EJScreen Score Test - No 500m Split, mean inverse dist * aadt for blocks before grouping by block group * pop weight")
+  ggtitle("EJScreen Score Test - No 500m Split, sum inverse dist * aadt for blocks before grouping by block group * pop weight")
   
 # adding to s3 for comparisons 
 # st_write(test_weight_all_sf, "./outputs/traffic/processing/ri_bg_summary_v5.geojson")
@@ -588,3 +600,9 @@ ggplot(test_weight_all_df, aes(x = PTRAF, y = weighted_score)) +
 #   object = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/RI/bg_summary_test_v5.geojson",
 #   multipart = T
 # )
+
+# making sure results are identical - woo! 
+# test <- aws.s3::s3read_using(st_read, 
+#                              object = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/RI/bg_summary_test_v5.geojson")
+# head(test)
+# head(test_weight_all_df)

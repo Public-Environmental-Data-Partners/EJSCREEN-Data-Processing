@@ -1,13 +1,19 @@
 """
-template_for_pipeline_processing.py
+distill_site_locations.py
 
 Purpose:
-  This code is intended to provide a reusable template for code to process one or more
-  input CSV files (from local or S3), perform some kind of combination/merging/deduplication
-  logic, and write out a final CSV (to local or S3).
+  The source data file we have for getting site lat/long locations is super
+  cumbersome to work with. It has multiple rows per site for a total of
+  47,000+ rows, and many more columns than we need, including one with paragraphs
+  of text for some rows which make it really hard to review as a spreadsheet.
+  The purpose of this script is to distill that data down to one row per site
+  with only location-relevant columns.
+
+  Ultimately, we may find a better input file for this data.
+  Alternatively, the output of this code could be useful to others.
 
 Credits:
-  - Derived by Anne Gunn from combine_npl_csv.py
+  - Designed by Anne Gunn
   - Implemented by GitHub Copilot, GPT-5 mini, and Anne Gunn
 
 """
@@ -16,7 +22,6 @@ from pathlib import Path
 import argparse
 import logging
 import io
-# typing imports not needed in this template
 
 # Third-party
 import pandas as pd
@@ -36,22 +41,19 @@ except Exception as _e:  # pragma: no cover - environment dependent
 class Config:
     # default to our AWS S3 storage
     input_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
-    # for your code, default to S3 also, defaulting to local storage here for testing
+    output_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
+    # TODO: remove the following line after testing
     output_path: str = "./pipeline/test_data/"
-    raw_locations_filename: str = "downloads/superfund_active_currentlyOnNPL_20260213.csv"
+    raw_locations_filename: str = "downloads/406242.csv"
     output_filename: str = "distilled_site_locations.csv"
-    # a lot of scripts won't use the preamble-skipping feature, but it is handy
-    # to have the option when you need it.
     skip_rows: int = 0
-    join_key: str = "EPA_ID"
+    join_key: str = "EPA ID"
 
 # --- Runtime arguments and help ---------------------------------------------
 def get_config(argv=None) -> Config:
     # Load environment variables from a .env file so boto3 can pick up AWS creds if present
     load_dotenv()
-
-    # pick up runtime arguments to override defaults.
-    parser = argparse.ArgumentParser(description="*** Distill superfund location data to a useable subset of original file ***")
+    parser = argparse.ArgumentParser(description="Distill verbose/duplicative raw location data into simple lat/long per site")
     parser.add_argument('--input-path', dest='input_path', default=Config.input_path,
                         help=f'Folder containing input CSVs (default: {Config.input_path})')
     parser.add_argument('--output-path', dest='output_path', default=Config.output_path,
@@ -60,8 +62,6 @@ def get_config(argv=None) -> Config:
                         help=f'Raw locations CSV filename (default: {Config.raw_locations_filename})')
     parser.add_argument('--output-filename', dest='output_filename', default=Config.output_filename,
                         help=f'Output combined CSV filename (default: {Config.output_filename})')
-    # Note, no skip-rows or join-key arguments here.
-    # They should generally be hard-coded, not changeable at runtime.
 
     args = parser.parse_args(argv)
     return Config(
@@ -150,7 +150,7 @@ def main(argv=None) -> int:
     # Build input/output file paths (works for both local and s3 prefixes)
     raw_locations_path = join_path_and_file(cfg.input_path, cfg.raw_locations_filename)
 
-    # Read raw locations input
+    # Read inputs
     logging.info(f"Reading raw locations CSV: {raw_locations_path} (skip {cfg.skip_rows} rows)")
     df_raw_locations = read_csv_s3_or_local(raw_locations_path, cfg.skip_rows)
     logging.info(f"raw locations CSV rows (after header): {len(df_raw_locations)}")
@@ -167,7 +167,7 @@ def main(argv=None) -> int:
     # Write output (s3 or local)
     out_path = join_path_and_file(cfg.output_path, cfg.output_filename)
     write_df_s3_or_local(df_output, out_path)
-    logging.info(f"Wrote combined CSV to: {out_path}")
+    logging.info(f"Wrote distilled CSV to: {out_path}")
     return 0
 
 

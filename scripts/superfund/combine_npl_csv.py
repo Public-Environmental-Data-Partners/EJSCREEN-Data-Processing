@@ -68,6 +68,21 @@ except Exception as _e:  # pragma: no cover - environment dependent
     boto3 = None
 
 
+# --- Configuration dataclass ---------------------------------------------
+@dataclass
+class Config:
+    # default to the s3 prefix used elsewhere in the project; can be overridden on CLI
+    input_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
+    output_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
+    current_filename: str = "downloads/superfund_active_currentlyOnNPL_20260213.csv"
+    proposed_filename: str = "downloads/superfund_active_proposedForNPL_20260213.csv"
+    combined_filename: str = "combined_npl_20260213.csv"
+    skip_rows: int = 10
+    id_col: str = "EPA_ID"
+
+
+
+
 # --- S3/local path helpers -----------------------------------------------
 def is_s3_uri(path: str) -> bool:
     return isinstance(path, str) and path.lower().startswith('s3://')
@@ -130,20 +145,6 @@ def write_df_to_path(df: pd.DataFrame, out_path: str) -> None:
     out_p.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_p, index=False)
     return
-
-
-# --- Configuration dataclass ---------------------------------------------
-@dataclass
-class Config:
-    # default to the s3 prefix used elsewhere in the project; can be overridden on CLI
-    input_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/downloads"
-    output_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
-    current_filename: str = "superfund_active_currentlyOnNPL_20260213.csv"
-    proposed_filename: str = "superfund_active_proposedForNPL_20260213.csv"
-    combined_filename: str = "combined_npl_20260213.csv"
-    skip_rows: int = 10
-    id_col: str = "EPA_ID"
-
 
 # --- Helper functions ----------------------------------------------------
 def get_config(argv=None) -> Config:
@@ -225,9 +226,12 @@ def main(argv=None) -> int:
     logging.info(f"Reading Current CSV: {current_path} (skip {cfg.skip_rows} rows)")
     df_current = read_npl_csv(current_path, cfg.skip_rows)
     logging.info(f"Current CSV rows (after header): {len(df_current)}")
+    # Log first five header values (column names) for quick inspection
+    logging.info(f"Current CSV headers (first 5 of {df_current.shape[1]}): {df_current.columns[:5].tolist()}")
     logging.info(f"Reading Proposed CSV: {proposed_path} (skip {cfg.skip_rows} rows)")
     df_proposed = read_npl_csv(proposed_path, cfg.skip_rows)
     logging.info(f"Proposed CSV rows (after header): {len(df_proposed)}")
+    logging.info(f"Proposed CSV headers (first 5 of {df_proposed.shape[1]}): {df_proposed.columns[:5].tolist()}")
 
     # Standardize columns
     df_current_std, df_proposed_std, combined_cols = standardize_columns(df_current, df_proposed)

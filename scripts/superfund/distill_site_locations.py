@@ -12,6 +12,32 @@ Purpose:
   Ultimately, we may find a better input file for this data.
   Alternatively, the output of this code could be useful to others.
 
+Behavior:
+  - Reads a verbose raw locations CSV that may contain multiple rows per site
+    and reduces it to exactly one row per EPA ID (deduplicating by EPA ID).
+  - Detects EPA IDs in the input that have multiple distinct Primary
+    Latitude/Primary Longitude pairs; logs a warning for each such ID and
+    defaults to the first encountered coordinate pair.
+  - Validates that the kept rows have non-blank, numeric Primary Latitude and
+    Primary Longitude values; if invalid rows are found the script logs a
+    sample and exits with a non-zero status to prevent writing bad output.
+  - Selects and reorders a minimal set of columns and renames
+    Primary Latitude/Primary Longitude to Latitude/Longitude in the output.
+  - Supports reading from and writing to either local filesystem paths or an
+    S3 URI (s3://...), using boto3 when S3 is targeted. A .env file is loaded
+    so AWS credentials may be provided there.
+
+Usage (examples):
+  python scripts/superfund/distill_site_locations.py
+    see Config for defaults, which are set to read from and write to our S3 bucket
+
+  # Local override example
+  python scripts/superfund/distill_site_locations.py \
+    --input-path ./inputs/test_data/ \
+    --raw-locations-filename 406242_20260213.csv \
+    --output-path ./pipeline/test_data/ \
+    --output-filename distilled_site_locations.csv
+
 Credits:
   - Designed by Anne Gunn
   - Implemented by GitHub Copilot, GPT-5 mini, and Anne Gunn
@@ -42,11 +68,9 @@ class Config:
     # default to our AWS S3 storage
     input_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
     output_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
-    # TODO: remove the following line after testing
-    output_path: str = "./pipeline/test_data/"
-    raw_locations_filename: str = "downloads/406242.csv"
+    raw_locations_filename: str = "downloads/406242_20260213.csv"
     output_filename: str = "distilled_site_locations.csv"
-    skip_rows: int = 0
+    skip_rows: int = 0  # not used in this script, but left here for consistency and future flexibility
     join_key: str = "EPA ID"
 
 # --- Runtime arguments and help ---------------------------------------------
@@ -137,9 +161,8 @@ def write_df_s3_or_local(df: pd.DataFrame, out_path: str) -> None:
     return
 
 # --- Worker functions ----------------------------------------------------
-# Put your content-specific processing functions here.
 
-
+#TODO: Implement the logic to distill the raw locations data down to one row per site with only location-relevant columns.
 
 # --- Main ----------------------------------------------------------------
 
@@ -154,15 +177,57 @@ def main(argv=None) -> int:
     logging.info(f"Reading raw locations CSV: {raw_locations_path} (skip {cfg.skip_rows} rows)")
     df_raw_locations = read_csv_s3_or_local(raw_locations_path, cfg.skip_rows)
     logging.info(f"raw locations CSV rows (after header): {len(df_raw_locations)}")
-    logging.info(f"raw locations CSV headers (first 5 of {df_raw_locations.shape[1]}): {df_raw_locations.columns[:5].tolist()}")
 
-    # TODO: Add your logic here to use your worker functions to munge your
-    # input(s) into your output(s)
-    # For the purposes of this template, we do no processing of either file,
-    # simply output the contents of inputA as a way to exercise the
-    # data-writing code.
-    # Deep copy that does not modify the original df_current
-    df_output = df_raw_locations.copy()
+    # Ensure the input contains all required columns
+    required_cols = [
+        'Region', 'Site Name', 'EPA ID', 'Address 1', 'Address 2',
+        'City', 'State', 'Zip Code', 'County', 'Primary Latitude', 'Primary Longitude'
+    ]
+    missing = [c for c in required_cols if c not in df_raw_locations.columns]
+    if missing:
+        logging.error(f"Missing required columns in raw locations CSV: {missing}")
+        return 1
+
+    # Detect EPA IDs with conflicting latitude/longitude values and warn
+    conflicts = []
+    for eid, grp in df_raw_locations.groupby('EPA ID', sort=False):
+        lat_count = grp['Primary Latitude'].nunique(dropna=True)
+        lon_count = grp['Primary Longitude'].nunique(dropna=True)
+        if lat_count > 1 or lon_count > 1:
+            conflicts.append(eid)
+            pairs = grp[['Primary Latitude', 'Primary Longitude']].drop_duplicates().values.tolist()
+            logging.warning(f"Conflict found for ID {eid}: Multiple coordinate pairs detected. Defaulting to first encountered. Pairs: {pairs}")
+
+    # Deduplicate rows keeping the first occurrence per EPA ID
+    df_dedup = df_raw_locations.drop_duplicates(subset=['EPA ID'], keep='first')
+
+    # Validate that Primary Latitude and Primary Longitude are present and numeric for every kept row
+    lat_numeric = pd.to_numeric(df_dedup['Primary Latitude'], errors='coerce')
+    lon_numeric = pd.to_numeric(df_dedup['Primary Longitude'], errors='coerce')
+    invalid_mask = pd.isna(lat_numeric) | pd.isna(lon_numeric)
+    if invalid_mask.any():
+        invalid_count = int(invalid_mask.sum())
+        invalid_sample = df_dedup.loc[invalid_mask, ['EPA ID', 'Primary Latitude', 'Primary Longitude']].head(20)
+        logging.warning(f"{invalid_count} deduplicated rows have missing or non-numeric Primary Latitude/Primary Longitude. Sample:\n{invalid_sample.to_string(index=False)}")
+    else:
+        logging.info("All deduplicated rows have valid numeric Primary Latitude and Primary Longitude.")
+
+    # Select and reorder the desired output columns and rename lat/long
+    df_output = df_dedup[[
+        'EPA ID', 'Region', 'Site Name', 'Address 1', 'Address 2',
+        'City', 'State', 'Zip Code', 'County', 'Primary Latitude', 'Primary Longitude'
+    ]].copy()
+    df_output = df_output.rename(columns={'Primary Latitude': 'Latitude', 'Primary Longitude': 'Longitude'})
+
+    # Sort the final output by EPA ID ascending
+    df_output = df_output.sort_values(by='EPA ID', ascending=True)
+
+    # Summary logging
+    if conflicts:
+        logging.warning(f"Found {len(conflicts)} EPA IDs with conflicting coordinates; kept first occurrence for each.")
+    else:
+        logging.info("No EPA ID coordinate conflicts found.")
+    logging.info(f"Output distilled rows (unique EPA IDs): {len(df_output)}")
 
     # Write output (s3 or local)
     out_path = join_path_and_file(cfg.output_path, cfg.output_filename)

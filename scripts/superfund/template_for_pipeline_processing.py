@@ -21,6 +21,7 @@ import io
 # Third-party
 import pandas as pd
 from dotenv import load_dotenv
+from pyarrow import input_stream
 
 # Optional/cloud SDK; boto3 is required for S3 access. Import at module level
 # so failures surface early. If boto3 is missing, operations that need it will
@@ -38,11 +39,11 @@ class Config:
     input_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
     # for your code, default to S3 also, defaulting to local storage here for testing
     output_path: str = "./pipeline/test_data/"
-    raw_locations_filename: str = "downloads/superfund_active_currentlyOnNPL_20260213.csv"
-    output_filename: str = "distilled_site_locations.csv"
+    input_filename: str = "downloads/superfund_active_currentlyOnNPL_20260213.csv"
+    output_filename: str = "template_output.csv"
     # a lot of scripts won't use the preamble-skipping feature, but it is handy
     # to have the option when you need it.
-    skip_rows: int = 0
+    skip_rows: int = 10  # very input specific; your value would likely be 0
     join_key: str = "EPA_ID"
 
 # --- Runtime arguments and help ---------------------------------------------
@@ -56,8 +57,8 @@ def get_config(argv=None) -> Config:
                         help=f'Folder containing input CSVs (default: {Config.input_path})')
     parser.add_argument('--output-path', dest='output_path', default=Config.output_path,
                         help=f'Folder to write the output CSV (default: {Config.output_path})')
-    parser.add_argument('--raw-locations-filename', dest='raw_locations_filename', default=Config.raw_locations_filename,
-                        help=f'Raw locations CSV filename (default: {Config.raw_locations_filename})')
+    parser.add_argument('--input-filename', dest='input_filename', default=Config.input_filename,
+                        help=f'Input CSV filename (default: {Config.input_filename})')
     parser.add_argument('--output-filename', dest='output_filename', default=Config.output_filename,
                         help=f'Output combined CSV filename (default: {Config.output_filename})')
     # Note, no skip-rows or join-key arguments here.
@@ -67,7 +68,7 @@ def get_config(argv=None) -> Config:
     return Config(
         input_path=args.input_path,
         output_path=args.output_path,
-        raw_locations_filename=args.raw_locations_filename,
+        input_filename=args.input_filename,
         output_filename=args.output_filename,
     )
 
@@ -148,13 +149,17 @@ def main(argv=None) -> int:
     cfg = get_config(argv)
 
     # Build input/output file paths (works for both local and s3 prefixes)
-    raw_locations_path = join_path_and_file(cfg.input_path, cfg.raw_locations_filename)
+    input_path = join_path_and_file(cfg.input_path, cfg.input_filename)
 
     # Read raw locations input
-    logging.info(f"Reading raw locations CSV: {raw_locations_path} (skip {cfg.skip_rows} rows)")
-    df_raw_locations = read_csv_s3_or_local(raw_locations_path, cfg.skip_rows)
-    logging.info(f"raw locations CSV rows (after header): {len(df_raw_locations)}")
-    logging.info(f"raw locations CSV headers (first 5 of {df_raw_locations.shape[1]}): {df_raw_locations.columns[:5].tolist()}")
+    logging.info(f"Reading raw locations CSV: {input_path} (skip {cfg.skip_rows} rows)")
+    try:
+        df_input = read_csv_s3_or_local(input_path, cfg.skip_rows)
+    except Exception as e:
+        logging.error(f"Failed to read raw locations CSV at {input_path}: {e}")
+        return 1
+    logging.info(f"input CSV rows (after header): {len(df_input)}")
+    logging.info(f"input CSV headers (first 5 of {df_input.shape[1]}): {df_input.columns[:5].tolist()}")
 
     # TODO: Add your logic here to use your worker functions to munge your
     # input(s) into your output(s)
@@ -162,12 +167,16 @@ def main(argv=None) -> int:
     # simply output the contents of inputA as a way to exercise the
     # data-writing code.
     # Deep copy that does not modify the original df_current
-    df_output = df_raw_locations.copy()
+    df_output = df_input.copy()
 
     # Write output (s3 or local)
     out_path = join_path_and_file(cfg.output_path, cfg.output_filename)
-    write_df_s3_or_local(df_output, out_path)
-    logging.info(f"Wrote combined CSV to: {out_path}")
+    try:
+        write_df_s3_or_local(df_output, out_path)
+    except Exception as e:
+        logging.error(f"Failed to write output CSV to {out_path}: {e}")
+        return 1
+    logging.info(f"Wrote output CSV to: {out_path}")
     return 0
 
 

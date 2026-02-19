@@ -3,22 +3,9 @@ join_npl_with_coords.py
 
 Purpose:
   Enrich the cleaned combined NPL CSV with coordinate values from a reference
-  CSV. The script is careful to detect inconsistent coordinates for the same
-  EPA ID in the reference and will warn and default to the first seen pair.
-
+  CSV.
 Behavior:
-  - Reads the combined NPL CSV (left table) and a reference coordinate CSV
-    (right table). Both sources can be local files or S3 URIs (s3://...).
-  - Performs an integrity check on the reference: if an EPA ID has multiple
-    distinct Primary Latitude/Primary Longitude pairs a warning is logged and
-    the first pair is used.
-  - Renames Primary Latitude/Primary Longitude to Latitude/Longitude in the
-    reference, coerces ID columns to strings, and performs a left join of the
-    combined table (left) to the deduplicated reference (right) matching
-    left_on='EPA ID' and right_on='EPA ID'. The reference ID column is dropped
-    after the join.
-  - Logs the number of rows missing coordinates after the join and verifies
-    that the output row count equals the input combined row count.
+
 
 Usage (examples):
   python scripts/superfund/join_npl_with_coords.py
@@ -61,6 +48,52 @@ except Exception:
     boto3 = None
 
 
+# --- Config ---------------------------------------------------------------
+@dataclass
+class Config:
+    input_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
+    output_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
+    # Intentionally override real values, change back before committing! These defaults are for local testing only.
+    input_path: str = "./pipeline/test_data/"  # local override for testing; default to S3 for actual use
+    output_path: str = "./pipeline/test_data/"
+    combined_filename: str = "npl_current_and_proposed.csv"
+    reference_filename: str = "distilled_npl_site_locations.csv"
+    combined_with_coords_filename: str = "npl_sites_with_coords.csv"
+    combined_id_col: str = "EPA ID"  # key in combined NPL file
+    reference_id_col: str = "EPA ID"  # key in reference file
+    reference_lat_col: str = "Latitude"
+    reference_lon_col: str = "Longitude"
+
+
+def get_config(argv=None) -> Config:
+    load_dotenv()
+    parser = argparse.ArgumentParser(description="Join combined NPL with reference coords (S3 or local)")
+    parser.add_argument('--input-path', dest='input_path', default=Config.input_path,
+                        help='S3 prefix or local folder containing input files')
+    parser.add_argument('--output-path', dest='output_path', default=Config.output_path,
+                        help='S3 prefix or local folder to write outputs')
+    parser.add_argument('--combined-filename', dest='combined_filename', default=Config.combined_filename,
+                        help='Combined NPL filename (default from pipeline)')
+    parser.add_argument('--reference-filename', dest='reference_filename', default=Config.reference_filename,
+                        help='Reference coord filename')
+    parser.add_argument('--combined-with-coords-filename', dest='combined_with_coords_filename',
+                        default=Config.combined_with_coords_filename,
+                        help='Output filename for combined+coords')
+
+    # NOTE: ID/lat/lon column names are configured in the Config dataclass defaults
+    # and are intentionally not exposed as runtime flags to keep usage simpler.
+
+    args = parser.parse_args(argv)
+    return Config(
+        input_path=args.input_path,
+        output_path=args.output_path,
+        combined_filename=args.combined_filename,
+        reference_filename=args.reference_filename,
+        combined_with_coords_filename=args.combined_with_coords_filename,
+        # use ID / lat / lon values from Config dataclass defaults
+    )
+
+
 # --- S3/local helpers (same pattern used in combine_npl_csv.py) ----------
 def is_s3_uri(path: str) -> bool:
     return isinstance(path, str) and path.lower().startswith('s3://')
@@ -72,8 +105,11 @@ def join_path_and_file(path: str, filename: str) -> str:
     return str(Path(path) / filename)
 
 
-def read_csv_s3_or_local(path: str) -> pd.DataFrame:
-    """Read a CSV from S3 or local filesystem into a DataFrame."""
+def read_csv_s3_or_local(path: str, dtype=None) -> pd.DataFrame:
+    """Read a CSV from S3 or local filesystem into a DataFrame.
+
+    Accepts an optional pandas dtype mapping which is forwarded to pd.read_csv.
+    """
     if is_s3_uri(path):
         tail = path[5:]
         parts = tail.split('/', 1)
@@ -85,7 +121,7 @@ def read_csv_s3_or_local(path: str) -> pd.DataFrame:
         s3 = boto3.client('s3')
         try:
             obj = s3.get_object(Bucket=bucket, Key=key)
-            return pd.read_csv(io.BytesIO(obj['Body'].read()))
+            return pd.read_csv(io.BytesIO(obj['Body'].read()), dtype=dtype)
         except Exception as e:
             # Log the exception message and re-raise a runtime error with the same message
             logging.error(f"Error fetching S3 object {path}: {e}")
@@ -94,7 +130,7 @@ def read_csv_s3_or_local(path: str) -> pd.DataFrame:
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Local CSV not found: {path}")
-    return pd.read_csv(p)
+    return pd.read_csv(p, dtype=dtype)
 
 
 def write_df_s3_or_local(df: pd.DataFrame, out_path: str) -> None:
@@ -117,116 +153,33 @@ def write_df_s3_or_local(df: pd.DataFrame, out_path: str) -> None:
     df.to_csv(out_p, index=False)
 
 
-# --- Config ---------------------------------------------------------------
-@dataclass
-class Config:
-    input_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
-    output_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
-    combined_filename: str = "combined_npl_20260213.csv"
-    reference_filename: str = "downloads/406242.csv"
-    combined_with_coords_filename: str = "combined_with_coords_20260213.csv"
-    combined_id_col: str = "EPA ID"           # key in combined NPL file
-    reference_id_col: str = "EPA ID"         # key in reference file
-    reference_lat_col: str = "Primary Latitude"
-    reference_lon_col: str = "Primary Longitude"
 
 
 # --- Core logic ----------------------------------------------------------
 
-def get_config(argv=None) -> Config:
-    load_dotenv()
-    parser = argparse.ArgumentParser(description="Join combined NPL with reference coords (S3 or local)")
-    parser.add_argument('--input-path', dest='input_path', default=Config.input_path,
-                        help='S3 prefix or local folder containing input files')
-    parser.add_argument('--output-path', dest='output_path', default=Config.output_path,
-                        help='S3 prefix or local folder to write outputs')
-    parser.add_argument('--combined-filename', dest='combined_filename', default=Config.combined_filename,
-                        help='Combined NPL filename (default from pipeline)')
-    parser.add_argument('--reference-filename', dest='reference_filename', default=Config.reference_filename,
-                        help='Reference coord filename')
-    parser.add_argument('--combined-with-coords-filename', dest='combined_with_coords_filename', default=Config.combined_with_coords_filename,
-                        help='Output filename for combined+coords')
+def split_valid_and_invalid_coords(df: pd.DataFrame, lat_col: str, lon_col: str):
+    """Return (df_valid, df_invalid) where valid rows have non-empty lat and lon.
 
-    # NOTE: ID/lat/lon column names are configured in the Config dataclass defaults
-    # and are intentionally not exposed as runtime flags to keep usage simpler.
-
-    args = parser.parse_args(argv)
-    return Config(
-        input_path=args.input_path,
-        output_path=args.output_path,
-        combined_filename=args.combined_filename,
-        reference_filename=args.reference_filename,
-        combined_with_coords_filename=args.combined_with_coords_filename,
-        # keep ID / lat / lon values from Config dataclass defaults
-     )
-
-
-def integrity_check_and_dedup_reference(df_ref: pd.DataFrame, id_col: str, lat_col: str, lon_col: str) -> pd.DataFrame:
-    """Check for multiple coordinate pairs per ID, warn if found, and return a deduped ref DF.
-
-    Keeps the first encountered lat/lon pair for each ID.
+    A value is considered missing if it is NaN, an empty string after stripping,
+    or the literal text 'nan' (case-insensitive).
     """
-    if id_col not in df_ref.columns:
-        raise KeyError(f"Reference ID column not found: {id_col}")
-    if lat_col not in df_ref.columns or lon_col not in df_ref.columns:
-        raise KeyError(f"Reference latitude/longitude columns not found: {lat_col}, {lon_col}")
+    if lat_col not in df.columns or lon_col not in df.columns:
+        raise ValueError(f"Latitude/Longitude columns not found in DataFrame: {lat_col}, {lon_col}")
 
-    # Identify IDs with multiple unique (lat,lon) pairs
-    grouped = df_ref.groupby(id_col)
-    conflicts = []
-    for eid, grp in grouped:
-        unique_pairs = grp[[lat_col, lon_col]].drop_duplicates()
-        if len(unique_pairs) > 1:
-            conflicts.append(eid)
-            logging.warning(f"Conflict found for ID {eid}: Multiple coordinate pairs detected. Defaulting to first encountered.")
+    lat = df[lat_col]
+    lon = df[lon_col]
 
-    # Deduplicate by keeping first occurrence of each ID
-    df_ref_dedup = df_ref.drop_duplicates(subset=[id_col], keep='first').copy()
-    return df_ref_dedup
+    # Convert to string for text-based checks but keep original NaN detection
+    lat_str = lat.astype(str).str.strip()
+    lon_str = lon.astype(str).str.strip()
 
+    lat_missing = pd.isna(lat) | (lat_str == '') | (lat_str.str.lower() == 'nan')
+    lon_missing = pd.isna(lon) | (lon_str == '') | (lon_str.str.lower() == 'nan')
 
-def rename_ref_latlon(df_ref: pd.DataFrame, lat_col: str, lon_col: str) -> pd.DataFrame:
-    rename_map = {}
-    if lat_col in df_ref.columns:
-        rename_map[lat_col] = 'Latitude'
-    if lon_col in df_ref.columns:
-        rename_map[lon_col] = 'Longitude'
-    if rename_map:
-        df_ref = df_ref.rename(columns=rename_map)
-    return df_ref
-
-
-def coerce_id_types(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    df[col] = df[col].astype(str)
-    return df
-
-
-def enrich_combined_with_coords(df_combined: pd.DataFrame, df_ref: pd.DataFrame, combined_id_col: str, reference_id_col: str) -> pd.DataFrame:
-    # Ensure ID columns are string
-    df_combined = df_combined.copy()
-    df_ref = df_ref.copy()
-    if combined_id_col not in df_combined.columns:
-        raise KeyError(f"Combined ID column not found: {combined_id_col}")
-    if reference_id_col not in df_ref.columns:
-        raise KeyError(f"Reference ID column not found: {reference_id_col}")
-
-    df_combined[combined_id_col] = df_combined[combined_id_col].astype(str)
-    df_ref[reference_id_col] = df_ref[reference_id_col].astype(str)
-
-    merged = pd.merge(
-        df_combined,
-        df_ref,
-        left_on=combined_id_col,
-        right_on=reference_id_col,
-        how='left',
-        suffixes=("","_ref")
-    )
-
-    # Drop the redundant reference ID column
-    if reference_id_col in merged.columns:
-        merged = merged.drop(columns=[reference_id_col])
-
-    return merged
+    invalid_mask = lat_missing | lon_missing
+    df_invalid = df.loc[invalid_mask].copy()
+    df_valid = df.loc[~invalid_mask].copy()
+    return df_valid, df_invalid
 
 
 # --- Main ----------------------------------------------------------------
@@ -240,61 +193,88 @@ def main(argv=None) -> int:
     reference_path = join_path_and_file(cfg.input_path, cfg.reference_filename)
 
     logging.info(f"Loading combined NPL file: {combined_path}")
-    df_combined = read_csv_s3_or_local(combined_path)
+    try:
+        df_combined = read_csv_s3_or_local(combined_path)
+    except Exception as e:
+        logging.error(f"Failed to read combined NPL file at {combined_path}: {e}")
+        return 1
     logging.info(f"Loaded combined rows: {len(df_combined)}")
 
     logging.info(f"Loading reference coordinate file: {reference_path}")
-    df_ref = read_csv_s3_or_local(reference_path)
+    # Read lat/lon from the reference as strings so we preserve exact formatting
+    try:
+        df_ref = read_csv_s3_or_local(reference_path, dtype={cfg.reference_lat_col: str, cfg.reference_lon_col: str})
+    except Exception as e:
+        logging.error(f"Failed to read reference CSV at {reference_path}: {e}")
+        return 1
     logging.info(f"Loaded reference rows: {len(df_ref)}")
 
-    # Integrity check + deduplicate reference file
-    df_ref_dedup = integrity_check_and_dedup_reference(df_ref, cfg.reference_id_col, cfg.reference_lat_col, cfg.reference_lon_col)
+    # --- Enrichment: left join combined NPL (left) with reference coords (right)
+    # Warn if reference contains duplicate keys (should be deduped per spec)
+    dup_count = int(df_ref[cfg.reference_id_col].duplicated().sum())
+    if dup_count > 0:
+        logging.warning(f"Reference file contains {dup_count} duplicate {cfg.reference_id_col} values; results may be unexpected.")
 
-    # Rename lat/lon to normalized names
-    df_ref_dedup = rename_ref_latlon(df_ref_dedup, cfg.reference_lat_col, cfg.reference_lon_col)
+    # Perform left join on the configured ID column
+    df_merged = df_combined.merge(
+        df_ref[[cfg.reference_id_col, cfg.reference_lat_col, cfg.reference_lon_col]],
+        on=cfg.combined_id_col,
+        how='left'
+    )
 
-    # Keep only the reference ID and the normalized Latitude/Longitude columns.
-    # This ensures the merged output will only gain the two coordinate columns.
-    cols_to_keep = [cfg.reference_id_col]
-    for col in ['Latitude', 'Longitude']:
-        if col in df_ref_dedup.columns:
-            cols_to_keep.append(col)
-        else:
-            logging.warning(f"Reference file missing expected column: {col}")
+    # Split into valid and invalid coordinate rows
+    try:
+        df_valid_coords, df_invalid_coords = split_valid_and_invalid_coords(df_merged, cfg.reference_lat_col, cfg.reference_lon_col)
+    except Exception as e:
+        logging.error(f"Coordinate validation failed: {e}")
+        return 1
 
-    df_ref_dedup = df_ref_dedup[cols_to_keep].copy()
-    logging.info(f"Reduced reference to columns: {cols_to_keep}")
-
-    # Perform the left join (enrichment)
-    # Keep a snapshot of combined columns so we can verify no unexpected columns are added
-    combined_columns_before = set(df_combined.columns)
-    merged = enrich_combined_with_coords(df_combined, df_ref_dedup, cfg.combined_id_col, cfg.reference_id_col)
-
-    # Verification: ensure only Latitude/Longitude were added (if anything)
-    final_columns = set(merged.columns)
-    added_columns = final_columns - combined_columns_before
-    allowed_added = {"Latitude", "Longitude"}
-    unexpected_added = added_columns - allowed_added
-    if unexpected_added:
-        logging.error(f"Unexpected columns added from reference: {unexpected_added}")
-        raise RuntimeError(f"Unexpected columns added from reference: {unexpected_added}")
+    # Log and write invalid rows if any
+    invalid_count = len(df_invalid_coords)
+    if invalid_count:
+        logging.warning(f"Found {invalid_count} rows with missing lat or lon; writing them to an invalid-rows CSV for inspection.")
+        base = cfg.combined_with_coords_filename.rsplit('.', 1)[0]
+        invalid_filename = f"{base}_invalid_coords.csv"
+        invalid_path = join_path_and_file(cfg.output_path, invalid_filename)
+        try:
+            write_df_s3_or_local(df_invalid_coords, invalid_path)
+            logging.info(f"Wrote invalid coordinate rows to: {invalid_path}")
+        except Exception as e:
+            logging.error(f"Failed to write invalid coordinate rows to {invalid_path}: {e}")
+            return 1
     else:
-        logging.info(f"Columns added from reference (if any): {sorted(list(added_columns & allowed_added))}")
+        logging.info("No invalid lat/long rows found.")
 
-    # Audit: missing coordinates
-    lat_missing = merged['Latitude'].isna() if 'Latitude' in merged.columns else pd.Series([True]*len(merged))
-    lon_missing = merged['Longitude'].isna() if 'Longitude' in merged.columns else pd.Series([True]*len(merged))
-    n_missing = int((lat_missing | lon_missing).sum())
-    logging.info(f"Rows with missing Latitude/Longitude: {n_missing} of {len(merged)}")
+    # From here on, work with rows that have valid lat & lon only
+    df_merged = df_valid_coords
 
-    # Row count verification
-    if len(merged) != len(df_combined):
-        logging.error(f"Row count mismatch after join: combined had {len(df_combined)} rows, merged has {len(merged)} rows")
-        raise RuntimeError("Row count mismatch after enrichment; aborting to avoid data corruption")
+    # Validation: ensure row count integrity
+    if len(df_merged) != len(df_combined):
+        logging.warning(f"Row count mismatch: input combined rows={len(df_combined)} output rows={len(df_merged)}")
+    else:
+        logging.info(f"Row count check passed: {len(df_merged)} rows in merged df matches input rows")
+
+    # Add CWEIGHT column and set to 1 for all rows
+    df_merged['CWEIGHT'] = 1
+
+    # Select only the requested output columns in the specified order
+    out_cols = [cfg.combined_id_col, cfg.reference_lat_col, cfg.reference_lon_col, 'CWEIGHT']
+    # If any expected column is missing after the merge, raise a clear error
+    missing_out_cols = [c for c in out_cols if c not in df_merged.columns]
+    if missing_out_cols:
+        logging.error(f"Missing expected output columns after merge: {missing_out_cols}")
+        return 1
+
+    df_final = df_merged[out_cols].copy()
+
 
     # Write output
     out_path = join_path_and_file(cfg.output_path, cfg.combined_with_coords_filename)
-    write_df_s3_or_local(merged, out_path)
+    try:
+        write_df_s3_or_local(df_final, out_path)
+    except Exception as e:
+        logging.error(f"Failed to write enriched combined file to {out_path}: {e}")
+        return 1
     logging.info(f"Wrote enriched combined file to: {out_path}")
 
     return 0

@@ -68,8 +68,11 @@ class Config:
     # default to our AWS S3 storage
     input_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
     output_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
+    # Intentionally override real values, change back before committing! These defaults are for local testing only.
+    input_path: str = "./pipeline/test_data/"  # local override for testing; default to S3 for actual use
+    output_path: str = "./pipeline/test_data/"
     raw_locations_filename: str = "downloads/406242_20260213.csv"
-    output_filename: str = "distilled_site_locations.csv"
+    output_filename: str = "distilled_npl_site_locations.csv"
     skip_rows: int = 0  # not used in this script, but left here for consistency and future flexibility
     join_key: str = "EPA ID"
 

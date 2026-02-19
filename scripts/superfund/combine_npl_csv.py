@@ -74,9 +74,12 @@ class Config:
     # default to the s3 prefix used elsewhere in the project; can be overridden on CLI
     input_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
     output_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
+    # Intentionally override real values, change back before committing! These defaults are for local testing only.
+    input_path: str = "./pipeline/test_data/"  # local override for testing; default to S3 for actual use
+    output_path: str = "./pipeline/test_data/"
     current_filename: str = "downloads/superfund_active_currentlyOnNPL_20260213.csv"
     proposed_filename: str = "downloads/superfund_active_proposedForNPL_20260213.csv"
-    combined_filename: str = "combined_npl_20260213.csv"
+    combined_filename: str = "npl_current_and_proposed.csv"
     skip_rows: int = 10
     id_col: str = "EPA_ID"
 
@@ -224,12 +227,20 @@ def main(argv=None) -> int:
 
     # Read inputs
     logging.info(f"Reading Current CSV: {current_path} (skip {cfg.skip_rows} rows)")
-    df_current = read_npl_csv(current_path, cfg.skip_rows)
+    try:
+        df_current = read_npl_csv(current_path, cfg.skip_rows)
+    except Exception as e:
+        logging.error(f"Failed to read Current CSV at {current_path}: {e}")
+        return 1
     logging.info(f"Current CSV rows (after header): {len(df_current)}")
     # Log first five header values (column names) for quick inspection
     logging.info(f"Current CSV headers (first 5 of {df_current.shape[1]}): {df_current.columns[:5].tolist()}")
     logging.info(f"Reading Proposed CSV: {proposed_path} (skip {cfg.skip_rows} rows)")
-    df_proposed = read_npl_csv(proposed_path, cfg.skip_rows)
+    try:
+        df_proposed = read_npl_csv(proposed_path, cfg.skip_rows)
+    except Exception as e:
+        logging.error(f"Failed to read Proposed CSV at {proposed_path}: {e}")
+        return 1
     logging.info(f"Proposed CSV rows (after header): {len(df_proposed)}")
     logging.info(f"Proposed CSV headers (first 5 of {df_proposed.shape[1]}): {df_proposed.columns[:5].tolist()}")
 
@@ -249,9 +260,17 @@ def main(argv=None) -> int:
     df_clean = combine_and_dedup(df_current_std, df_proposed_std, cfg.id_col)
     logging.info(f"Final combined rows (after dedup on {cfg.id_col}): {len(df_clean)}")
 
+    # Sort the final output by EPA ID ascending
+    df_clean = df_clean.sort_values(by='EPA ID', ascending=True)
+
+
     # Write output (s3 or local)
     out_path = join_path_and_file(cfg.output_path, cfg.combined_filename)
-    write_df_to_path(df_clean, out_path)
+    try:
+        write_df_to_path(df_clean, out_path)
+    except Exception as e:
+        logging.error(f"Failed to write combined CSV to {out_path}: {e}")
+        return 1
     logging.info(f"Wrote combined CSV to: {out_path}")
     return 0
 

@@ -175,9 +175,13 @@ def main(argv=None) -> int:
 
     # Read inputs
     logging.info(f"Reading raw locations CSV: {raw_locations_path} (skip {cfg.skip_rows} rows)")
-    df_raw_locations = read_csv_s3_or_local(raw_locations_path, cfg.skip_rows)
-    logging.info(f"raw locations CSV rows (after header): {len(df_raw_locations)}")
-
+    try:
+        df_raw_locations = read_csv_s3_or_local(raw_locations_path, cfg.skip_rows)
+        logging.info(f"raw locations CSV rows (after header): {len(df_raw_locations)}")
+    except Exception as e:
+        logging.error(f"Failed to read input CSV at {raw_locations_path}: {e}")
+        return 1
+		
     # Ensure the input contains all required columns
     required_cols = [
         'Region', 'Site Name', 'EPA ID', 'Address 1', 'Address 2',
@@ -231,7 +235,11 @@ def main(argv=None) -> int:
 
     # Write output (s3 or local)
     out_path = join_path_and_file(cfg.output_path, cfg.output_filename)
-    write_df_s3_or_local(df_output, out_path)
+    try:
+        write_df_s3_or_local(df_output, out_path)
+    except Exception as e:
+        logging.error(f"Failed to write output CSV to {out_path}: {e}")
+        return 1
     logging.info(f"Wrote distilled CSV to: {out_path}")
     return 0
 

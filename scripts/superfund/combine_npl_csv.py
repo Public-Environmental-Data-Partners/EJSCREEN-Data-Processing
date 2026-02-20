@@ -74,9 +74,6 @@ class Config:
     # default to the s3 prefix used elsewhere in the project; can be overridden on CLI
     input_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
     output_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/"
-    # Intentionally override real values, change back before committing! These defaults are for local testing only.
-    input_path: str = "./pipeline/test_data/"  # local override for testing; default to S3 for actual use
-    output_path: str = "./pipeline/test_data/"
     current_filename: str = "downloads/superfund_active_currentlyOnNPL_20260213.csv"
     proposed_filename: str = "downloads/superfund_active_proposedForNPL_20260213.csv"
     combined_filename: str = "npl_current_and_proposed.csv"

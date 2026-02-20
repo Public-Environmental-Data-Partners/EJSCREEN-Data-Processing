@@ -295,7 +295,8 @@ def main(argv=None) -> int:
         logging.info(f"All {len(df_merged)} rows in original file have been passed to output file")
 
     # Add CWEIGHT column and set to 1 for all rows
-    df_merged['CWEIGHT'] = 1
+    # Note odd capitalization that matches old Pig script input requirement
+    df_merged['Cweight'] = 1
 
     # Select only the requested output columns in the specified order
     out_cols = [cfg.combined_id_col, cfg.reference_lat_col, cfg.reference_lon_col, 'CWEIGHT']

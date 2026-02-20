@@ -182,6 +182,44 @@ def split_valid_and_invalid_coords(df: pd.DataFrame, lat_col: str, lon_col: str)
     return df_valid, df_invalid
 
 
+def filter_to_us_states(df: pd.DataFrame, state_col: str = 'State') -> pd.DataFrame:
+    """Filter DataFrame to rows whose state codes are in the US set (50 states + DC + PR).
+
+    Logs the number of rejected rows and a sorted list of rejected state codes.
+    Returns the filtered DataFrame (only rows with allowed state codes).
+    """
+    # 50 states + DC + PR
+    VALID_STATES = {
+        'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS',
+        'KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY',
+        'NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV',
+        'WI','WY','DC','PR'
+    }
+
+    if state_col not in df.columns:
+        logging.error(f"State column '{state_col}' not found in DataFrame; cannot filter by state.")
+        return df.copy()
+
+    # Normalize state values to uppercase stripped strings
+    state_vals = df[state_col].astype(str).str.strip().str.upper()
+
+    # Consider missing/empty/'nan' as invalid
+    missing_mask = pd.isna(df[state_col]) | (state_vals == '') | (state_vals == 'NAN')
+
+    # Valid if state code is in VALID_STATES
+    valid_mask = state_vals.isin(VALID_STATES) & (~missing_mask)
+
+    df_valid = df.loc[valid_mask].copy()
+    df_invalid = df.loc[~valid_mask].copy()
+
+    # Gather rejected state codes (exclude blank/'NAN')
+    rejected_codes = sorted({s for s in state_vals.loc[~valid_mask].unique() if s and s != 'NAN'})
+    rejected_count = len(df_invalid)
+    logging.info(f"Rejected {rejected_count} rows outside valid US states (kept only 50 states + DC + PR). Rejected state codes: {rejected_codes}")
+
+    return df_valid
+
+
 # --- Main ----------------------------------------------------------------
 
 def main(argv=None) -> int:
@@ -248,11 +286,16 @@ def main(argv=None) -> int:
     # From here on, work with rows that have valid lat & lon only
     df_merged = df_valid_coords
 
-    # Validation: ensure row count integrity
+    # TODO: select only the records for the 50 US states, DC and PR, based on 2 letter state code
+    # in the State column of the combined NPL file.
+    df_merged = filter_to_us_states(df_merged, state_col='State')
+
+    # Report on the number of rows we have filtered out
     if len(df_merged) != len(df_combined):
-        logging.warning(f"Row count mismatch: input combined rows={len(df_combined)} output rows={len(df_merged)}")
+        logging.info(f"Note {len(df_combined) - len(df_merged)} rows have been filtered out during processing")
+        logging.info(f"Original number rows={len(df_combined)},  output rows={len(df_merged)}")
     else:
-        logging.info(f"Row count check passed: {len(df_merged)} rows in merged df matches input rows")
+        logging.info(f"All {len(df_merged)} rows in original file have been passed to output file")
 
     # Add CWEIGHT column and set to 1 for all rows
     df_merged['CWEIGHT'] = 1
@@ -275,7 +318,7 @@ def main(argv=None) -> int:
     except Exception as e:
         logging.error(f"Failed to write enriched combined file to {out_path}: {e}")
         return 1
-    logging.info(f"Wrote enriched combined file to: {out_path}")
+    logging.info(f"Wrote filtered/enriched file to: {out_path}")
 
     return 0
 

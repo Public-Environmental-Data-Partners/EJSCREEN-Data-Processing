@@ -24,7 +24,8 @@ library(reticulate)
 library(aws.s3)
 library(tidycensus)
 library(tictoc) # <- this package is optional, just for tracking dist functions 
-
+library(ggpubr)
+library(plotly)
 options(scipen = 999)
 
 ## latest weights function 
@@ -65,6 +66,13 @@ prepro_ri_2020 <- st_read(file) %>%
 # quick plot to see what we're cookin' with: 
 # mapview(prepro_ri_2020)
 
+
+# pulling in OG RI numbers from EJScreen: 
+ptraf <- aws.s3::s3read_using(read.csv, 
+                              object = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/ri_bg_ptraf.csv") %>%
+  select(-X) %>%
+  mutate(ID = as.character(ID)) %>%
+  rename(block_group_geoid = ID)
 ###############################################################################
 # Start of step 1 pig script
 ###############################################################################
@@ -183,6 +191,185 @@ dist_pair_df %>%
   filter(GEOID20 == "440030222022026") %>%
   filter(OBJECTID == "1318")
 # my answer: 8213.823, Eric's answer: 8213.822559 - sweet
+
+###############################################################################
+## Test: what if there is no < 500 and > 500m split?
+###############################################################################
+# what if there is no < 500 and > 500m split? 
+test_no_split <- dist_pair_df %>%
+  mutate(dist_pair_num = as.numeric(distance)) %>%
+  # here, assuming distance in km
+  mutate(dist_pair_km = dist_pair_num/1000, 
+         # capping inverse distance to max 10
+         inverse_distance = 1/dist_pair_km, 
+         inverse_distance = case_when(inverse_distance > 10 ~ 10, 
+                                      TRUE ~ inverse_distance)) %>%
+  mutate(score = inverse_distance * aadt) 
+
+# test summarizing all distance pairs without the split
+test_weight_all <- test_no_split %>%
+  # bring in some of the extra information from census blocks 
+  merge(., ri_b_weights, by = c("GEOID20", "block_group_geoid", 
+                                "POP20", "fraction_of_total")) %>%
+  group_by(GEOID20, block_group_geoid, fraction_of_total, POP20, 
+           ALAND20, AWATER20) %>%
+  # maybe the score is a sum?
+  summarize(score_lt = sum(score)) %>%
+  # multiply the score by the block group weight: 
+  mutate(score_wt = score_lt * fraction_of_total) %>%
+  # group by block group geoid and sum the weights: 
+  group_by(block_group_geoid) %>%
+  summarize(weighted_score = sum(score_wt)) 
+
+
+# adding to s3 for comparisons 
+# st_write(test_weight_all_sf, "./outputs/traffic/processing/ri_bg_summary_v5.geojson")
+# put_object(
+#   file = "./outputs/traffic/processing/ri_bg_summary_v5.geojson",
+#   object = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/RI/bg_summary_test_v5.geojson",
+#   multipart = T
+# )
+
+
+## summary stats: 
+# mean difference: 
+mean(test_weight_all_sf$diff_estimate_minus_ptraf, na.rm = T) # 303,963.4
+# mean asolute difference: 
+mean(test_weight_all_sf$abs_diff_estimate_minus_ptraf, na.rm = T) # 411,338
+# mean percent difference: 
+mean(test_weight_all_sf$pct_diff_estimate_praf, na.rm = T) # 16.31886
+
+
+# mapping the output: 
+test_weight_all_sf <- test_weight_all %>%
+  merge(., ri_bg %>% select(GEOID), by.x = "block_group_geoid", 
+        by.y = "GEOID") %>%
+  merge(., ptraf, by.x = "block_group_geoid", by.y = "block_group_geoid") %>%
+  st_as_sf() %>%
+  mutate(diff_estimate_minus_ptraf = weighted_score - PTRAF, 
+         abs_diff_estimate_minus_ptraf = abs(weighted_score - PTRAF), 
+         pct_diff_estimate_praf = 100*(diff_estimate_minus_ptraf) / ((weighted_score + PTRAF)/2),
+         weighted_score_ntile = ntile(weighted_score, 100), 
+         ptraf_ntile = ntile(PTRAF, 100))
+
+# mapping latest weighted scores: 
+mapview(test_weight_all_sf, zcol = "weighted_score") + 
+  mapview(prepro_ri_2020, color = "black", lwd = 1.5)
+
+# mapping weighted scores percentiles: 
+mapview(test_weight_all_sf, zcol = "weighted_score_ntile", 
+        at = c(0, 50, 80, 90, 95, 100)) + 
+  mapview(prepro_ri_2020, color = "black", lwd = 1.5)
+
+# mapping ptraf percentiles: 
+mapview(test_weight_all_sf, zcol = "ptraf_ntile", 
+        at = c(0, 50, 80, 90, 95, 100)) + 
+  mapview(prepro_ri_2020, color = "black", lwd = 1.5)
+
+# mapping percent difference
+mapview(test_weight_all_sf, zcol = "pct_diff_estimate_praf", 
+        col.regions = RColorBrewer::brewer.pal(9, "RdBu")) + 
+  mapview(prepro_ri_2020, color = "black", lwd = 1.5)
+
+# making a plot: 
+test_weight_all_df <- test_weight_all_sf %>%
+  as.data.frame() 
+ggplot(test_weight_all_df, aes(x = PTRAF, y = weighted_score)) + 
+  geom_point() + 
+  geom_abline(intercept = 0, slope = 1, color = "red", lty = "dashed") + 
+  theme_bw() + 
+  labs(x = "EJScreen Traffic Prox Score", y = "Estimated Weighted Score") + 
+  ggtitle("EJScreen Score Test - No 500m Split, sum inverse dist * aadt for 
+          blocks before grouping by block group * pop weight") + 
+  ggpubr::stat_cor(label.y = 10000000) + 
+  ggpubr::stat_regline_equation(label.y = 8500000)
+
+# zooming in on smaller ptraf values: 
+ggplot(test_weight_all_df %>% filter(PTRAF < 4000000), 
+       aes(x = PTRAF, y = weighted_score)) + 
+  geom_point() + 
+  geom_abline(intercept = 0, slope = 1, color = "red", lty = "dashed") + 
+  theme_bw() + 
+  labs(x = "EJScreen Traffic Prox Score", y = "Estimated Weighted Score") + 
+  ggtitle("EJScreen Score Test - No 500m Split, sum inverse dist * aadt for 
+          blocks before grouping by block group * pop weight") 
+
+# zooming in on larger ptraf values: 
+x <- ggplot(test_weight_all_df %>% filter(PTRAF > 4000000), 
+       aes(x = PTRAF, y = weighted_score)) + 
+  geom_point() + 
+  geom_abline(intercept = 0, slope = 1, color = "red", lty = "dashed") + 
+  theme_bw() + 
+  labs(x = "EJScreen Traffic Prox Score", y = "Estimated Weighted Score") + 
+  ggtitle("EJScreen Score Test - No 500m Split, sum inverse dist * aadt for 
+          blocks before grouping by block group * pop weight") 
+plotly::ggplotly(x)
+# seems like we're often off by ~300,000
+
+
+# what does the plot look like if we subtract 300,000 from our estimates?
+ggplot(test_weight_all_df, aes(x = PTRAF, y = weighted_score)) + 
+  geom_point() + 
+  geom_abline(intercept = 0, slope = 1, color = "red", lty = "dashed") + 
+  theme_bw() + 
+  labs(x = "EJScreen Traffic Prox Score", y = "Estimated Weighted Score") + 
+  ggtitle("EJScreen Score Test - No 500m Split, sum inverse dist * aadt for 
+          blocks before grouping by block group * pop weight") + 
+  ggpubr::stat_cor(label.y = 10000000) + 
+  ggpubr::stat_regline_equation(label.y = 8500000)
+# yeah no - we start to get negative traffic estimates.
+
+
+# what is the relationship between block group differences and area?
+test_weight_all_sf_area <- test_weight_all_sf %>%
+  mutate(bg_area = as.numeric(st_area(.)))
+ggplot(test_weight_all_sf_area, aes(x = bg_area,  
+                                    y = pct_diff_estimate_praf)) + 
+  geom_point() + 
+  theme_bw()
+# hm, doesn't really seem like a clear relationship, where % difference increases
+# with increasing block group area
+
+## digging deeper into block group geoids with larger % differeces
+large_pct_diffs <- test_weight_all_sf %>%
+  # this is where we're overestimating
+  filter(pct_diff_estimate_praf > 80)
+mapview(large_pct_diffs)
+
+# what are the block characteristics of these locations? 
+ri_b_large_pct_diffs <- ri_b_weights %>%
+  as.data.frame() %>%
+  filter(block_group_geoid %in% large_pct_diffs$block_group_geoid) %>%
+  mutate(type = "large_diff")
+
+# where are we super close? 
+small_pct_diffs <- test_weight_all_sf %>%
+  filter(pct_diff_estimate_praf < 5 & pct_diff_estimate_praf > -5)
+mapview(small_pct_diffs)
+
+# what are the block characteristics of these locations? 
+ri_b_small_pct_diffs <- ri_b_weights %>%
+  as.data.frame() %>%
+  filter(block_group_geoid %in% small_pct_diffs$block_group_geoid)%>%
+  mutate(type = "small_diff")
+
+# binding the small & big groups together for easier comparisons 
+ri_b_diff_groups <- bind_rows(ri_b_large_pct_diffs, ri_b_small_pct_diffs) %>%
+  select(GEOID20, block_group_geoid, type, ALAND20, AWATER20, HOUSING20, 
+         fraction_of_total, POP20, block_group_pop) %>%
+  pivot_longer(., cols = ALAND20:block_group_pop)
+
+ggplot(ri_b_diff_groups, aes(x = name, y = value, color = type, 
+                             fill = type)) + 
+  geom_violin(alpha = 0.5) + 
+  facet_wrap(~name, scales = "free") +
+  theme_bw()
+
+
+
+###############################################################################
+# !!! EVERYTHING BELOW THIS LINE CONTAINS CODE FROM OTHER OPTIONS I TRIED !!!
+###############################################################################
 
 ###############################################################################
 # Split < 500 and > 500 distance pairs, and multiply inverse distance by
@@ -537,72 +724,3 @@ scores_filt %>%
   summarize(weighted_score = sum(score_wt)) %>%
   mutate(diff = blockgroup_score - weighted_score)
 
-###############################################################################
-## what if there is no < 500 and > 500m split 
-###############################################################################
-# pulling in OG RI numbers from EJScreen: 
-ptraf <- aws.s3::s3read_using(read.csv, 
-                              object = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/ri_bg_ptraf.csv") %>%
-  select(-X) %>%
-  mutate(ID = as.character(ID)) %>%
-  rename(block_group_geoid = ID)
-
-# what if there is no < 500 and > 500m split? 
-test_no_split <- dist_pair_df %>%
-  mutate(dist_pair_num = as.numeric(distance)) %>%
-  # here, assuming distance in km
-  mutate(dist_pair_km = dist_pair_num/1000, 
-         # capping inverse distance to max 10
-         inverse_distance = 1/dist_pair_km, 
-         inverse_distance = case_when(inverse_distance > 10 ~ 10, 
-                                      TRUE ~ inverse_distance)) %>%
-  mutate(score = inverse_distance * aadt) 
-
-# test summarizing all distance pairs without the split
-test_weight_all <- test_no_split %>%
-  # bring in some of the extra information from census blocks 
-  merge(., ri_b_weights, by = c("GEOID20", "block_group_geoid", 
-                                "POP20", "fraction_of_total")) %>%
-  group_by(GEOID20, block_group_geoid, fraction_of_total, POP20, 
-           ALAND20, AWATER20) %>%
-  # this is a sum!!! 
-  summarize(score_lt = sum(score)) %>%
-  mutate(score_wt = score_lt * fraction_of_total) %>%
-  group_by(block_group_geoid) %>%
-  summarize(weighted_score = sum(score_wt)) 
-
-# mapping: 
-test_weight_all_sf <- test_weight_all %>%
-  merge(., ri_bg %>% select(GEOID), by.x = "block_group_geoid", 
-        by.y = "GEOID") %>%
-  merge(., ptraf, by.x = "block_group_geoid", by.y = "block_group_geoid") %>%
-  st_as_sf() %>%
-  mutate(diff_estimate_minus_ptraf = weighted_score - PTRAF, 
-         abs_diff_estimate_minus_ptraf = abs(weighted_score - PTRAF))
-
-mapview(test_weight_all_sf, zcol = "diff_estimate_minus_ptraf", 
-        col.regions = RColorBrewer::brewer.pal(9, "RdBu")) + 
-  mapview(prepro_ri_2020, color = "black", lwd = 1.5)
-
-test_weight_all_df <- test_weight_all_sf %>%
-  as.data.frame() 
-ggplot(test_weight_all_df, aes(x = PTRAF, y = weighted_score)) + 
-  geom_point() + 
-  geom_abline(intercept = 0, slope = 1, color = "red", lty = "dashed") + 
-  theme_bw() + 
-  labs(x = "EJScreen Traffic Prox Score", y = "Estimated Weighted Score") + 
-  ggtitle("EJScreen Score Test - No 500m Split, sum inverse dist * aadt for blocks before grouping by block group * pop weight")
-  
-# adding to s3 for comparisons 
-# st_write(test_weight_all_sf, "./outputs/traffic/processing/ri_bg_summary_v5.geojson")
-# put_object(
-#   file = "./outputs/traffic/processing/ri_bg_summary_v5.geojson",
-#   object = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/RI/bg_summary_test_v5.geojson",
-#   multipart = T
-# )
-
-# making sure results are identical - woo! 
-# test <- aws.s3::s3read_using(st_read, 
-#                              object = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/RI/bg_summary_test_v5.geojson")
-# head(test)
-# head(test_weight_all_df)

@@ -152,6 +152,20 @@ def write_df_s3_or_local(df: pd.DataFrame, out_path: str) -> None:
 # Put your content-specific processing functions here.
 
 
+def get_state_list(state_input) -> list:
+    """Normalize a space-or-comma-separated state list or a list into a list of 2-letter codes."""
+    if isinstance(state_input, list):
+        raw = state_input
+    elif isinstance(state_input, str):
+        # allow comma or space separated
+        raw = state_input.replace(',', ' ').split()
+    else:
+        return []
+    # normalize to upper-case two-letter codes
+    states = [s.strip().upper() for s in raw if isinstance(s, str) and s.strip()]
+    return states
+
+
 
 # --- Main ----------------------------------------------------------------
 
@@ -172,18 +186,21 @@ def main(argv=None) -> int:
     logging.info(f"NPL locations rows (after header): {len(df_input)}")
     logging.info(f"NPL locations headers (first 5 of {df_input.shape[1]}): {df_input.columns[:5].tolist()}")
 
-    # Assemble the per-state block-weights filename for MT and read it
-    blocks_filename = f"{cfg.census_blocks_weights_base}_MT.csv"
-    blocks_path = join_path_and_file(cfg.input_path, blocks_filename)
+    # Build the list of states to process and iterate per-state block weights
+    state_list = get_state_list(cfg.state_list)
 
-    logging.info(f"Block weights CSV: {blocks_path}")
-    try:
-        df_blocks = read_csv_s3_or_local(blocks_path, cfg.skip_rows)
-    except Exception as e:
-        logging.error(f"Failed to read block weights CSV at {blocks_path}: {e}")
-        return 1
-    logging.info(f"Block weights rows (after header): {len(df_blocks)}")
-    logging.info(f"Block weights headers (first 5 of {df_blocks.shape[1]}): {df_blocks.columns[:5].tolist()}")
+    for state in state_list:
+        blocks_filename = f"{cfg.census_blocks_weights_base}_{state}.csv"
+        blocks_path = join_path_and_file(cfg.input_path, blocks_filename)
+
+        logging.info(f"Block weights CSV: {blocks_path}")
+        try:
+            df_blocks = read_csv_s3_or_local(blocks_path, cfg.skip_rows)
+        except Exception as e:
+            logging.error(f"Failed to read block weights CSV at {blocks_path}: {e}")
+            return 1
+        logging.info(f"Block weights rows (after header) for {state}: {len(df_blocks)}")
+        logging.info(f"Block weights headers (first 5 of {df_blocks.shape[1]}) for {state}: {df_blocks.columns[:5].tolist()}")
 
     # TODO: Add processing code here.
     return

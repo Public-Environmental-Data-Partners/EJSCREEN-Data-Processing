@@ -43,7 +43,7 @@ class Config:
     npl_locations_file: str = "/superfund_npl/pipeline/npl_sites_with_coords.csv"
     census_blocks_weights_base: str = "/census_tables/census_block_weights_2020"  # we'll add suffixes for different states
     output_filename: str = "template_output.csv"
-    state_list: str = "MT VT" # defaulting to very small list of states for now
+    state_list: str = "MT" # defaulting to very! small list of states for now
     # a lot of scripts won't use the preamble-skipping feature, but it is handy
     # to have the option when you need it.
     skip_rows: int = 0  # very input specific; your value would likely be 0
@@ -190,6 +190,13 @@ def main(argv=None) -> int:
     state_list = get_state_list(cfg.state_list)
 
     for state in state_list:
+        # Require `EPA ID` column to be present and filter NPL locations to this state
+        if 'EPA ID' not in df_input.columns:
+            logging.error("Required column 'EPA ID' not found in NPL locations CSV for state {state}, skipping this state.")
+            continue  # try the next state
+        df_state = df_input[df_input['EPA ID'].astype(str).str[:2].str.upper() == state]
+        logging.info(f"NPL locations rows for {state}: {len(df_state)}")
+
         blocks_filename = f"{cfg.census_blocks_weights_base}_{state}.csv"
         blocks_path = join_path_and_file(cfg.input_path, blocks_filename)
 

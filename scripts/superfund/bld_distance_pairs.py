@@ -21,6 +21,9 @@ import io
 
 # Third-party
 import pandas as pd
+import numpy as np
+import geopandas as gpd
+from shapely.geometry import Point
 from dotenv import load_dotenv
 from pyarrow import input_stream
 
@@ -42,7 +45,8 @@ class Config:
     output_path: str = "./pipeline/test_data/"
     npl_locations_file: str = "/superfund_npl/pipeline/npl_sites_with_coords.csv"
     census_blocks_weights_base: str = "/census_tables/census_block_weights_2020"  # we'll add suffixes for different states
-    output_filename: str = "template_output.csv"
+    short_pairs_filename: str = "pairs_le5000.csv"
+    long_pairs_filename: str = "pairs_gt5000.csv"
     state_list: str = "MT" # defaulting to very! small list of states for now
     # a lot of scripts won't use the preamble-skipping feature, but it is handy
     # to have the option when you need it.
@@ -63,13 +67,13 @@ def get_config(argv=None) -> Config:
                         help=f'Folder to write the output CSV (default: {Config.output_path})')
     parser.add_argument('--npl-locations', dest='npl_locations_file', default=Config.npl_locations_file,
                         help=f'Input NPL locations CSV filename (default: {Config.npl_locations_file})')
-    parser.add_argument('--output-filename', dest='output_filename', default=Config.output_filename,
-                        help=f'Output combined CSV filename (default: {Config.output_filename})')
     parser.add_argument('--census-block-weights-base', dest='census_blocks_weights_base',
                         default=Config.census_blocks_weights_base,
                         help=f'Base filename/prefix for per-state census block weights (default: {Config.census_blocks_weights_base})')
     parser.add_argument('--state-list', dest='state_list', nargs='+', default=Config.state_list,
                         help=f'Space-separated list of 2-letter state abbreviations to process (default: {Config.state_list})')
+    parser.add_argument('--short-pairs-filename', dest='short_pairs_filename', default=Config.short_pairs_filename,
+                        help=f'Filename for aggregated <=5000m pairs CSV (default: {Config.short_pairs_filename})')
     # Note, no skip-rows or join-key arguments here.
     # They should generally be hard-coded, not changeable at runtime.
 
@@ -79,8 +83,8 @@ def get_config(argv=None) -> Config:
         output_path=args.output_path,
         npl_locations_file=args.npl_locations_file,
         census_blocks_weights_base=args.census_blocks_weights_base,
-        output_filename=args.output_filename,
         state_list=args.state_list,
+        short_pairs_filename=args.short_pairs_filename,
     )
 
 
@@ -166,6 +170,165 @@ def get_state_list(state_input) -> list:
     return states
 
 
+# --- GIS processing helpers ----------------------------------------------
+def prepare_gdfs(df_state: pd.DataFrame, df_blocks: pd.DataFrame):
+    """Prepare GeoDataFrames for NPL sites and block centroids in EPSG:5070.
+
+    Expects:
+      - df_state to have columns: 'EPA ID', 'Latitude', 'Longitude', 'Cweight'
+      - df_blocks to have columns: 'id', 'lat', 'lng'
+    """
+    # verify required columns
+    req_npl = {'EPA ID', 'Latitude', 'Longitude'}
+    # df_blocks commonly comes with Census column names: GEOID20, INTPTLAT20, INTPTLON20
+    # map those into the internal names we expect ('id','lat','lng')
+    blocks_col_map = {'GEOID20': 'id', 'INTPTLAT20': 'lat', 'INTPTLON20': 'lng'}
+
+    if not req_npl.issubset(df_state.columns):
+        logging.error("df_state missing required columns: %s", req_npl - set(df_state.columns))
+        return None, None
+
+    # Accept either the canonical ('id','lat','lng') or the Census variants; normalize to canonical
+    if set(blocks_col_map.keys()).issubset(df_blocks.columns):
+        df_blocks = df_blocks.rename(columns=blocks_col_map)
+    elif not {'id', 'lat', 'lng'}.issubset(df_blocks.columns):
+        missing = ({'id', 'lat', 'lng'} - set(df_blocks.columns))
+        logging.error("df_blocks missing required columns (expected one of GEOID20/INTPTLAT20/INTPTLON20 or id/lat/lng): %s", missing)
+        return None, None
+
+    # build GeoDataFrames in WGS84 then project to EPSG:5070 (meters)
+    gdf_npl = gpd.GeoDataFrame(
+        df_state.copy(),
+        geometry=gpd.points_from_xy(df_state['Longitude'], df_state['Latitude']),
+        crs='EPSG:4326'
+    ).to_crs(epsg=5070)
+
+    gdf_blocks = gpd.GeoDataFrame(
+        df_blocks.copy(),
+        geometry=gpd.points_from_xy(df_blocks['lng'], df_blocks['lat']),
+        crs='EPSG:4326'
+    ).to_crs(epsg=5070)
+
+    # add projected X/Y for fast numeric distance calculations
+    gdf_npl['nx'] = gdf_npl.geometry.x
+    gdf_npl['ny'] = gdf_npl.geometry.y
+    gdf_blocks['bx'] = gdf_blocks.geometry.x
+    gdf_blocks['by'] = gdf_blocks.geometry.y
+
+    return gdf_npl, gdf_blocks
+
+
+def find_pairs_within(gdf_npl: gpd.GeoDataFrame, gdf_blocks: gpd.GeoDataFrame, radius_m: float = 5000.0) -> pd.DataFrame:
+    """Find all block-NPL pairs where distance <= radius_m (meters).
+
+    Returns a pandas.DataFrame with columns from both inputs and a `distance_m` column.
+    This function uses a vectorized spatial join via buffered geometries to avoid Python loops.
+    """
+    if gdf_npl is None or gdf_blocks is None:
+        return pd.DataFrame()
+
+    # create buffer geometry around blocks for join; keep bx/by for numeric distance
+    blocks_buf = gdf_blocks.copy()
+    blocks_buf['geometry_buffer'] = blocks_buf.geometry.buffer(radius_m)
+    blocks_for_join = blocks_buf.set_geometry('geometry_buffer')
+
+    # spatial join: blocks (left) intersects NPL (right)
+    joined = gpd.sjoin(blocks_for_join, gdf_npl, how='inner', predicate='intersects')
+    if joined.empty:
+        return pd.DataFrame()
+
+    # joined contains block columns (including bx,by) and npl columns (including nx,ny)
+    # compute Euclidean distance in projected meters
+    joined['distance_m'] = np.hypot(joined['bx'] - joined['nx'], joined['by'] - joined['ny'])
+
+    # keep only pairs truly within radius (defensive)
+    pairs = joined[joined['distance_m'] <= radius_m].copy()
+
+    # select and normalize output columns
+    # Start with all original block columns (preserve their order), then add NPL columns, then distance
+    block_cols = [c for c in gdf_blocks.columns if c not in ('geometry', 'bx', 'by')]
+    # Keep only those block columns that actually exist in the joined pairs
+    block_cols = [c for c in block_cols if c in pairs.columns]
+
+    npl_cols = []
+    for c in ('EPA ID', 'Latitude', 'Longitude', 'Cweight'):
+        if c in pairs.columns:
+            npl_cols.append(c)
+
+    out_cols = npl_cols + ['distance_m'] + block_cols
+    # final defensive filter to include only columns present
+    out_cols = [c for c in out_cols if c in pairs.columns]
+    return pairs[out_cols]
+
+
+def write_pairs_csv(df_pairs: pd.DataFrame, cfg, state: str):
+    """Write pairs DataFrame to CSV for the given state using existing writer helper."""
+    if df_pairs is None or df_pairs.empty:
+        logging.info("No pairs to write for %s", state)
+        return
+    filename = f"{state}_pairs_le5000.csv"
+    out_path = join_path_and_file(cfg.output_path, filename)
+    # ensure coordinate precision: format float columns to 6 decimals
+    # Pandas to_csv will handle numeric formatting via float_format
+    try:
+        # use the helper to write; helper expects a DataFrame
+        write_df_s3_or_local(df_pairs, out_path)
+        logging.info("Wrote <=5000m pairs for %s to %s (rows=%d)", state, out_path, len(df_pairs))
+    except Exception as e:
+        logging.error("Failed to write pairs CSV for %s: %s", state, e)
+
+def applyWeighting(aland20, awater20, distance, totpop20, fraction_of_total):
+    """Stub for weighting logic.
+
+    Replace the body of this function with the real weighting algorithm.
+    For now it returns 0.0 as a placeholder.
+    """
+    inv_distance
+    weighted_score = 0.0
+    if totpop20 > 0:
+        # guard against division by zero
+        if distance > 0:
+            inv_distance = 1.0 / distance
+            weighted_score = totpop20 * fraction_of_total * inv_distance
+        # else we return 0 for both inv_distance and weighted_score
+    return inv_distance, weighted_score
+
+
+def generate_weighted_scores(df_pairs: pd.DataFrame) -> pd.DataFrame:
+    """Add a `weighted_score` column to `df_pairs` by applying `applyWeighting`.
+
+    This function defensively checks for required input columns and iterates
+    through rows, calling `applyWeighting(aland20, awater20, distance, totpop20, fraction_of_total)`.
+    """
+    if df_pairs is None or df_pairs.empty:
+        return df_pairs
+    # require specific input columns including the standardized distance column 'distance_m'
+    required = ['aland20', 'awater20', 'distance_m', 'totpop20', 'fraction_of_total']
+    missing = [c for c in required if c not in df_pairs.columns]
+    if missing:
+        logging.warning("generate_weighted_scores: missing columns %s; skipping weight computation", missing)
+        return df_pairs
+
+    def _row_weight(row):
+        # call applyWeighting and return whatever it returns (expected: (inv_distance, weighted_score))
+        return applyWeighting(
+            row['aland20'],
+            row['awater20'],
+            row['distance_m'],
+            row['totpop20'],
+            row['fraction_of_total']
+        )
+
+    df_out = df_pairs.copy()
+
+    # apply and expand into two columns
+    weights = df_out.apply(_row_weight, axis=1, result_type='expand')
+    weights.columns = ['inv_distance', 'weighted_score']
+    df_out = pd.concat([df_out.reset_index(drop=True), weights.reset_index(drop=True)], axis=1)
+
+    return df_out
+
+
 
 # --- Main ----------------------------------------------------------------
 
@@ -179,22 +342,29 @@ def main(argv=None) -> int:
     # Read raw locations input
     logging.info(f"NPL locations CSV: {npl_locations_path}")
     try:
-        df_input = read_csv_s3_or_local(npl_locations_path, cfg.skip_rows)
+        df_npl_locations = read_csv_s3_or_local(npl_locations_path, cfg.skip_rows)
     except Exception as e:
         logging.error(f"Failed to read raw locations CSV at {npl_locations_path}: {e}")
         return 1
-    logging.info(f"NPL locations rows (after header): {len(df_input)}")
-    logging.info(f"NPL locations headers (first 5 of {df_input.shape[1]}): {df_input.columns[:5].tolist()}")
+    logging.info(f"NPL locations rows (after header): {len(df_npl_locations)}")
+    logging.info(f"NPL locations headers (first 5 of {df_npl_locations.shape[1]}): {df_npl_locations.columns[:5].tolist()}")
+    # Require `EPA ID` column to be present
+    if 'EPA ID' not in df_npl_locations.columns:
+        logging.error("Required column 'EPA ID' not found in NPL locations CSV, cannot proceed.")
+        return 1
 
     # Build the list of states to process and iterate per-state block weights
+    # SERIOUS TODO: this by-state logic is backwards. We have to process multiple
+    # states worth of blocks to make sure we get cross-border pairs.
+    # However, going with this for now to see if we can get numbers right for
+    # non-border sites.
     state_list = get_state_list(cfg.state_list)
 
+    # accumulate per-state pairs for a single aggregated output
+    pairs_accum = []
     for state in state_list:
-        # Require `EPA ID` column to be present and filter NPL locations to this state
-        if 'EPA ID' not in df_input.columns:
-            logging.error("Required column 'EPA ID' not found in NPL locations CSV for state {state}, skipping this state.")
-            continue  # try the next state
-        df_state = df_input[df_input['EPA ID'].astype(str).str[:2].str.upper() == state]
+        # filter NPL locations to this state only
+        df_state = df_npl_locations[df_npl_locations['EPA ID'].astype(str).str[:2].str.upper() == state]
         logging.info(f"NPL locations rows for {state}: {len(df_state)}")
 
         blocks_filename = f"{cfg.census_blocks_weights_base}_{state}.csv"
@@ -209,17 +379,39 @@ def main(argv=None) -> int:
         logging.info(f"Block weights rows (after header) for {state}: {len(df_blocks)}")
         logging.info(f"Block weights headers (first 5 of {df_blocks.shape[1]}) for {state}: {df_blocks.columns[:5].tolist()}")
 
-    # TODO: Add processing code here.
-    return
+        # --- GIS processing for this state: find pairs <= 5000m ------------
+        # Prepare GeoDataFrames (projects to EPSG:5070)
+        gdf_npl, gdf_blocks = prepare_gdfs(df_state, df_blocks)
+        if gdf_npl is None or gdf_blocks is None:
+            logging.error("Failed to prepare GeoDataFrames for %s, skipping state.", state)
+            continue
 
-    # Write output (s3 or local)
-    out_path = join_path_and_file(cfg.output_path, cfg.output_filename)
-    try:
-        write_df_s3_or_local(df_output, out_path)
-    except Exception as e:
-        logging.error(f"Failed to write output CSV to {out_path}: {e}")
-        return 1
-    logging.info(f"Wrote output CSV to: {out_path}")
+        # Find all pairs within 5000 meters
+        df_pairs = find_pairs_within(gdf_npl, gdf_blocks, radius_m=5000.0)
+
+        df_pairs = generate_weighted_scores(df_pairs)
+
+        # Accumulate pairs for aggregated output
+        if df_pairs is not None and not df_pairs.empty:
+            pairs_accum.append(df_pairs)
+
+        # TODO: Handle pairs > 5000m (gt5000) and the 'hole' rule (ensure each block appears in one group or another).
+
+    # End per-state loop
+
+    # Concatenate accumulated pairs and write single aggregated file
+    if pairs_accum:
+        df_all_pairs = pd.concat(pairs_accum, ignore_index=True)
+        out_path = join_path_and_file(cfg.output_path, cfg.short_pairs_filename)
+        try:
+            write_df_s3_or_local(df_all_pairs, out_path)
+            logging.info("Wrote aggregated <=5000m pairs to: %s (rows=%d)", out_path, len(df_all_pairs))
+        except Exception as e:
+            logging.error(f"Failed to write aggregated pairs CSV to {out_path}: {e}")
+            return 1
+    else:
+        logging.info("No <=5000m pairs found for any state; no aggregated file written.")
+
     return 0
 
 

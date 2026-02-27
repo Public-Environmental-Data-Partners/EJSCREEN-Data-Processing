@@ -153,7 +153,31 @@ def write_df_s3_or_local(df: pd.DataFrame, out_path: str) -> None:
     return
 
 # --- Worker functions ----------------------------------------------------
-# Put your content-specific processing functions here.
+
+def normalize_census_columns(df):
+    # Detect which year suffix is present (10 or 20)
+    # We look for a unique indicator like 'POP'
+    suffix = ""
+    if any("20" in col for col in df.columns if "POP" in col):
+        suffix = "20"
+    elif any("10" in col for col in df.columns if "POP" in col):
+        suffix = "10"
+    else:
+        # raise an error if expected columns aren't found
+        raise ValueError("Could not detect Census year suffix in columns. Expected columns like 'POP10' or 'POP20' not found.")
+        return df  # defensive return; in practice we would likely want to fail hard here
+    
+    # Map versioned names to normalized names
+    rename_map = {
+        f"GEOID{suffix}":  "block_geoid",
+        f"INTPTLAT{suffix}": "block_lat",
+        f"INTPTLON{suffix}": "block_lon",
+        f"POP{suffix}":    "block_pop",
+        f"ALAND{suffix}":  "block_aland",
+        f"AWATER{suffix}": "block_awater",
+    }
+    
+    return df.rename(columns=rename_map)
 
 
 def get_state_list(state_input) -> list:
@@ -180,20 +204,15 @@ def prepare_gdfs(df_state: pd.DataFrame, df_blocks: pd.DataFrame):
     """
     # verify required columns
     req_npl = {'EPA ID', 'Latitude', 'Longitude'}
-    # df_blocks commonly comes with Census column names: GEOID20, INTPTLAT20, INTPTLON20
-    # map those into the internal names we expect ('id','lat','lng')
-    blocks_col_map = {'GEOID20': 'id', 'INTPTLAT20': 'lat', 'INTPTLON20': 'lng'}
-
     if not req_npl.issubset(df_state.columns):
         logging.error("df_state missing required columns: %s", req_npl - set(df_state.columns))
         return None, None
 
-    # Accept either the canonical ('id','lat','lng') or the Census variants; normalize to canonical
-    if set(blocks_col_map.keys()).issubset(df_blocks.columns):
-        df_blocks = df_blocks.rename(columns=blocks_col_map)
-    elif not {'id', 'lat', 'lng'}.issubset(df_blocks.columns):
-        missing = ({'id', 'lat', 'lng'} - set(df_blocks.columns))
-        logging.error("df_blocks missing required columns (expected one of GEOID20/INTPTLAT20/INTPTLON20 or id/lat/lng): %s", missing)
+    # Expect normalized census column names (normalize_census_columns should be called earlier)
+    required_block_cols = {'block_geoid', 'block_lat', 'block_lon'}
+    if not required_block_cols.issubset(df_blocks.columns):
+        missing = required_block_cols - set(df_blocks.columns)
+        logging.error("df_blocks missing required normalized columns: %s", missing)
         return None, None
 
     # build GeoDataFrames in WGS84 then project to EPSG:5070 (meters)
@@ -205,7 +224,7 @@ def prepare_gdfs(df_state: pd.DataFrame, df_blocks: pd.DataFrame):
 
     gdf_blocks = gpd.GeoDataFrame(
         df_blocks.copy(),
-        geometry=gpd.points_from_xy(df_blocks['lng'], df_blocks['lat']),
+        geometry=gpd.points_from_xy(df_blocks['block_lon'], df_blocks['block_lat']),
         crs='EPSG:4326'
     ).to_crs(epsg=5070)
 
@@ -277,20 +296,18 @@ def write_pairs_csv(df_pairs: pd.DataFrame, cfg, state: str):
     except Exception as e:
         logging.error("Failed to write pairs CSV for %s: %s", state, e)
 
-def applyWeighting(aland20, awater20, distance, totpop20, fraction_of_total):
-    """Stub for weighting logic.
+def applyWeighting(block_aland, block_awater, distance_m, block_pop, fraction_of_total):
+    # This code is really just a swag since we don't have the original SAIC code to work from.
+    # But we do have a sense of what this code should do, so let's giv'er a co.
+    inv_distance = 1.0  # mathematicallly, this doesn't make much sense but we simply need some value to return if distance is zero
+    # guard against division by zero
+    if distance_m > 0:
+        inv_distance = 1.0 / distance_m
 
-    Replace the body of this function with the real weighting algorithm.
-    For now it returns 0.0 as a placeholder.
-    """
-    inv_distance
     weighted_score = 0.0
-    if totpop20 > 0:
-        # guard against division by zero
-        if distance > 0:
-            inv_distance = 1.0 / distance
-            weighted_score = totpop20 * fraction_of_total * inv_distance
-        # else we return 0 for both inv_distance and weighted_score
+    if block_pop > 0:
+        weighted_score = block_pop * fraction_of_total * inv_distance
+
     return inv_distance, weighted_score
 
 
@@ -303,7 +320,7 @@ def generate_weighted_scores(df_pairs: pd.DataFrame) -> pd.DataFrame:
     if df_pairs is None or df_pairs.empty:
         return df_pairs
     # require specific input columns including the standardized distance column 'distance_m'
-    required = ['aland20', 'awater20', 'distance_m', 'totpop20', 'fraction_of_total']
+    required = ['block_aland', 'block_awater', 'distance_m', 'block_pop', 'fraction_of_total']
     missing = [c for c in required if c not in df_pairs.columns]
     if missing:
         logging.warning("generate_weighted_scores: missing columns %s; skipping weight computation", missing)
@@ -312,10 +329,10 @@ def generate_weighted_scores(df_pairs: pd.DataFrame) -> pd.DataFrame:
     def _row_weight(row):
         # call applyWeighting and return whatever it returns (expected: (inv_distance, weighted_score))
         return applyWeighting(
-            row['aland20'],
-            row['awater20'],
+            row['block_aland'],
+            row['block_awater'],
             row['distance_m'],
-            row['totpop20'],
+            row['block_pop'],
             row['fraction_of_total']
         )
 
@@ -376,6 +393,12 @@ def main(argv=None) -> int:
         except Exception as e:
             logging.error(f"Failed to read block weights CSV at {blocks_path}: {e}")
             return 1
+        # Normalize census-year-specific column names to year-agnostic descriptive names
+        try:
+            df_blocks = normalize_census_columns(df_blocks)
+        except Exception as e:
+            logging.error("Failed to normalize census columns for %s: %s", state, e)
+            continue
         logging.info(f"Block weights rows (after header) for {state}: {len(df_blocks)}")
         logging.info(f"Block weights headers (first 5 of {df_blocks.shape[1]}) for {state}: {df_blocks.columns[:5].tolist()}")
 

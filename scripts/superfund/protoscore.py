@@ -20,6 +20,7 @@ from pathlib import Path
 import geopandas as gpd
 import fiona
 import pandas as pd
+import re
 
 # --- Global file path variables (fill these before running) -----------------
 # Input sources
@@ -74,6 +75,20 @@ def normalize_census_columns(df):
     return df.rename(columns=rename_map)
 
 
+def normalize_epa_id(val: object) -> str:
+    """Normalize EPA ID-like values for safe comparisons.
+
+    - convert to str, strip whitespace
+    - remove trailing decimal ".0" sequences
+    - lowercase for case-insensitive matching
+    """
+    if pd.isna(val):
+        return ""
+    s = str(val).strip()
+    s = re.sub(r'\.0+$', '', s)
+    return s.lower()
+
+
 def step1_buffer_and_targeted_bgs(buffer_meters: float = 10000.0):
     """Step 1: Buffer NPL polygons and find intersecting Block Groups.
 
@@ -86,7 +101,7 @@ def step1_buffer_and_targeted_bgs(buffer_meters: float = 10000.0):
     """
     _validate_paths()
 
-    logging.info("Step1: reading NPL geodatabase: %s", NPL_GDB_PATH)
+    logging.info("#### Starting Step1: reading NPL geodatabase: %s", NPL_GDB_PATH)
     layers = fiona.listlayers(NPL_GDB_PATH)
     if not layers:
         raise RuntimeError(f"No layers found in NPL GDB: {NPL_GDB_PATH}")
@@ -153,6 +168,8 @@ def step1_buffer_and_targeted_bgs(buffer_meters: float = 10000.0):
 
     targeted = joined[[geoid_col, epa_col]].drop_duplicates().copy()
     targeted = targeted.rename(columns={geoid_col: 'GEOID_BG', epa_col: 'EPA_ID'})
+    # Normalize EPA IDs to a canonical form so downstream matching is consistent
+    targeted['EPA_ID'] = targeted['EPA_ID'].astype(str).apply(normalize_epa_id)
 
     out_path = Path(OUTPUT_DIR) / TARGETED_BG_CSV
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,12 +194,19 @@ def step2_block_site_distances(targeted_df: pd.DataFrame = None, npl_layer: str 
     """
     _validate_paths()
 
+    logging.info("##############################################################")
+    logging.info("#### Starting Step2: computing block-site distances")
+
     # Load targeted pairs if not provided
     if targeted_df is None:
         tgt_path = Path(OUTPUT_DIR) / TARGETED_BG_CSV
         if not tgt_path.exists():
             raise RuntimeError(f"Targeted BG CSV not found at {tgt_path}; run step1 first or provide targeted_df")
         targeted_df = pd.read_csv(tgt_path, dtype=str)
+    # Normalize targeted EPA IDs (ensure consistent format)
+    targeted_df['EPA_ID'] = targeted_df['EPA_ID'].astype(str).apply(normalize_epa_id)
+    # Prepare a set of targeted EPA IDs (kept for reference)
+    t_ids = set(targeted_df['EPA_ID'].unique())
 
     # Read block centroids (CSV or shapefile)
     blk_path = Path(BLOCKS_SHAPE_OR_CSV)
@@ -244,28 +268,44 @@ def step2_block_site_distances(targeted_df: pd.DataFrame = None, npl_layer: str 
     # detect which column in npl_gdf corresponds to EPA IDs listed in targeted_df
     tgt_epa_vals = set(targeted_df['EPA_ID'].astype(str).unique())
     epa_col = None
+    # Try to detect which NPL column contains the same kinds of IDs by
+    # normalizing values from each candidate column and checking intersection
     for c in npl_gdf.columns:
-        # cast column to string and test intersection with target ids (sampled for speed)
         try:
-            vals = set(npl_gdf[c].astype(str).head(500).unique())
+            sample_vals = npl_gdf[c].astype(str).head(500).apply(normalize_epa_id).unique()
+            vals = set(sample_vals)
         except Exception:
             continue
         if vals & set(list(tgt_epa_vals)[:500]):
             epa_col = c
             break
     if epa_col is None:
-        # fallback: pick a column with 'EPA' or 'SITE' in the name
-        for c in npl_gdf.columns:
-            if 'epa' in c.lower() or 'site' in c.lower():
-                epa_col = c
-                break
+        # fallback: prefer explicit EPA ID-like columns first, then broader matches
+        candidates_exact = ['EPA_ID', 'EPA ID', 'EPAID', 'SITE_ID', 'SITEID']
+        epa_col = next((c for c in npl_gdf.columns if c.upper() in [e.upper() for e in candidates_exact]), None)
+        if epa_col is None:
+            # prefer columns containing 'epa_id' or both 'epa' and 'id' in the name
+            for c in npl_gdf.columns:
+                low = c.lower()
+                if 'epa_id' in low or ('epa' in low and 'id' in low):
+                    epa_col = c
+                    break
+        if epa_col is None:
+            # last resort: any column with 'epa' or 'site' in the name
+            for c in npl_gdf.columns:
+                low = c.lower()
+                if 'epa' in low or 'site' in low:
+                    epa_col = c
+                    break
     if epa_col is None:
         raise RuntimeError('Could not identify EPA ID column in NPL data')
     logging.info('Using NPL EPA ID column: %s', epa_col)
 
-    # Build a mapping from EPA_ID -> polygon geometry
-    npl_gdf['EPA_ID_STR'] = npl_gdf[epa_col].astype(str)
+    # Normalize function for EPA IDs (remove trailing .0, strip, lowercase)
+    # Build a mapping from normalized EPA_ID -> polygon geometry
+    npl_gdf['EPA_ID_STR'] = npl_gdf[epa_col].astype(str).apply(normalize_epa_id)
     npl_map = {row['EPA_ID_STR']: row.geometry for _, row in npl_gdf.iterrows()}
+    logging.info('NPL EPA keys (normalized): %d', len(npl_map))
 
     # For each targeted pair (BG, EPA_ID), compute distances for all blocks in that BG
     records = []
@@ -284,9 +324,12 @@ def step2_block_site_distances(targeted_df: pd.DataFrame = None, npl_layer: str 
         if bg not in blocks_by_bg:
             continue
         blocks = blocks_by_bg[bg]
-        poly = npl_map.get(epa)
+        # normalize targeted EPA ID to match NPL keys
+        epa_norm = normalize_epa_id(epa)
+        poly = npl_map.get(epa_norm)
         if poly is None:
-            logging.warning('EPA ID %s not found in NPL polygons; skipping', epa)
+            if ids_not_found < 5:  # limit logging to first 5 missing IDs
+                logging.warning('EPA ID %s (normalized %s) not found in NPL polygons; skipping', epa, epa_norm)
             ids_not_found += 1
             continue
         ids_found += 1

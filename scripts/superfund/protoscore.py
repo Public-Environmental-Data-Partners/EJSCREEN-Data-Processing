@@ -307,12 +307,60 @@ def step2_block_site_distances(targeted_df: pd.DataFrame = None, npl_layer: str 
     logging.info('Step2 summary: rows_processed=%d, ids_found=%d, ids_not_found=%d', rows_processed, ids_found, ids_not_found)
 
     df_out = pd.DataFrame.from_records(records)
-    out_path = Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    logging.info('Writing block-site distances to %s (rows=%d) [distance in meters]', out_path, len(df_out))
-    df_out.to_csv(out_path, index=False)
-
+    # NOTE: do not write distances here — postpone until Step 3 where
+    # proximity scores will be computed and the CSV will be written.
+    logging.info('Step2 produced %d distance records (distance in meters)', len(df_out))
     return df_out
+
+
+def step3_inverse_distance_scoring(distances_df: pd.DataFrame = None, write_csv: bool = True) -> pd.DataFrame:
+    """Step 3: Convert distance (meters) to inverse-distance proximity score.
+
+    - Proximity score = 1 / distance_in_km (distance_km = distance_m / 1000).
+    - If distance < 0.1 km (i.e. < 100 meters) or distance <= 0, score is capped at 11.
+    - If distance is missing/NaN, `proximity_score` will be None.
+    - When `write_csv` is True, writes `BLOCK_SITE_DISTANCES_CSV` under `OUTPUT_DIR`
+      with the proximity score as the last column.
+    """
+    _validate_paths()
+
+    if distances_df is None:
+        # Try to load distances produced by Step 2
+        path = Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV
+        if not path.exists():
+            raise RuntimeError('No distances DataFrame provided and distances CSV not found; run step2 first')
+        distances_df = pd.read_csv(path, dtype={})
+
+    # Ensure expected column exists
+    if 'distance_m' not in distances_df.columns:
+        raise RuntimeError("Expected 'distance_m' column in distances DataFrame")
+
+    def compute_score(d):
+        try:
+            if pd.isna(d):
+                return None
+            d = float(d)
+        except Exception:
+            return None
+        # distance in meters -> convert to km
+        if d <= 0 or d < 100.0:
+            return 11.0
+        # distance_km = d / 1000.0
+        score = 1000.0 / d
+        # No further capping specified beyond the <0.1km rule
+        return float(score)
+
+    distances_df['proximity_score'] = distances_df['distance_m'].apply(compute_score)
+
+    if write_csv:
+        out_path = Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Ensure proximity_score is last column in output — reorder if necessary
+        cols = [c for c in distances_df.columns if c != 'proximity_score'] + ['proximity_score']
+        logging.info('Writing block-site distances with proximity_score to %s (rows=%d)', out_path, len(distances_df))
+        distances_df.to_csv(out_path, index=False, columns=cols)
+
+    return distances_df
 
 
 
@@ -337,3 +385,7 @@ if __name__ == '__main__':
 
     # Step 2: For blocks in targeted block groups, compute distance to each NPL polygon
     distances = step2_block_site_distances(targeted_df=targeted)
+
+    # Step 3: Compute inverse-distance proximity scores and write distances CSV
+    distances_with_scores = step3_inverse_distance_scoring(distances, write_csv=True)
+    print('Wrote', Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV, 'with proximity_score column')

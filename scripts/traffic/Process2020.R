@@ -32,7 +32,9 @@ options(scipen = 999)
 source_python("./scripts/traffic/WeightedScoreUDF.py")
 
 # load RI blocks 
-ri_b_url <- "https://www2.census.gov/geo/tiger/TIGER2022/TABBLOCK20/tl_2022_44_tabblock20.zip"
+# ri_b_url <- "https://www2.census.gov/geo/tiger/TIGER2022/TABBLOCK20/tl_2022_44_tabblock20.zip"
+# testing 2010 
+ri_b_url <- "https://www2.census.gov/geo/tiger//TIGER2010BLKPOPHU/tabblock2010_44_pophu.zip"
 # downloading to temporary directory: 
 file_loc <- tempdir()
 on.exit(unlink(tmp))
@@ -42,7 +44,8 @@ curl_download(ri_b_url,
 unzip(zipfile = paste0(file_loc, ".zip"), exdir = file_loc) 
 file.remove(paste0(file_loc, ".zip"))
 # reading it from the download: 
-ri_b <- st_read(paste0(file_loc, "/tl_2022_44_tabblock20.shp")) 
+ri_b <- st_read(paste0(file_loc, "/tl_2022_44_tabblock20.shp"))
+# ri_b <- st_read(paste0(file_loc, "/tabblock2010_44_pophu.shp")) 
 
 # load RI block groups (used for plotting)
 ri_bg_url <- "https://www2.census.gov/geo/tiger/TIGER2022/BG/tl_2022_44_bg.zip"
@@ -80,10 +83,14 @@ ptraf <- aws.s3::s3read_using(read.csv,
 ## create point geometries from block dataset
 ri_b_no_zero_points <- ri_b %>%
   st_centroid() %>%
+  # translation for 2010 census data (test): 
+  # rename(GEOID20 = BLOCKID10, 
+  #        POP20 = POP10) %>%
   # filter for pops > 0 
   filter(POP20 > 0) %>%
   # create the block group geoid
   mutate(block_group_geoid = substr(GEOID20, 0, 12))
+
 # checking the output: 
 # mapview(ri_b_no_zero_points)
 
@@ -114,7 +121,6 @@ b_line_intersect <- st_join(ri_b_weights, prepro_ri_2020,
 # 22,892,785
 nrow(b_line_intersect)
 
-# gut check - flag here that this returns highway segments that are outside 
 # th RI area 
 # test <- b_line_intersect %>% filter(GEOID20 == "440030222022026")
 # hwys <- prepro_ri_2020 %>% filter(OBJECTID %in% test$OBJECTID)
@@ -146,7 +152,7 @@ prep_dist <- b_line_intersect %>%
 #                                    by_element = T)
 
 # split the data into groups of 20, make a list, and run dist functions on
-# list entries: 
+# list entries:  
 grouped_data <- gl(20, nrow(prep_dist) / 20)
 prep_dist_list <- split(prep_dist, grouped_data)
 dist_pair_df <- data.frame()
@@ -178,7 +184,8 @@ for(i in 1:20){
 # write.csv(dist_pair_df, "./outputs/traffic/processing/ri_dist_pairs_v3.csv")
 
 # pushing to s3 
-# TODO - actually push this!!
+# TODO - actually push this!! This file is HUGE and takes a very long time to 
+# load to s3 - it honestly might be faster to just run the loop above 
 # put_object(
 #   file = "./outputs/traffic/processing/ri_dist_pairs_v3.csv",
 #   object = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/ri_dist_pairs_v3.csv",
@@ -198,6 +205,7 @@ dist_pair_df %>%
 # what if there is no < 500 and > 500m split? 
 test_no_split <- dist_pair_df %>%
   mutate(dist_pair_num = as.numeric(distance)) %>%
+  filter(dist_pair_num <= 10000) %>%
   # here, assuming distance in km
   mutate(dist_pair_km = dist_pair_num/1000, 
          # capping inverse distance to max 10
@@ -216,30 +224,13 @@ test_weight_all <- test_no_split %>%
   # maybe the score is a sum?
   summarize(score_lt = sum(score)) %>%
   # multiply the score by the block group weight: 
-  mutate(score_wt = score_lt * fraction_of_total) %>%
+  mutate(pct_land = ALAND20 / (ALAND20 + AWATER20), 
+         score_wt = score_lt * fraction_of_total * pct_land) %>%
   # group by block group geoid and sum the weights: 
   group_by(block_group_geoid) %>%
-  summarize(weighted_score = sum(score_wt)) 
-
-
-# adding to s3 for comparisons 
-# st_write(test_weight_all_sf, "./outputs/traffic/processing/ri_bg_summary_v5.geojson")
-# put_object(
-#   file = "./outputs/traffic/processing/ri_bg_summary_v5.geojson",
-#   object = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/RI/bg_summary_test_v5.geojson",
-#   multipart = T
-# )
-
+  summarize(weighted_score = sum(score_wt, na.rm = T)) 
 
 ## summary stats: 
-# mean difference: 
-mean(test_weight_all_sf$diff_estimate_minus_ptraf, na.rm = T) # 303,963.4
-# mean asolute difference: 
-mean(test_weight_all_sf$abs_diff_estimate_minus_ptraf, na.rm = T) # 411,338
-# mean percent difference: 
-mean(test_weight_all_sf$pct_diff_estimate_praf, na.rm = T) # 16.31886
-
-
 # mapping the output: 
 test_weight_all_sf <- test_weight_all %>%
   merge(., ri_bg %>% select(GEOID), by.x = "block_group_geoid", 
@@ -252,9 +243,30 @@ test_weight_all_sf <- test_weight_all %>%
          weighted_score_ntile = ntile(weighted_score, 100), 
          ptraf_ntile = ntile(PTRAF, 100))
 
+# adding to s3 for comparisons 
+# st_write(test_weight_all_sf, "./outputs/traffic/processing/ri_bg_summary_v5.geojson")
+# put_object(
+#   file = "./outputs/traffic/processing/ri_bg_summary_v5.geojson",
+#   object = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/RI/bg_summary_test_v5.geojson",
+#   multipart = T
+# )
+
+# mean difference: 
+mean(test_weight_all_sf$diff_estimate_minus_ptraf, na.rm = T) # 303,963.4
+# with 2010 census data: 303,292.7
+
+# mean absolute difference: 
+mean(test_weight_all_sf$abs_diff_estimate_minus_ptraf, na.rm = T) # 411,338
+# with 2010 census data: 426,313.2
+
+# mean percent difference: 
+mean(test_weight_all_sf$pct_diff_estimate_praf, na.rm = T) # 16.31886
+# with 2010 census data: 16.7349
+
 # mapping latest weighted scores: 
 mapview(test_weight_all_sf, zcol = "weighted_score") + 
   mapview(prepro_ri_2020, color = "black", lwd = 1.5)
+# with 2010 census data: pretty much same trend 
 
 # mapping weighted scores percentiles: 
 mapview(test_weight_all_sf, zcol = "weighted_score_ntile", 
@@ -268,7 +280,8 @@ mapview(test_weight_all_sf, zcol = "ptraf_ntile",
 
 # mapping percent difference
 mapview(test_weight_all_sf, zcol = "pct_diff_estimate_praf", 
-        col.regions = RColorBrewer::brewer.pal(9, "RdBu")) + 
+        at = seq(from = -150, to = 150, by = 50),
+        col.regions = RColorBrewer::brewer.pal(11, "RdBu")) + 
   mapview(prepro_ri_2020, color = "black", lwd = 1.5)
 
 # making a plot: 
@@ -280,7 +293,8 @@ ggplot(test_weight_all_df, aes(x = PTRAF, y = weighted_score)) +
   theme_bw() + 
   labs(x = "EJScreen Traffic Prox Score", y = "Estimated Weighted Score") + 
   ggtitle("EJScreen Score Test - No 500m Split, sum inverse dist * aadt for 
-          blocks before grouping by block group * pop weight") + 
+          blocks before grouping by block group * pop weight. 
+          FILTERED TO 15,000M") + 
   ggpubr::stat_cor(label.y = 10000000) + 
   ggpubr::stat_regline_equation(label.y = 8500000)
 
@@ -333,7 +347,7 @@ ggplot(test_weight_all_sf_area, aes(x = bg_area,
 ## digging deeper into block group geoids with larger % differeces
 large_pct_diffs <- test_weight_all_sf %>%
   # this is where we're overestimating
-  filter(pct_diff_estimate_praf > 80)
+  filter(pct_diff_estimate_praf > 30)
 mapview(large_pct_diffs)
 
 # what are the block characteristics of these locations? 
@@ -365,11 +379,143 @@ ggplot(ri_b_diff_groups, aes(x = name, y = value, color = type,
   facet_wrap(~name, scales = "free") +
   theme_bw()
 
+# what about the distribution of differences?
+large_diffs_distpairs <- dist_pair_df %>% 
+  filter(block_group_geoid %in% ri_b_large_pct_diffs$block_group_geoid)
+small_diffs_distpairs <- dist_pair_df %>%
+  filter(block_group_geoid %in% ri_b_small_pct_diffs$block_group_geoid)
+ggplot(large_diffs_distpairs, aes(x = as.numeric(distance))) + 
+  geom_histogram()+ 
+  theme_bw() + 
+  labs(x = "Distance (m)", 
+       y = "Number of DistPairs") + 
+  ggtitle("Block Groups w/ Large % Difference")
+ggplot(small_diffs_distpairs, aes(x = as.numeric(distance))) + 
+  geom_histogram() + 
+  theme_bw() + 
+  labs(x = "Distance (m)", 
+       y = "Number of DistPairs") + 
+  ggtitle("Block Groups w/ Small % Difference")
 
+
+# what about for the whole set?
+pct_diff_simple <- test_weight_all_sf %>%
+  as.data.frame() %>%
+  select(-(geometry))
+dist_pair_df_simple <- dist_pair_df %>%
+  mutate(dist_num = as.numeric(distance)) %>%
+  merge(., pct_diff_simple, by = "block_group_geoid")
+
+# looking for overall trends: 
+dist_pct_diff <- dist_pair_df_simple %>%
+  select(dist_num, pct_diff_estimate_praf, aadt) %>%
+  group_by(pct_diff_estimate_praf) %>%
+  summarize(mean_distance = mean(dist_num), 
+            mean_aadt = mean(aadt))
+
+ggplot(dist_pct_diff, aes(x = mean_distance, 
+                          y = pct_diff_estimate_praf, 
+                          color = mean_aadt)) + 
+  geom_point() + 
+  theme_bw()
+
+# what about % dist paris < 500?
+dist_500_split <- dist_pair_df_simple %>%
+  group_by(block_group_geoid) %>%
+  summarize(num_blocks = n(), 
+            num_less500 = sum(dist_num <= 500), 
+            num_great500 = sum(dist_num > 500)) %>%
+  mutate(pct_less_500 = 100*(num_less500/num_blocks)) %>%
+  left_join(., pct_diff_simple)
+
+ggplot(dist_500_split, aes(x = pct_less_500, 
+                          y = pct_diff_estimate_praf)) + 
+  geom_point() + 
+  theme_bw()
+
+
+## lets zoom in on one block group - this is one where 100% of blocks are within 
+# 500m of a road: 9,977,294; PTRAF = 9,924,581
+# block_group <- "440030207031"
+block_group <- "440070008001"
+test_weight_all_sf %>% filter(block_group_geoid == block_group)
+dist_pair_filt <- dist_pair_df %>%
+  filter(block_group_geoid == block_group) %>%
+  merge(., ri_b %>% select(GEOID20), by = "GEOID20") %>%
+  mutate(dist_pair_num = as.numeric(distance)) %>%
+  st_as_sf()
+ri_bg_filt <- ri_bg %>%
+  filter(GEOID == block_group)
+highway_filt <- prepro_ri_2020 %>%
+  filter(OBJECTID %in% dist_pair_filt$OBJECTID)
+
+# why are we missing some blocks? - all pop20 = 0 
+# ri_b %>%
+#   mutate(block_group_geoid = substr(GEOID20, 0, 12)) %>%
+#   filter(block_group_geoid == block_group) %>%
+#   filter(!(GEOID20 %in% dist_pair_filt$GEOID20))
+#   
+
+mapview(dist_pair_filt) + 
+  # mapview(ri_bg_filt) + 
+  mapview(highway_filt, color = "black", lwd = 1.5) 
+  # mapview(prepro_ri_2020, color = "red", lwd = 1.5)
+
+# what are the original values?
+# our estimate: 815,569.1
+# PTRAF: 585,293.1
+test_weight_all_sf %>%
+  filter(block_group_geoid == block_group) 
 
 ###############################################################################
 # !!! EVERYTHING BELOW THIS LINE CONTAINS CODE FROM OTHER OPTIONS I TRIED !!!
 ###############################################################################
+# what about the < 500m group? there are only 11 
+less_than_500 <- dist_pair_filt %>%
+  filter(dist_pair_num <= 500) %>%
+  # here, assuming distance in km
+  mutate(dist_pair_km = dist_pair_num/1000, 
+         # capping inverse distance to max 10
+         inverse_distance = 1/dist_pair_km, 
+         inverse_distance = case_when(inverse_distance > 10 ~ 10, 
+                                      TRUE ~ inverse_distance)) %>%
+  mutate(score = inverse_distance * aadt) %>%
+  group_by(GEOID20, block_group_geoid, fraction_of_total, POP20) %>%
+  # maybe the score is a sum?
+  summarize(score_lt = sum(score)) %>%
+  # multiply the score by the block group weight: 
+  mutate(score_wt = score_lt * fraction_of_total) %>%
+  # group by block group geoid and sum the weights: 
+  group_by(block_group_geoid) %>%
+  summarize(weighted_score = sum(score_wt)) 
+mapview(less_than_500) + 
+  mapview(highway_filt, color = "black", lwd = 1.5) 
+
+
+greater_than_500 <- dist_pair_filt %>%
+  filter(dist_pair_num > 500, 
+         !(block_group_geoid %in% less_than_500$block_group_geoid)) %>%
+  # here, assuming distance in km
+  mutate(dist_pair_km = dist_pair_num/1000, 
+         # capping inverse distance to max 10
+         inverse_distance = 1/dist_pair_km, 
+         inverse_distance = case_when(inverse_distance > 10 ~ 10, 
+                                      TRUE ~ inverse_distance)) %>%
+  mutate(score = inverse_distance * aadt) %>%
+  group_by(GEOID20) %>%
+  arrange(dist_pair_num, desc = T) %>%
+  slice(1)  %>%
+  group_by(GEOID20, block_group_geoid, fraction_of_total, POP20) %>%
+  # maybe the score is a sum?
+  summarize(score_lt = sum(score)) %>%
+  # multiply the score by the block group weight: 
+  mutate(score_wt = score_lt * fraction_of_total ) %>%
+  # group by block group geoid and sum the weights: 
+  group_by(block_group_geoid) %>%
+  summarize(weighted_score = sum(score_wt)) 
+
+mapview(greater_than_500) + 
+  mapview(highway_filt, color = "black", lwd = 1.5) 
 
 ###############################################################################
 # Split < 500 and > 500 distance pairs, and multiply inverse distance by

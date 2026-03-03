@@ -95,7 +95,7 @@ def step1_buffer_and_targeted_bgs(buffer_meters: float = 10000.0):
     if not layers:
         raise RuntimeError(f"No layers found in NPL GDB: {NPL_GDB_PATH}")
     else:
-         print("NPL layers:", layers)
+        logging.info('NPL layers: %s', layers)
     npl_layer = layers[3]  # SITE_BOUNDARIES_SF
     logging.info("Going to use NPL layer: %s", npl_layer)
     npl_gdf = gpd.read_file(NPL_GDB_PATH, layer='SITE_BOUNDARIES_SF')
@@ -335,7 +335,7 @@ def step3_inverse_distance_scoring(distances_df: pd.DataFrame = None, write_csv:
     if 'distance_m' not in distances_df.columns:
         raise RuntimeError("Expected 'distance_m' column in distances DataFrame")
 
-    def compute_score(d):
+    def calculate_proximity_score(d):
         try:
             if pd.isna(d):
                 return None
@@ -343,14 +343,16 @@ def step3_inverse_distance_scoring(distances_df: pd.DataFrame = None, write_csv:
         except Exception:
             return None
         # distance in meters -> convert to km
-        if d <= 0 or d < 100.0:
+        km = d / 1000.0
+                # proximity score is inverse of distance in km
+        if km < 0.1:
             return 11.0
-        # distance_km = d / 1000.0
-        score = 1000.0 / d
-        # No further capping specified beyond the <0.1km rule
-        return float(score)
 
-    distances_df['proximity_score'] = distances_df['distance_m'].apply(compute_score)
+        proximity_score = 1.0 / km
+        # No further capping specified beyond the <0.1km rule
+        return float(proximity_score)
+
+    distances_df['proximity_score'] = distances_df['distance_m'].apply(calculate_proximity_score)
 
     if write_csv:
         out_path = Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV
@@ -361,6 +363,109 @@ def step3_inverse_distance_scoring(distances_df: pd.DataFrame = None, write_csv:
         distances_df.to_csv(out_path, index=False, columns=cols)
 
     return distances_df
+
+
+def step4_population_weighting_aggregation(distances_with_scores_df: pd.DataFrame = None, blocks_path: str = None, write_csv: bool = True) -> pd.DataFrame:
+    """Step 4: Weight block proximity scores by population fraction and aggregate to Block Group.
+
+    - Reads `distances_with_scores_df` (or loads from `BLOCK_SITE_DISTANCES_CSV`).
+    - Loads block-level population weights from `blocks_path` (or `BLOCKS_SHAPE_OR_CSV`).
+    - Joins on block GEOID, multiplies `proximity_score` by population weight (fraction_of_total),
+      then sums weighted scores per block group (summing across EPA sites as well).
+    - Writes `FINAL_BG_SCORES_CSV` under `OUTPUT_DIR` with columns: `GEOID_BG`, `proximity_score`.
+    """
+    _validate_paths()
+
+    # Load distances with scores
+    if distances_with_scores_df is None:
+        path = Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV
+        if not path.exists():
+            raise RuntimeError('No distances DataFrame provided and distances CSV not found; run step3 first')
+        distances_with_scores_df = pd.read_csv(path, dtype=str)
+
+    # Ensure required columns
+    if 'GEOID_BLOCK' not in distances_with_scores_df.columns:
+        raise RuntimeError("Expected 'GEOID_BLOCK' column in distances DataFrame")
+    if 'proximity_score' not in distances_with_scores_df.columns:
+        raise RuntimeError("Expected 'proximity_score' column in distances DataFrame")
+
+    # Coerce proximity_score to numeric (could contain None/empty)
+    distances_with_scores_df['proximity_score'] = pd.to_numeric(distances_with_scores_df['proximity_score'], errors='coerce')
+
+    # Load block population weights
+    blk_path = blocks_path or BLOCKS_SHAPE_OR_CSV
+    if blk_path is None:
+        raise RuntimeError('No blocks_path provided and BLOCKS_SHAPE_OR_CSV is unset')
+
+    blk_p = Path(blk_path)
+    logging.info('Reading block population/weight data: %s', blk_p)
+    if blk_p.suffix.lower() in ('.csv', '.txt') or not blk_p.exists():
+        # read as CSV (many test files are CSV)
+        df_blocks = pd.read_csv(blk_p, dtype=str)
+        try:
+            df_blocks = normalize_census_columns(df_blocks)
+        except Exception:
+            pass
+    else:
+        # try vector file
+        gdf_blocks = gpd.read_file(str(blk_p))
+        try:
+            gdf_blocks = normalize_census_columns(gdf_blocks)
+        except Exception:
+            pass
+        df_blocks = pd.DataFrame(gdf_blocks.drop(columns=[c for c in gdf_blocks.columns if c == 'geometry']))
+
+    # Identify or compute population fraction (weight)
+    weight_col = None
+    if 'fraction_of_total' in df_blocks.columns:
+        df_blocks['fraction_of_total'] = pd.to_numeric(df_blocks['fraction_of_total'], errors='coerce')
+        weight_col = 'fraction_of_total'
+    else:
+        # If fraction not present, try to compute from block_pop / block_group_pop
+        raise RuntimeError('Population fraction column not found; computation from block_pop / block_group_pop not implemented in this prototype')
+
+    if weight_col is None:
+        raise RuntimeError('Could not find or compute population weight for blocks (expected column `fraction_of_total` or `block_pop`/`block_group_pop`)')
+
+    # Ensure block geoid column exists
+    if 'block_geoid' not in df_blocks.columns:
+        # try GEOID-like columns
+        geoid_col = next((c for c in df_blocks.columns if c.upper().startswith('GEOID')), None)
+        if geoid_col is None:
+            raise RuntimeError('Could not find block GEOID column in blocks data')
+        df_blocks = df_blocks.rename(columns={geoid_col: 'block_geoid'})
+
+    # Ensure block group geoid exists (for final grouping)
+    if 'block_group_geoid' not in df_blocks.columns:
+        df_blocks['block_group_geoid'] = df_blocks['block_geoid'].astype(str).str[:12]
+
+    # Merge distances with block weights
+    merged = distances_with_scores_df.merge(df_blocks[['block_geoid', 'block_group_geoid', weight_col]], left_on='GEOID_BLOCK', right_on='block_geoid', how='left')
+
+    # Drop records without a proximity score
+    merged = merged[merged['proximity_score'].notna()].copy()
+
+    # Coerce weight to numeric and fill missing weights with 0
+    merged[weight_col] = pd.to_numeric(merged[weight_col], errors='coerce').fillna(0.0)
+
+    # Compute weighted score per record
+    merged['weighted_score'] = merged['proximity_score'].astype(float) * merged[weight_col].astype(float)
+
+    # Aggregate to block group: sum weighted_score (this naturally sums across multiple EPA sites)
+    agg_weighted = merged.groupby('block_group_geoid', dropna=True)['weighted_score'].sum().reset_index()
+    # Also compute the unweighted sum of proximity_score per block group and cap at 11
+    agg_sumprox = merged.groupby('block_group_geoid', dropna=True)['proximity_score'].sum().reset_index()
+    agg_sumprox['sum_proximity_scores'] = agg_sumprox['proximity_score'].clip(upper=11)
+    # Merge weighted and summed proximity results
+    agg = agg_weighted.merge(agg_sumprox[['block_group_geoid', 'sum_proximity_scores']], on='block_group_geoid', how='outer').fillna(0)
+
+    if write_csv:
+        out_path = Path(OUTPUT_DIR) / FINAL_BG_SCORES_CSV
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        logging.info('Writing final block-group scores to %s (rows=%d)', out_path, len(agg))
+        agg.to_csv(out_path, index=False, columns=['block_group_geoid', 'weighted_score', 'sum_proximity_scores'])
+
+    return agg
 
 
 
@@ -378,9 +483,8 @@ if __name__ == '__main__':
     targeted = step1_buffer_and_targeted_bgs()
 
     # Sanity checks
-    print("Sample EPA_IDS (first 20):")
-    print(targeted['EPA_ID'].astype(str).head(20).tolist())
-    print("Unique EPA_ID count:", targeted['EPA_ID'].astype(str).nunique())
+    logging.info('Sample EPA_IDS (first 20): %s', targeted['EPA_ID'].astype(str).head(20).tolist())
+    logging.info('Unique EPA_ID count: %d', targeted['EPA_ID'].astype(str).nunique())
 
 
     # Step 2: For blocks in targeted block groups, compute distance to each NPL polygon
@@ -388,4 +492,8 @@ if __name__ == '__main__':
 
     # Step 3: Compute inverse-distance proximity scores and write distances CSV
     distances_with_scores = step3_inverse_distance_scoring(distances, write_csv=True)
-    print('Wrote', Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV, 'with proximity_score column')
+    logging.info('Wrote %s with proximity_score column', Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV)
+
+    # Step 4: Weight block proximity scores by population fraction and aggregate to Block Group
+    final_bg_scores = step4_population_weighting_aggregation(distances_with_scores, blocks_path=BLOCKS_SHAPE_OR_CSV, write_csv=True)
+    logging.info('Wrote %s with block-group weighted scores', Path(OUTPUT_DIR) / FINAL_BG_SCORES_CSV)

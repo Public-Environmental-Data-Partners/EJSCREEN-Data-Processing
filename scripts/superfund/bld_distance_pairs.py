@@ -298,7 +298,7 @@ def write_pairs_csv(df_pairs: pd.DataFrame, cfg, state: str):
 
 def applyWeighting(block_aland, block_awater, distance_m, block_pop, fraction_of_total):
     # This code is really just a swag since we don't have the original SAIC code to work from.
-    # But we do have a sense of what this code should do, so let's giv'er a co.
+    # But we do have a sense of what this code should do, so let's giv'er a go.
     inv_distance = 1.0  # mathematicallly, this doesn't make much sense but we simply need some value to return if distance is zero
     # guard against division by zero
     if distance_m > 0:
@@ -306,7 +306,8 @@ def applyWeighting(block_aland, block_awater, distance_m, block_pop, fraction_of
 
     weighted_score = 0.0
     if block_pop > 0:
-        weighted_score = block_pop * fraction_of_total * inv_distance
+        #weighted_score = block_pop * fraction_of_total * inv_distance  # try 1, values waaaay too small
+        weighted_score = block_pop * inv_distance
 
     return inv_distance, weighted_score
 
@@ -314,8 +315,12 @@ def applyWeighting(block_aland, block_awater, distance_m, block_pop, fraction_of
 def generate_weighted_scores(df_pairs: pd.DataFrame) -> pd.DataFrame:
     """Add a `weighted_score` column to `df_pairs` by applying `applyWeighting`.
 
-    This function defensively checks for required input columns and iterates
-    through rows, calling `applyWeighting(aland20, awater20, distance, totpop20, fraction_of_total)`.
+    This function defensively checks for required input columns and then iterates
+    through rows.
+
+    TODO: This code will almost certainly be a performance bottleneck and will
+    likely need to be optimized using vectorized operations or parallel processing
+    before we start processing larger cross products.
     """
     if df_pairs is None or df_pairs.empty:
         return df_pairs
@@ -339,11 +344,76 @@ def generate_weighted_scores(df_pairs: pd.DataFrame) -> pd.DataFrame:
     df_out = df_pairs.copy()
 
     # apply and expand into two columns
-    weights = df_out.apply(_row_weight, axis=1, result_type='expand')
-    weights.columns = ['inv_distance', 'weighted_score']
-    df_out = pd.concat([df_out.reset_index(drop=True), weights.reset_index(drop=True)], axis=1)
+    scores_out = df_out.apply(_row_weight, axis=1, result_type='expand')
+    scores_out.columns = ['inv_distance', 'weighted_score']
+    df_out = pd.concat([df_out.reset_index(drop=True), scores_out.reset_index(drop=True)], axis=1)
 
     return df_out
+
+
+def aggregate_blockgroup_scores(df_all_pairs: pd.DataFrame, cfg: Config) -> None:
+    """Aggregate weighted scores to block-group level and write CSV.
+
+    Assumptions:
+      - `df_all_pairs` contains `block_geoid` and a pre-computed `block_group_pop` column
+      - `df_all_pairs` contains `weighted_score` computed earlier and NPL `Latitude`/`Longitude`
+    """
+    if df_all_pairs is None or df_all_pairs.empty:
+        logging.info("aggregate_blockgroup_scores: no data to aggregate")
+        return
+
+    df_bg = df_all_pairs.copy()
+
+    # derive block-group GEOID (first 12 chars) if not already present
+    if 'block_group_geoid' not in df_bg.columns:
+        if 'block_geoid' in df_bg.columns:
+            df_bg['block_group_geoid'] = df_bg['block_geoid'].astype(str).str[:12]
+        else:
+            logging.error("aggregate_blockgroup_scores: neither 'block_group_geoid' nor 'block_geoid' present; skipping")
+            return
+
+    # Sum weighted scores by EPA ID + block group
+    df_bg_scores = (
+        df_bg.groupby(['EPA ID', 'block_group_geoid'], dropna=False, as_index=False)
+        ['weighted_score']
+        .sum()
+        .rename(columns={'weighted_score': 'sum_weighted_score'})
+    )
+
+    # block_group_pop assumed present in df_bg; take first non-null per block_group_geoid
+    if 'block_group_pop' in df_bg.columns:
+        df_bg_pop = (
+            df_bg[['block_group_geoid', 'block_group_pop']]
+            .drop_duplicates(subset=['block_group_geoid'])
+            .reset_index(drop=True)
+        )
+    else:
+        logging.warning("aggregate_blockgroup_scores: 'block_group_pop' not found; leaving as NaN in output")
+        df_bg_pop = pd.DataFrame(columns=['block_group_geoid', 'block_group_pop'])
+
+    # NPL site coords (Latitude/Longitude) per EPA ID
+    npl_coords = (
+        df_bg[['EPA ID', 'Latitude', 'Longitude']]
+        .drop_duplicates(subset=['EPA ID'])
+        .reset_index(drop=True)
+    )
+
+    # Merge pieces together
+    df_result = df_bg_scores.merge(df_bg_pop, on='block_group_geoid', how='left')
+    df_result = df_result.merge(npl_coords, on='EPA ID', how='left')
+
+    # Reorder columns as requested
+    out_cols = ['EPA ID', 'Latitude', 'Longitude', 'block_group_geoid', 'block_group_pop', 'sum_weighted_score']
+    out_cols = [c for c in out_cols if c in df_result.columns]
+    df_result = df_result[out_cols]
+
+    out_filename = 'blockgroup_scores.csv'
+    out_path = join_path_and_file(cfg.output_path, out_filename)
+    try:
+        write_df_s3_or_local(df_result, out_path)
+        logging.info("Wrote block-group aggregated scores to: %s (rows=%d)", out_path, len(df_result))
+    except Exception as e:
+        logging.error("Failed to write block-group scores CSV to %s: %s", out_path, e)
 
 
 
@@ -432,6 +502,12 @@ def main(argv=None) -> int:
         except Exception as e:
             logging.error(f"Failed to write aggregated pairs CSV to {out_path}: {e}")
             return 1
+        # Also produce block-group level aggregated scores. Assumes `block_group_pop` exists
+        try:
+            aggregate_blockgroup_scores(df_all_pairs, cfg)
+        except Exception as e:
+            logging.error("Failed to produce block-group aggregated scores: %s", e)
+            # do not fail the whole run for block-group aggregation
     else:
         logging.info("No <=5000m pairs found for any state; no aggregated file written.")
 

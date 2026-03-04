@@ -37,6 +37,10 @@ TARGETED_BG_CSV = "targeted_block_groups.csv"
 BLOCK_SITE_DISTANCES_CSV = "block_site_distances.csv"
 FINAL_BG_SCORES_CSV = "final_bg_scores.csv"
 
+# Optional: set a short list of block-group GEOIDs to export detailed block rows for.
+# Example: EXPORT_BG_LIST = ['300010001001', '300010001002']
+EXPORT_BG_LIST = ["300490004005", "300490012012"]  # <-- fill with a small list of 12-char block-group GEOIDs to auto-export after Step 4
+
 # Logging default
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
@@ -72,7 +76,11 @@ def normalize_census_columns(df):
         f"AWATER{suffix}": "block_awater",
     }
     
-    return df.rename(columns=rename_map)
+    df = df.rename(columns=rename_map)
+    # Also expose a generic 'population' column in addition to 'block_pop'
+    if 'block_pop' in df.columns and 'population' not in df.columns:
+        df['population'] = df['block_pop']
+    return df
 
 
 
@@ -292,12 +300,16 @@ def step2_block_site_distances(targeted_df: pd.DataFrame = None, npl_layer: str 
             ids_not_found += 1
             continue
         ids_found += 1
-        # compute distance to polygon boundary (use polygon.boundary)
-        boundary = poly.boundary if hasattr(poly, 'boundary') else poly
+        # Changed this from calculating distance to the boundary
+        # to calculating distance to the polygon itself, which should 
+        # more accurate for blocks that are inside the polygon (distance=0).
+        # Note that this didn't change any distances for the small sample (Montana)
+        # I'm currently working with. But Gemini indicated it could be a material improvement.
+        # boundary = poly.boundary if hasattr(poly, 'boundary') else poly
         # compute per-block distance (meters) and store meters
         for _, b in blocks.iterrows():
             try:
-                dist_m = b.geometry.distance(boundary)
+                dist_m = b.geometry.distance(poly)
             except Exception as e:
                 logging.error('Distance computation failed for block %s to EPA %s: %s', b.get('block_geoid'), epa, e)
                 dist_m = float('nan')
@@ -365,6 +377,180 @@ def step3_inverse_distance_scoring(distances_df: pd.DataFrame = None, write_csv:
     return distances_df
 
 
+def export_block_details_for_block_groups(block_group_geoids, blocks_path: str = None, distances_df: pd.DataFrame = None, out_csv: str = None, write_csv: bool = True) -> pd.DataFrame:
+    """Export detailed per-block rows for the provided block-group GEOIDs.
+
+    - block_group_geoids: iterable of block-group GEOID strings (12-char strings expected).
+    - blocks_path: optional path to blocks CSV/shapefile; defaults to BLOCKS_SHAPE_OR_CSV.
+    - distances_df: optional DataFrame from Step 2/3; defaults to OUTPUT_DIR/BLOCK_SITE_DISTANCES_CSV.
+    - out_csv: optional output filename; defaults to OUTPUT_DIR/detailed_blocks_for_bgs.csv.
+
+    The output contains the columns used during final aggregation including:
+    block_geoid, block_group_geoid, block_pop, fraction_of_total,
+    GEOID_BLOCK, EPA_ID, distance_m, proximity_score, weighted_score
+
+    Behavior for missing values:
+    - If `fraction_of_total` is missing but `block_pop` is present, it is computed as
+      block_pop / sum(block_pop in that block group). If the group sum is 0, fraction_of_total
+      is set to 0 for the group's blocks and a warning is logged.
+    - Blocks without any distance/proximity rows are kept (distance/proximity NaN).
+    """
+    _validate_paths()
+
+    # Normalize and validate block_group_geoids
+    if not block_group_geoids:
+        raise RuntimeError('Please supply one or more block-group GEOIDs to export')
+    bg_set = set(str(g).strip() for g in block_group_geoids)
+
+    # Load distances_df if not provided
+    if distances_df is None:
+        dpath = Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV
+        if not dpath.exists():
+            raise RuntimeError(f"Distances CSV not found at {dpath}; run step2/step3 first or provide distances_df")
+        distances_df = pd.read_csv(dpath, dtype=str)
+
+    # Ensure expected distance columns exist (or will be added)
+    # Cast numeric columns where appropriate
+    for col in ('distance_m', 'proximity_score'):
+        if col in distances_df.columns:
+            distances_df[col] = pd.to_numeric(distances_df[col], errors='coerce')
+    # Ensure GEOID_BLOCK exists for join
+    if 'GEOID_BLOCK' not in distances_df.columns:
+        # try to find a GEOID-like column and rename it for join
+        geo_candidate = next((c for c in distances_df.columns if c.upper().startswith('GEOID')), None)
+        if geo_candidate:
+            distances_df = distances_df.rename(columns={geo_candidate: 'GEOID_BLOCK'})
+        else:
+            raise RuntimeError("Could not find 'GEOID_BLOCK' column in distances data")
+
+    # Read blocks data
+    blk_path = Path(blocks_path) if blocks_path else Path(BLOCKS_SHAPE_OR_CSV)
+    logging.info('Reading blocks data for export: %s', blk_path)
+    if blk_path.suffix.lower() in ('.csv', '.txt') or not blk_path.exists():
+        df_blocks = pd.read_csv(blk_path, dtype=str)
+    else:
+        gdf_blocks = gpd.read_file(str(blk_path))
+        df_blocks = pd.DataFrame(gdf_blocks.drop(columns=[c for c in gdf_blocks.columns if c == 'geometry']))
+
+    # Normalize census-like columns
+    try:
+        df_blocks = normalize_census_columns(df_blocks)
+    except Exception:
+        # Normalization optional; continue even if it fails
+        pass
+
+    # Ensure block_geoid exists
+    if 'block_geoid' not in df_blocks.columns:
+        geoid_col = next((c for c in df_blocks.columns if c.upper().startswith('GEOID')), None)
+        if geoid_col is None:
+            raise RuntimeError('Could not find block GEOID column in blocks data')
+        df_blocks = df_blocks.rename(columns={geoid_col: 'block_geoid'})
+
+    # Ensure block_group_geoid exists
+    if 'block_group_geoid' not in df_blocks.columns:
+        df_blocks['block_group_geoid'] = df_blocks['block_geoid'].astype(str).str[:12]
+
+    # Coerce block_geoid / group to strings
+    df_blocks['block_geoid'] = df_blocks['block_geoid'].astype(str).str.strip()
+    df_blocks['block_group_geoid'] = df_blocks['block_group_geoid'].astype(str).str.strip()
+
+    # If there is a generic 'population' column, make sure 'block_pop' exists too
+    if 'block_pop' not in df_blocks.columns and 'population' in df_blocks.columns:
+        df_blocks['block_pop'] = df_blocks['population']
+
+    # Detect or normalize block_group_pop column (prefer explicit column if present)
+    if 'block_group_pop' not in df_blocks.columns:
+        bgpop_candidate = next((c for c in df_blocks.columns if 'group' in c.lower() and 'pop' in c.lower()), None)
+        if bgpop_candidate:
+            df_blocks = df_blocks.rename(columns={bgpop_candidate: 'block_group_pop'})
+
+    # Filter to requested block groups
+    df_sel = df_blocks[df_blocks['block_group_geoid'].isin(bg_set)].copy()
+    missing_bgs = bg_set - set(df_sel['block_group_geoid'].unique())
+    if missing_bgs:
+        logging.warning('The following requested block-groups were not found in blocks data: %s', sorted(missing_bgs))
+
+    if df_sel.empty:
+        logging.info('No blocks found for requested block-groups; returning empty DataFrame')
+        cols = ['block_group_geoid', 'block_geoid', 'block_group_pop', 'block_pop', 'fraction_of_total', 'EPA_ID', 'distance_m', 'proximity_score', 'weighted_score']
+        return pd.DataFrame(columns=cols)
+
+    # Ensure block_pop or fraction_of_total present
+    if 'fraction_of_total' not in df_sel.columns:
+        if 'block_pop' in df_sel.columns:
+            # Prefer using block_group_pop column (provided in BLOCKS_SHAPE_OR_CSV) to compute fraction
+            if 'block_group_pop' in df_sel.columns:
+                # coerce numerics
+                df_sel['block_pop'] = pd.to_numeric(df_sel['block_pop'], errors='coerce').fillna(0.0)
+                df_sel['block_group_pop'] = pd.to_numeric(df_sel['block_group_pop'], errors='coerce').fillna(0.0)
+                # Use group-wise block_group_pop (in many sources block_group_pop is repeated per block)
+                bg_pop = df_sel.groupby('block_group_geoid', dropna=False)['block_group_pop'].transform('first')
+                zero_mask = bg_pop == 0
+                if zero_mask.any():
+                    zero_groups = df_sel.loc[zero_mask, 'block_group_geoid'].unique().tolist()
+                    logging.warning('Some block-groups have block_group_pop == 0; fraction_of_total set to 0 for those groups: %s', zero_groups)
+                df_sel['fraction_of_total'] = df_sel['block_pop'] / bg_pop.replace({0: pd.NA})
+                df_sel['fraction_of_total'] = df_sel['fraction_of_total'].fillna(0.0)
+            else:
+                # Fallback: compute fraction from block_pop / sum(block_pop) per group (not preferred)
+                logging.warning('block_group_pop not found in blocks data; falling back to summing block_pop to compute fraction')
+                df_sel['block_pop'] = pd.to_numeric(df_sel['block_pop'], errors='coerce').fillna(0.0)
+                grp_sum = df_sel.groupby('block_group_geoid', dropna=False)['block_pop'].transform('sum')
+                zero_mask = grp_sum == 0
+                if zero_mask.any():
+                    zero_groups = df_sel.loc[zero_mask, 'block_group_geoid'].unique().tolist()
+                    logging.warning('Some block-groups have total population 0; fraction_of_total set to 0 for those groups: %s', zero_groups)
+                df_sel['fraction_of_total'] = df_sel['block_pop'] / grp_sum.replace({0: pd.NA})
+                df_sel['fraction_of_total'] = df_sel['fraction_of_total'].fillna(0.0)
+        else:
+            raise RuntimeError('Blocks data lacks both fraction_of_total and block_pop; cannot compute weights')
+    else:
+        # coerce fraction to numeric
+        df_sel['fraction_of_total'] = pd.to_numeric(df_sel['fraction_of_total'], errors='coerce').fillna(0.0)
+
+    # Left join blocks to distances so zero-pop blocks without distances are kept
+    merged = df_sel.merge(distances_df, left_on='block_geoid', right_on='GEOID_BLOCK', how='left', suffixes=('', '_dist'))
+
+    # Ensure numeric columns
+    if 'distance_m' in merged.columns:
+        merged['distance_m'] = pd.to_numeric(merged['distance_m'], errors='coerce')
+    if 'proximity_score' in merged.columns:
+        merged['proximity_score'] = pd.to_numeric(merged['proximity_score'], errors='coerce')
+
+    # Compute weighted_score: where proximity_score is present, multiply by fraction_of_total
+    # If proximity_score is missing, weighted_score will be 0.0 (no contribution)
+    merged['weighted_score'] = merged['proximity_score'].fillna(0.0) * merged['fraction_of_total'].astype(float)
+
+    # Select and order desired columns
+    out_cols = [
+        'block_group_geoid',
+        'block_geoid',
+        'block_group_pop',
+        'block_pop',
+        'fraction_of_total',
+        'EPA_ID',
+        'distance_m',
+        'proximity_score',
+        'weighted_score',
+    ]
+
+    # Ensure all out_cols exist in DataFrame
+    for c in out_cols:
+        if c not in merged.columns:
+            merged[c] = pd.NA
+
+    result = merged[out_cols].copy()
+
+    # Write CSV if requested
+    if write_csv:
+        out_path = Path(out_csv) if out_csv else Path(OUTPUT_DIR) / 'detailed_blocks_for_bgs.csv'
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        logging.info('Writing detailed block rows for %d block-groups to %s (rows=%d)', len(bg_set), out_path, len(result))
+        result.to_csv(out_path, index=False)
+
+    return result
+
+
 def step4_population_weighting_aggregation(distances_with_scores_df: pd.DataFrame = None, blocks_path: str = None, write_csv: bool = True) -> pd.DataFrame:
     """Step 4: Weight block proximity scores by population fraction and aggregate to Block Group.
 
@@ -421,8 +607,33 @@ def step4_population_weighting_aggregation(distances_with_scores_df: pd.DataFram
         df_blocks['fraction_of_total'] = pd.to_numeric(df_blocks['fraction_of_total'], errors='coerce')
         weight_col = 'fraction_of_total'
     else:
-        # If fraction not present, try to compute from block_pop / block_group_pop
-        raise RuntimeError('Population fraction column not found; computation from block_pop / block_group_pop not implemented in this prototype')
+        # Prefer computing fraction from block_pop / block_group_pop (do NOT sum block_pop to get group pop)
+        # Ensure block_pop exists (or population)
+        if 'block_pop' not in df_blocks.columns and 'population' in df_blocks.columns:
+            df_blocks['block_pop'] = df_blocks['population']
+        # Detect or normalize block_group_pop column if present
+        if 'block_group_pop' not in df_blocks.columns:
+            bgpop_candidate = next((c for c in df_blocks.columns if 'group' in c.lower() and 'pop' in c.lower()), None)
+            if bgpop_candidate:
+                df_blocks = df_blocks.rename(columns={bgpop_candidate: 'block_group_pop'})
+        if 'block_pop' in df_blocks.columns and 'block_group_pop' in df_blocks.columns:
+            # coerce numerics
+            df_blocks['block_pop'] = pd.to_numeric(df_blocks['block_pop'], errors='coerce').fillna(0.0)
+            df_blocks['block_group_pop'] = pd.to_numeric(df_blocks['block_group_pop'], errors='coerce').fillna(0.0)
+            # Ensure block_group_geoid exists
+            if 'block_group_geoid' not in df_blocks.columns:
+                df_blocks['block_group_geoid'] = df_blocks['block_geoid'].astype(str).str[:12]
+            # Use the group's block_group_pop (often repeated per block); take first per group
+            bg_pop = df_blocks.groupby('block_group_geoid', dropna=False)['block_group_pop'].transform('first')
+            zero_mask = bg_pop == 0
+            if zero_mask.any():
+                zero_groups = df_blocks.loc[zero_mask, 'block_group_geoid'].unique().tolist()
+                logging.warning('Some block-groups have block_group_pop == 0; fraction_of_total set to 0 for those groups: %s', zero_groups)
+            df_blocks['fraction_of_total'] = df_blocks['block_pop'] / bg_pop.replace({0: pd.NA})
+            df_blocks['fraction_of_total'] = df_blocks['fraction_of_total'].fillna(0.0)
+            weight_col = 'fraction_of_total'
+        else:
+            raise RuntimeError('Population fraction column not found and block_group_pop not present. Please provide `fraction_of_total` or include `block_group_pop` in BLOCKS_SHAPE_OR_CSV (we will not compute block-group pop by summing block_pop).')
 
     if weight_col is None:
         raise RuntimeError('Could not find or compute population weight for blocks (expected column `fraction_of_total` or `block_pop`/`block_group_pop`)')
@@ -497,3 +708,8 @@ if __name__ == '__main__':
     # Step 4: Weight block proximity scores by population fraction and aggregate to Block Group
     final_bg_scores = step4_population_weighting_aggregation(distances_with_scores, blocks_path=BLOCKS_SHAPE_OR_CSV, write_csv=True)
     logging.info('Wrote %s with block-group weighted scores', Path(OUTPUT_DIR) / FINAL_BG_SCORES_CSV)
+
+    # Optional: export detailed block rows for specific block-group GEOIDs
+    if EXPORT_BG_LIST:
+        export_result = export_block_details_for_block_groups(EXPORT_BG_LIST, blocks_path=BLOCKS_SHAPE_OR_CSV, distances_df=distances_with_scores, out_csv=None, write_csv=True)
+        logging.info('Exported detailed block rows for block-groups: %s', EXPORT_BG_LIST)

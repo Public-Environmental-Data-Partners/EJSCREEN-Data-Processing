@@ -64,13 +64,15 @@ class Config:
     # State code (USPS or FIPS-style short code); user must supply on CLI
     state_code: str = ""
     # destination path for the csv file
-    path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
+    # TODO: add the s3 path back in
+    path: str = "./test_files/"
     # number of rows to process; <=0 or None means process all rows
     number_rows: Optional[int] = 0
     dry_run: bool = False
     # output filename (will be joined with `path`); default writes locally under ./test_files/
-    output_file: str = "ejam_traffic_subset.csv"
-    #path: str = "./test_files/"
+    output_file: str = "ejam_superfund_subset.csv"
+    # Add runtime data type (default to superfund as requested)
+    data_type: str = "superfund"
 
 
 def get_config(argv=None) -> Config:
@@ -88,6 +90,9 @@ def get_config(argv=None) -> Config:
     parser.add_argument('-n', '--number_rows', type=int, default=Config.number_rows,
                         help='maximum number of rows to process (default: 10); <=0 means no limit')
     parser.add_argument('--dry-run', action='store_true', help='If set, do not write any files, just show what would be done')
+    # New runtime parameter to select the data type (default: superfund)
+    parser.add_argument('--data-type', '--type', dest='data_type', type=str, default=Config.data_type,
+                        choices=['superfund', 'traffic'], help='Data type to request/process (default: superfund)')
 
     # If script invoked with no args, print a one-line error and the full help text, then exit non-zero
     import sys
@@ -298,7 +303,9 @@ def main(argv=None) -> None:
     print(f"Will be writing to path: {config.path}")
 
     # write into a state-specific folder and use a short filename
-    out_path = join_path_and_file(config.path, f"{config.state_code}/{config.output_file}")
+    # Build an output filename that incorporates the runtime data_type (e.g. ejam_superfund_subset.csv)
+    filename = f"ejam_{getattr(config, 'data_type', 'superfund')}_subset.csv"
+    out_path = join_path_and_file(config.path, f"{config.state_code}/{filename}")
     limit = config.number_rows
     dry_run = config.dry_run
 
@@ -332,17 +339,30 @@ def main(argv=None) -> None:
         print(f"Processing is being limited to first {limit} rows")
 
     # --- Simple exact-match selection of known traffic-related columns ---
-    # exact column names to include (in this order)
-    desired = [
-        "ejam_uniq_id","valid","invalid_msg","pop","ST","statename",
-        "ratio.to.avg.traffic.score","ratio.to.state.avg.traffic.score",
-        "traffic.score","pctile.traffic.score","state.pctile.traffic.score",
-        "avg.traffic.score","state.avg.traffic.score",
-        "pctile.EJ.DISPARITY.traffic.score.eo","pctile.EJ.DISPARITY.traffic.score.supp",
-        "state.pctile.EJ.DISPARITY.traffic.score.eo","state.pctile.EJ.DISPARITY.traffic.score.supp",
-        "EJ.DISPARITY.traffic.score.eo","state.EJ.DISPARITY.traffic.score.eo",
-        "EJ.DISPARITY.traffic.score.supp","EJAM Report"
+    # Base columns required for all data types
+    base_required = [
+        "ejam_uniq_id", "valid", "invalid_msg", "pop", "ST", "statename"
     ]
+    # put long url column as the last cell in a row
+    base_last = ["EJAM Report"]
+
+    # Extra (type-specific) columns
+    indicator_columns = {
+        "traffic": [
+            "ratio.to.avg.traffic.score","ratio.to.state.avg.traffic.score",
+            "traffic.score","pctile.traffic.score","state.pctile.traffic.score",
+            "avg.traffic.score","state.avg.traffic.score",
+            "pctile.EJ.DISPARITY.traffic.score.eo","pctile.EJ.DISPARITY.traffic.score.supp",
+            "state.pctile.EJ.DISPARITY.traffic.score.eo","state.pctile.EJ.DISPARITY.traffic.score.supp",
+            "EJ.DISPARITY.traffic.score.eo","state.EJ.DISPARITY.traffic.score.eo",
+            "EJ.DISPARITY.traffic.score.supp"
+        ],
+        "superfund": ["proximity.npl", "pctile.proximity.npl"]
+
+    }
+
+    # Construct desired list based on selected data type (default: superfund)
+    desired = base_required + indicator_columns.get(getattr(config, 'data_type', 'superfund'), []) + base_last
 
     out_df = pandas.DataFrame(index=df.index)
     missing = []

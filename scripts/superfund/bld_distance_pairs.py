@@ -303,10 +303,13 @@ def applyWeighting(block_aland, block_awater, distance_m, block_pop, fraction_of
     # guard against division by zero
     if distance_m > 0:
         inv_distance = 1.0 / distance_m
+        if inv_distance > 11.0:  # cap the inverse distance to prevent extreme values for very close blocks
+            inv_distance = 11.0
+    else:
+        logging.warning("applyWeighting: distance_m is zero or negative (%s); using inv_distance=11.0", distance_m)
 
     weighted_score = 0.0
     if block_pop > 0:
-        #weighted_score = block_pop * fraction_of_total * inv_distance  # try 1, values waaaay too small
         weighted_score = block_pop * inv_distance
 
     return inv_distance, weighted_score

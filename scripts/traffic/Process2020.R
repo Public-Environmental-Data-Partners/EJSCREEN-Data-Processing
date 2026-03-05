@@ -5,7 +5,7 @@
 # https://github.com/USEPA-clone/ejscreen-traffic-proximity-processing/blob/main/Highway_processing_1_step1_pig.txt
 #
 # We are currently testing this processing using the 2020 HPMS segments for Rhode
-# Island. 
+# Island & Wyoming -- this is a "scratch space" for noodling on different methods
 # 
 # Date: Jan 14th, 2026
 # Author: EmmaLi Tsai

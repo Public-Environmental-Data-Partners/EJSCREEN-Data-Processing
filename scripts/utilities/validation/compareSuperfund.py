@@ -46,9 +46,14 @@ def summarize_and_plot(
 ) -> None:
     # Drop rows with NaN scores
     before = len(df_joined)
+    dropped_rows = df_joined[df_joined[[score_ejam, score_new]].isna().any(axis=1)].copy()
     df = df_joined.dropna(subset=[score_ejam, score_new]).copy()
     after = len(df)
     dropped = before - after
+
+    if dropped > 0:
+        dropped_rows['missing_score_ejam'] = dropped_rows[score_ejam].isna()
+        dropped_rows['missing_score_new'] = dropped_rows[score_new].isna()
 
     diffs = (df[score_ejam] - df[score_new]).astype(float)
     abs_diffs = diffs.abs()
@@ -99,6 +104,13 @@ def summarize_and_plot(
     print(f"Total matched rows before dropping NaNs: {len(df_joined)}")
     print(f"Rows used for stats/plot (both scores not-NaN): {len(df)}")
     print(f"Rows with NaN score dropped: {dropped}")
+    if dropped > 0:
+        print("Dropped rows with NaN score values:")
+        print(
+            dropped_rows[
+                [id_col, score_ejam, score_new, 'missing_score_ejam', 'missing_score_new']
+            ].to_string(index=False)
+        )
     print(f"Mean absolute difference: {mean_abs:.6g}")
     print(f"Median absolute difference: {median_abs:.6g}")
     print(f"RMSE: {rmse:.6g}")
@@ -173,7 +185,9 @@ def main(argv: list[str] | None = None) -> int:
     print("Top 5 matched rows sorted by EJAM score:")
     print(df_sorted.head(5))
 
-    print(df_sorted.to_csv('./test_files/MT/matched_rows.csv', index=False))
+    export_df = df_sorted.copy()
+    export_df['matched_id'] = '\t' + export_df['matched_id'].astype(str)
+    print(export_df.to_csv('./test_files/MT/matched_rows.csv', index=False))
 
     # Create plot and summary
     summarize_and_plot(df_joined, 'matched_id', args.score_ejam, args.score_new, out_path, title=f"Compare {args.score_ejam} vs {args.score_new}")

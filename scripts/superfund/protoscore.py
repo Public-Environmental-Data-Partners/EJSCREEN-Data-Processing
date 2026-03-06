@@ -26,7 +26,6 @@ import pandas as pd
 # Input sources
 NPL_GDB_PATH = "./pipeline/test_data/downloads/NPL_Boundaries_20260217/NPL_Boundaries.gdb"  # e.g. '/mnt/c/.../NPL_Boundaries.gdb'
 BG_SHP_PATH = "./pipeline/test_data/downloads/tl_2020_30_bg.zip"   # e.g. '/mnt/c/.../tl_2020_XX_bg.shp' or folder containing .shp
-# It's not entirely clear yet if this is the right file / shape of data but it's my best guess``
 BLOCKS_SHAPE_OR_CSV = "./pipeline/test_data/downloads/census_block_weights_2020_MT.csv"  # e.g. '/mnt/c/.../blocks_centroids.csv' or .shp
 
 # Working/output directory
@@ -557,8 +556,12 @@ def step4_population_weighting_aggregation(distances_with_scores_df: pd.DataFram
     - Reads `distances_with_scores_df` (or loads from `BLOCK_SITE_DISTANCES_CSV`).
     - Loads block-level population weights from `blocks_path` (or `BLOCKS_SHAPE_OR_CSV`).
     - Joins on block GEOID, multiplies `proximity_score` by population weight (fraction_of_total),
-      then sums weighted scores per block group (summing across EPA sites as well).
-    - Writes `FINAL_BG_SCORES_CSV` under `OUTPUT_DIR` with columns: `GEOID_BG`, `proximity_score`.
+        then sums weighted scores per block group (summing across EPA sites as well).
+    - Writes `FINAL_BG_SCORES_CSV` under `OUTPUT_DIR` with columns: `block_group_geoid`,
+        `weighted_score`, where `weighted_score` is rounded to 4 decimal places after
+        block-level scores have been summed to the block-group level.
+    - Final output includes every valid block group present in `BLOCKS_SHAPE_OR_CSV`;
+        block groups that never appear in the targeted scoring path receive `weighted_score = 0`.
     """
     _validate_paths()
 
@@ -646,11 +649,19 @@ def step4_population_weighting_aggregation(distances_with_scores_df: pd.DataFram
             raise RuntimeError('Could not find block GEOID column in blocks data')
         df_blocks = df_blocks.rename(columns={geoid_col: 'block_geoid'})
 
-    # Ensure block group geoid exists (for final grouping)
+    # Ensure block group geoid exists (for final grouping/output universe)
     if 'block_group_geoid' not in df_blocks.columns:
         df_blocks['block_group_geoid'] = df_blocks['block_geoid'].astype(str).str[:12]
 
-    # Merge distances with block weights
+    all_block_groups = df_blocks[['block_group_geoid']].copy()
+    all_block_groups['block_group_geoid'] = all_block_groups['block_group_geoid'].astype('string').str.strip()
+    all_block_groups = all_block_groups[
+        all_block_groups['block_group_geoid'].notna() &
+        all_block_groups['block_group_geoid'].ne('')
+    ].drop_duplicates().reset_index(drop=True)
+    logging.info('Prepared %d block groups from blocks source for final output universe', len(all_block_groups))
+
+    # Merge targeted distance rows with block weights
     merged = distances_with_scores_df.merge(df_blocks[['block_geoid', 'block_group_geoid', weight_col]], left_on='GEOID_BLOCK', right_on='block_geoid', how='left')
 
     # Drop records without a proximity score
@@ -663,18 +674,23 @@ def step4_population_weighting_aggregation(distances_with_scores_df: pd.DataFram
     merged['weighted_score'] = merged['proximity_score'].astype(float) * merged[weight_col].astype(float)
 
     # Aggregate to block group: sum weighted_score (this naturally sums across multiple EPA sites)
-    agg_weighted = merged.groupby('block_group_geoid', dropna=True)['weighted_score'].sum().reset_index()
-    # Also compute the unweighted sum of proximity_score per block group and cap at 11
-    agg_sumprox = merged.groupby('block_group_geoid', dropna=True)['proximity_score'].sum().reset_index()
-    agg_sumprox['sum_proximity_scores'] = agg_sumprox['proximity_score'].clip(upper=11)
-    # Merge weighted and summed proximity results
-    agg = agg_weighted.merge(agg_sumprox[['block_group_geoid', 'sum_proximity_scores']], on='block_group_geoid', how='outer').fillna(0)
+    agg_targeted = merged.groupby('block_group_geoid', dropna=True)['weighted_score'].sum().reset_index()
+    agg_targeted['weighted_score'] = agg_targeted['weighted_score'].round(4)
+
+    # Expand final output to all block groups from the blocks source; untargeted groups remain zero.
+    agg = all_block_groups.merge(agg_targeted, on='block_group_geoid', how='left')
+    agg['weighted_score'] = agg['weighted_score'].fillna(0.0)
 
     if write_csv:
         out_path = Path(OUTPUT_DIR) / FINAL_BG_SCORES_CSV
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        logging.info('Writing final block-group scores to %s (rows=%d)', out_path, len(agg))
-        agg.to_csv(out_path, index=False, columns=['block_group_geoid', 'weighted_score', 'sum_proximity_scores'])
+        logging.info(
+            'Writing final block-group scores to %s (rows=%d, targeted_groups=%d)',
+            out_path,
+            len(agg),
+            len(agg_targeted),
+        )
+        agg.to_csv(out_path, index=False, columns=['block_group_geoid', 'weighted_score'])
 
     return agg
 

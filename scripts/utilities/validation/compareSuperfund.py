@@ -124,7 +124,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--id-ejam', type=str, default='ejam_uniq_id', help='ID column name in file A')
     parser.add_argument('--score-ejam', type=str, default='proximity.npl', help='Score column name in file A')
 
-    parser.add_argument('--file-b', type=str, default='./test_files/MT/final_bg_scores.csv', help='Comparison CSV (B)')
+    parser.add_argument('--file-b', type=str, default='../../superfund/pipeline/test_data/final_bg_scores.csv', help='Comparison CSV (B)')
+
     parser.add_argument('--id-b', type=str, default='block_group_geoid', help='ID column name in file B')
     parser.add_argument('--score-new', type=str, default='weighted_score', help='Score column name in file B')
 

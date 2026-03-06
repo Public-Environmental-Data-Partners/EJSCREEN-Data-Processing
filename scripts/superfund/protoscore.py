@@ -106,7 +106,14 @@ def step1_buffer_and_targeted_bgs(buffer_meters: float = 10000.0):
     npl_layer = layers[3]  # SITE_BOUNDARIES_SF
     logging.info("Going to use NPL layer: %s", npl_layer)
     npl_gdf = gpd.read_file(NPL_GDB_PATH, layer='SITE_BOUNDARIES_SF')
-    logging.info("NPL columns: %d, rows: %d", len(npl_gdf.columns), len(npl_gdf))
+    logging.info("Before filtering, NPL columns: %d, rows: %d", len(npl_gdf.columns), len(npl_gdf))
+    npl_columns = [str(col) for col in npl_gdf.columns]
+    logging.info("NPL column names: %s", ", ".join(npl_columns))
+    
+    # Filtering for only 'Final' (F) and 'Proposed' (P) sites
+    # We assume the column name is 'NPL_STATUS'
+    npl_gdf = npl_gdf[npl_gdf['NPL_STATUS_CODE'].isin(['F', 'P'])]
+    logging.info("After filtering for active-ish NPL rows (F and P only): %d", len(npl_gdf))
    
     logging.info("Reading Block Group shapefile: %s", BG_SHP_PATH)
     try:

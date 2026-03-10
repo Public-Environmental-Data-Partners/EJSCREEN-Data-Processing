@@ -117,6 +117,39 @@ def WeightedScoreUDF3(land_area, water_area, distance, total_pop, aadt_volume):
     # Return the adjusted distance value we used, that fixed radius,
     # and both the raw score and the population-weighted score.
     return (adj_distance_lt, radius_lt, score_lt, weighted_score)
+  
+def WeightedScoreUDF4(land_area, water_area, distance, total_pop, aadt_volume):
+    # Difference from UDF1 is that we check land_area for 0 before calculating scores.
+    #
+    # Per Eric:
+    adj_distance_lt = distance
+    inverse_distance = 1.0 / adj_distance_lt  # max value will be 10
+
+    if inverse_distance > 10 :
+        adj_distance_lt = 10
+    else:
+        adj_distance_lt = inverse_distance
+
+    # We appear to be setting a fixed radius value to pass along for the benefit
+    # of downstream code. This is understood to be a magic number.
+    # AI recommends the 500 value, probably based on search results
+    # such as: https://careshq.org/ss_whatsnewitem/ej-screen-traffic-proximity/
+    radius_lt = 500.0
+
+    score_lt = 0.0
+    weighted_score = 0.0
+    # TODO: consider if this should be changed to be a "close to 0" test.
+    if land_area != 0:
+        # raw score is traffic volume divided by adjusted distance
+        score_lt = aadt_volume * adj_distance_lt
+
+        # weighted score is raw score times total population
+        weighted_score = score_lt * total_pop
+    # else both scores remain 0.0 since land area is 0
+
+    # Return the adjusted distance value we used, that fixed radius,
+    # and both the raw score and the population-weighted score.
+    return (adj_distance_lt, radius_lt, score_lt, weighted_score)
 
 def main():
     """

@@ -21,15 +21,48 @@ import geopandas as gpd
 import fiona
 import pandas as pd
 
+STATE_CONFIG = {
+    'MT': {
+        'fips': '30',
+        'postal': 'MT',
+        'name': 'Montana',
+    },
+    'RI': {
+        'fips': '44',
+        'postal': 'RI',
+        'name': 'Rhode Island',
+    },
+    'VT': {
+        'fips': '50',
+        'postal': 'VT',
+        'name': 'Vermont',
+    },
+    'WY': {
+        'fips': '56',
+        'postal': 'WY',
+        'name': 'Wyoming',
+    }
+    # Add other states as needed
+}
+
+CURRENT_STATE = 'WY'  # <-- set to the state you want to run the prototype on (must be in STATE_CONFIG)
+
+if CURRENT_STATE not in STATE_CONFIG:
+    raise RuntimeError(f"CURRENT_STATE '{CURRENT_STATE}' is not present in STATE_CONFIG")
+
+current_state_config = STATE_CONFIG[CURRENT_STATE]
+current_state_fips = current_state_config['fips']
+current_state_postal = current_state_config['postal']
 
 # --- Global file path variables (fill these before running) -----------------
 # Input sources
 NPL_GDB_PATH = "./pipeline/test_data/downloads/NPL_Boundaries_20260217/NPL_Boundaries.gdb"  # e.g. '/mnt/c/.../NPL_Boundaries.gdb'
-BG_SHP_PATH = "./pipeline/test_data/downloads/tl_2020_30_bg.zip"   # e.g. '/mnt/c/.../tl_2020_XX_bg.shp' or folder containing .shp
-BLOCKS_SHAPE_OR_CSV = "./pipeline/test_data/downloads/census_block_weights_2020_MT.csv"  # e.g. '/mnt/c/.../blocks_centroids.csv' or .shp
+BG_SHP_PATH = f"./pipeline/test_data/downloads/tl_2020_{current_state_fips}_bg.zip"   # e.g. '/mnt/c/.../tl_2020_XX_bg.shp' or folder containing .shp
+BLOCKS_SHAPE_OR_CSV = f"./pipeline/test_data/downloads/census_block_weights_2020/census_block_weights_2020_{current_state_postal}.csv"  # e.g. '/mnt/c/.../blocks_centroids.csv' or .shp
 
 # Working/output directory
-OUTPUT_DIR = "./pipeline/test_data"  # e.g. '/mnt/c/.../protoscore_output/'
+# TODO: switch to AWS S3 if we're going to make this code production worthy
+OUTPUT_DIR = f"./pipeline/test_data/{current_state_postal}/"  
 
 # Interim output filenames (placed under OUTPUT_DIR)
 TARGETED_BG_CSV = "targeted_block_groups.csv"
@@ -735,4 +768,3 @@ if __name__ == '__main__':
     # Optional: export detailed block rows for specific block-group GEOIDs
     if EXPORT_BG_LIST:
         export_result = export_block_details_for_block_groups(EXPORT_BG_LIST, blocks_path=BLOCKS_SHAPE_OR_CSV, distances_df=distances_with_scores, out_csv=None, write_csv=True)
-        logging.info('Exported detailed block rows for block-groups: %s', EXPORT_BG_LIST)

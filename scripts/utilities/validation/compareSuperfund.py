@@ -120,23 +120,30 @@ def summarize_and_plot(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compare two CSVs of weighted scores and plot a scatter with 1:1 line")
-    parser.add_argument('--file-ejam', type=str, default='./test_files/MT/ejam_superfund_subset.csv', help='Reference CSV (A)')
+    parser.add_argument('--state', type=str, default='MT', help='Two-letter postal code used to build the default test file paths')
+    parser.add_argument('--file-ejam', type=str, default=None, help='Reference CSV (A). Default: ./test_files/{STATE}/ejam_superfund_subset.csv')
     parser.add_argument('--id-ejam', type=str, default='ejam_uniq_id', help='ID column name in file A')
     parser.add_argument('--score-ejam', type=str, default='proximity.npl', help='Score column name in file A')
 
-    parser.add_argument('--file-b', type=str, default='../../superfund/pipeline/test_data/final_bg_scores.csv', help='Comparison CSV (B)')
+    parser.add_argument('--file-b', type=str, default=None, help='Comparison CSV (B). Default: ../../superfund/pipeline/test_data/{STATE}/final_bg_scores.csv')
 
     parser.add_argument('--id-b', type=str, default='block_group_geoid', help='ID column name in file B')
     parser.add_argument('--score-new', type=str, default='weighted_score', help='Score column name in file B')
 
-    parser.add_argument('--out', type=str, default='./test_files/MT/compare_ejam_superfund_subset_vs_final_bg_scores.png', help='Output PNG path')
+    parser.add_argument('--out', type=str, default=None, help='Output PNG path. Default: ./test_files/{STATE}/compare_ejam_superfund_subset_vs_final_bg_scores.png')
     parser.add_argument('--min-matched', type=int, default=5, help='Minimum matched rows required (otherwise exit non-zero)')
 
     args = parser.parse_args(argv)
 
-    path_ejam = Path(args.file_ejam)
-    path_b = Path(args.file_b)
-    out_path = Path(args.out)
+    state = args.state.upper()
+    if len(state) != 2:
+        parser.error('--state must be a two-letter postal code')
+    else:
+        print(f"Using state code: {state}")
+
+    path_ejam = Path(args.file_ejam or f'./test_files/{state}/ejam_superfund_subset.csv')
+    path_b = Path(args.file_b or f'../../superfund/pipeline/test_data/{state}/final_bg_scores.csv')
+    out_path = Path(args.out or f'./test_files/{state}/compare_ejam_superfund_subset_vs_final_bg_scores.png')
 
     # Read inputs
     try:
@@ -188,7 +195,9 @@ def main(argv: list[str] | None = None) -> int:
 
     export_df = df_sorted.copy()
     export_df['matched_id'] = '\t' + export_df['matched_id'].astype(str)
-    print(export_df.to_csv('./test_files/MT/matched_rows.csv', index=False))
+    matched_rows_path = Path(f'./test_files/{state}/matched_rows.csv')
+    matched_rows_path.parent.mkdir(parents=True, exist_ok=True)
+    print(export_df.to_csv(matched_rows_path, index=False))
 
     # Create plot and summary
     summarize_and_plot(df_joined, 'matched_id', args.score_ejam, args.score_new, out_path, title=f"Compare {args.score_ejam} vs {args.score_new}")

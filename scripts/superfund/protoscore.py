@@ -3,7 +3,7 @@
 Global input/output filenames (fill these in before running):
 - NPL_GDB_PATH: path to the NPL site boundaries geodatabase (.gdb)
 - BG_SHP_PATH: path to the Census Block Group shapefile (directory or .shp)
-- BLOCKS_SHAPE_OR_CSV: path to block centroids (point shapefile or CSV)
+- BLOCKS_CSV: path to block centroids CSV
 
 Interim outputs (written to `OUTPUT_DIR`):
 - TARGETED_BG_CSV: targeted_block_groups.csv
@@ -17,9 +17,27 @@ Fill in the empty strings below with your local/WSL paths and then run.
 # Standard imports
 import logging
 from pathlib import Path
-import geopandas as gpd
+
 import fiona
+import geopandas as gpd
 import pandas as pd
+from pyproj import CRS
+
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+NPL_LAYER_NAME = 'SITE_BOUNDARIES_SF'
+NPL_STATUS_COLUMN = 'NPL_STATUS_CODE'
+NPL_EPA_ID_COLUMN = 'EPA_ID'
+BG_GEOID_COLUMN = 'GEOID'
+BLOCKS_CSV_REQUIRED_COLUMNS = (
+    'GEOID20',
+    'INTPTLAT20',
+    'INTPTLON20',
+    'POP20',
+    'block_group_geoid',
+    'block_group_pop',
+    'fraction_of_total',
+)
 
 STATE_CONFIG = {
     # specify a metric crs (projection) only if the default EPSG:5070 is not appropriate
@@ -30,10 +48,15 @@ STATE_CONFIG = {
         'metric_crs': 'EPSG:3338'
     },
     'HI': {
-        'fips': '30',
+        'fips': '15',
         'postal': 'HI',
         'name': 'Hawaii',
-        'metric_crs': 'EPSG:4135'
+        # Note there is, apparently, no single ideal projection for all of Hawaii that uses meters as units. 
+        # The commonly used EPSG:3563 is accurate for the main islands but distorts the NW and SE islands,
+        # while the newer ESRI:102007 is designed to minimize distortion across all islands. 
+        # For this prototype, we'll use ESRI:102007, but either would be a reasonable choice for a Hawaii-specific implementation.
+        # TODO: confer with EmmaLi!! and agree on this
+        'metric_crs': 'ESRI:102007'
     },
     'MT': {
         'fips': '30',
@@ -60,21 +83,47 @@ STATE_CONFIG = {
 
 CURRENT_STATE = 'HI'  # <-- set to the state you want to run the prototype on (must be in STATE_CONFIG)
 
-if CURRENT_STATE not in STATE_CONFIG:
-    raise RuntimeError(f"CURRENT_STATE '{CURRENT_STATE}' is not present in STATE_CONFIG")
 
-current_state_config = STATE_CONFIG[CURRENT_STATE]
-current_state_fips = current_state_config['fips']
-current_state_postal = current_state_config['postal']
-current_state_crs = 'EPSG:5070'  # default projection for the continental U.S.
-if current_state_config.get('metric_crs') is not None:
-    current_state_crs = current_state_config['metric_crs']
+def _validate_metric_target_crs(metric_crs, description: str) -> CRS:
+    try:
+        target_crs = CRS.from_user_input(metric_crs)
+    except Exception as exc:
+        raise RuntimeError(f'Invalid {description}: {metric_crs}: {exc}') from exc
+
+    if not target_crs.is_projected:
+        raise RuntimeError(f'{description} must be a projected CRS in meters, got non-projected CRS: {metric_crs}')
+
+    axis_units = {axis.unit_name.lower() for axis in target_crs.axis_info if axis.unit_name}
+    if axis_units and not axis_units.issubset({'metre', 'meter'}):
+        raise RuntimeError(
+            f'{description} must use meter units, got {", ".join(sorted(axis_units))}: {metric_crs}'
+        )
+
+    return target_crs
+
+def _get_current_state_settings():
+    if CURRENT_STATE not in STATE_CONFIG:
+        raise RuntimeError(f"CURRENT_STATE '{CURRENT_STATE}' is not present in STATE_CONFIG")
+
+    state_config = STATE_CONFIG[CURRENT_STATE]
+    metric_crs = state_config.get('metric_crs') or 'EPSG:5070'
+    _validate_metric_target_crs(metric_crs, f"metric_crs for {CURRENT_STATE}")
+    logging.info(
+        'Current state: %s, %s, fips: %s, metric crs: %s',
+        state_config['name'],
+        state_config['postal'],
+        state_config['fips'],
+        metric_crs,
+    )
+    return state_config, state_config['fips'], state_config['postal'], metric_crs
+
+current_state_config, current_state_fips, current_state_postal, current_state_crs = _get_current_state_settings()
 
 # --- Global file path variables (fill these before running) -----------------
 # Input sources
 NPL_GDB_PATH = "./pipeline/test_data/downloads/NPL_Boundaries_20260217/NPL_Boundaries.gdb"  # e.g. '/mnt/c/.../NPL_Boundaries.gdb'
 BG_SHP_PATH = f"./pipeline/test_data/downloads/tl_2020_{current_state_fips}_bg.zip"   # e.g. '/mnt/c/.../tl_2020_XX_bg.shp' or folder containing .shp
-BLOCKS_SHAPE_OR_CSV = f"./pipeline/test_data/downloads/census_block_weights_2020/census_block_weights_2020_{current_state_postal}.csv"  # e.g. '/mnt/c/.../blocks_centroids.csv' or .shp
+BLOCKS_CSV = f"./pipeline/test_data/downloads/census_block_weights_2020/census_block_weights_2020_{current_state_postal}.csv"  # e.g. '/mnt/c/.../blocks_centroids.csv'
 
 # Working/output directory
 # TODO: switch to AWS S3 if we're going to make this code production worthy
@@ -89,152 +138,162 @@ FINAL_BG_SCORES_CSV = "final_bg_scores.csv"
 # Example: EXPORT_BG_LIST = ['300010001001', '300010001002']
 #EXPORT_BG_LIST = []  # <-- fill with a small list of 12-char block-group GEOIDs to auto-export after Step 4
 
-# Logging default
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+def _require_existing_path(path_value: str, path_name: str) -> Path:
+    if not path_value:
+        raise RuntimeError(f'{path_name} is not configured')
 
-def _validate_paths():
-    """Basic validation to ensure essential globals are set before running."""
-    missing = []
-    for name in ('NPL_GDB_PATH', 'BG_SHP_PATH', 'BLOCKS_SHAPE_OR_CSV', 'OUTPUT_DIR'):
-        if not globals().get(name):
-            missing.append(name)
-    if missing:
-        raise RuntimeError(f"Please set the following path variables before running: {', '.join(missing)}")
+    path = Path(path_value)
+    if not path.exists():
+        raise RuntimeError(f'{path_name} does not exist: {path}')
+    return path
 
 
-def apply_metric_projection(description,input_proj, metric_crs):
+def _require_columns(df: pd.DataFrame, required_columns: tuple[str, ...], description: str) -> None:
+    missing_columns = [column for column in required_columns if column not in df.columns]
+    if missing_columns:
+        raise RuntimeError(f'{description} is missing required columns: {", ".join(missing_columns)}')
+
+
+def _validate_output_dir() -> None:
+    if not OUTPUT_DIR:
+        raise RuntimeError('OUTPUT_DIR is not configured')
+
+
+def apply_metric_projection(description, input_proj, metric_crs):
     """Validate CRS metadata, log the reprojection, and return projected data."""
+    target_crs = _validate_metric_target_crs(metric_crs, f'target CRS for {description}')
+
     if input_proj.crs is None:
-        raise RuntimeError('Source data must have CRS defined before reprojection')
+        raise RuntimeError(f'{description} has no source CRS defined')
 
     original_crs = input_proj.crs.name or str(input_proj.crs)
     original_epsg = input_proj.crs.to_epsg()
     logging.info(
-        'PROJECTION LOG: State FIPS %s | Source CRS: %s (EPSG:%s) -> Target CRS: %s',
+        'PROJECTION LOG: %s | State FIPS %s | Source CRS: %s (EPSG:%s) -> Target CRS: %s',
+        description,
         current_state_fips,
         original_crs,
         original_epsg if original_epsg is not None else 'N/A',
-        metric_crs,
+        target_crs,
     )
-    return input_proj.to_crs(metric_crs)
-    
-def normalize_census_columns(df):
-    # Detect which year suffix is present (10 or 20)
-    # We look for a unique indicator like 'POP'
-    suffix = ""
-    if any("20" in col for col in df.columns if "POP" in col):
-        suffix = "20"
-    elif any("10" in col for col in df.columns if "POP" in col):
-        suffix = "10"
-    else:
-        # raise an error if expected columns aren't found
-        raise ValueError("Could not detect Census year suffix in columns. Expected columns like 'POP10' or 'POP20' not found.")
-        return df  # defensive return; in practice we would likely want to fail hard here
-    
-    # Map versioned names to normalized names
-    rename_map = {
-        f"GEOID{suffix}":  "block_geoid",
-        f"INTPTLAT{suffix}": "block_lat",
-        f"INTPTLON{suffix}": "block_lon",
-        f"POP{suffix}":    "block_pop",
-        f"ALAND{suffix}":  "block_aland",
-        f"AWATER{suffix}": "block_awater",
-    }
-    
-    df = df.rename(columns=rename_map)
-    # Also expose a generic 'population' column in addition to 'block_pop'
-    if 'block_pop' in df.columns and 'population' not in df.columns:
-        df['population'] = df['block_pop']
-    return df
-
-
-
-
-
-def step1_buffer_and_targeted_bgs(buffer_meters: float = 10000.0):
-    """Step 1: Buffer NPL polygons and find intersecting Block Groups.
-
-    Reads `NPL_GDB_PATH` and `BG_SHP_PATH`, reprojects both to the configured metric CRS,
-    builds a buffer around NPL site boundaries (`buffer_meters`), performs
-    a spatial join to find Block Groups intersecting those buffers, writes
-    `TARGETED_BG_CSV` under `OUTPUT_DIR`.
-    
-    Returns the resulting DataFrame.
-    """
-    _validate_paths()
-
-    logging.info("#### Starting Step1: reading NPL geodatabase: %s", NPL_GDB_PATH)
-    layers = fiona.listlayers(NPL_GDB_PATH)
-    if not layers:
-        raise RuntimeError(f"No layers found in NPL GDB: {NPL_GDB_PATH}")
-    else:
-        logging.info('NPL layers: %s', layers)
-    npl_layer = layers[3]  # SITE_BOUNDARIES_SF
-    logging.info("Going to use NPL layer: %s", npl_layer)
-    npl_gdf = gpd.read_file(NPL_GDB_PATH, layer='SITE_BOUNDARIES_SF')
-    logging.info("Before filtering, NPL columns: %d, rows: %d", len(npl_gdf.columns), len(npl_gdf))
-    npl_columns = [str(col) for col in npl_gdf.columns]
-    logging.info("NPL column names: %s", ", ".join(npl_columns))
-    
-    # Filtering for only 'Final' (F) and 'Proposed' (P) sites
-    # We assume the column name is 'NPL_STATUS'
-    npl_gdf = npl_gdf[npl_gdf['NPL_STATUS_CODE'].isin(['F', 'P'])]
-    logging.info("After filtering for active-ish NPL rows (F and P only): %d", len(npl_gdf))
-   
-    logging.info("Reading Block Group shapefile: %s", BG_SHP_PATH)
     try:
-        bg_gdf = gpd.read_file(BG_SHP_PATH)
-    except Exception:
-        logging.warning("Failed to read BG shapefile directly, attempting to read as zip archive...")
-        if str(BG_SHP_PATH).lower().endswith('.zip'):
-            bg_gdf = gpd.read_file(f"zip://{BG_SHP_PATH}")
-        else:
-            raise
-    logging.info("Block Group columns: %d, rows: %d", len(bg_gdf.columns), len(bg_gdf))
+        return input_proj.to_crs(target_crs)
+    except Exception as exc:
+        raise RuntimeError(f'Failed to reproject {description} to {target_crs}: {exc}') from exc
 
-    # Reproject input geo data to a projection appropriate for metric operations
-    target_crs = current_state_crs
-    npl_proj = apply_metric_projection('npl dataset', npl_gdf, target_crs)
-    bg_proj = apply_metric_projection('block group dataset', bg_gdf, target_crs)
 
-    # Buffer NPL polygons
+def step0_prepare_inputs() -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """Step 0: validate configured inputs and return projected GeoDataFrames."""
+    _, _, _, target_crs = _get_current_state_settings()
+
+    npl_path = _require_existing_path(NPL_GDB_PATH, 'NPL_GDB_PATH')
+    bg_path = _require_existing_path(BG_SHP_PATH, 'BG_SHP_PATH')
+    blocks_path = _require_existing_path(BLOCKS_CSV, 'BLOCKS_CSV')
+
+    if blocks_path.suffix.lower() != '.csv':
+        raise RuntimeError(f'BLOCKS_CSV must point to a CSV file: {blocks_path}')
+
+    logging.info('##############################################################')
+    logging.info('#### Starting Step0: preparing projected input datasets')
+
+    # Superfund sites on the National Priorities List (NPL)
+    try:
+        layers = fiona.listlayers(str(npl_path))
+    except Exception as exc:
+        raise RuntimeError(f'Failed to inspect NPL geodatabase at {npl_path}: {exc}') from exc
+    if NPL_LAYER_NAME not in layers:
+        raise RuntimeError(f"NPL layer '{NPL_LAYER_NAME}' not found in {npl_path}")
+
+    logging.info('Reading NPL layer: %s', NPL_LAYER_NAME)
+    try:
+        npl_gdf = gpd.read_file(str(npl_path), layer=NPL_LAYER_NAME)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to read NPL layer '{NPL_LAYER_NAME}' from {npl_path}: {exc}") from exc
+    _require_columns(npl_gdf, (NPL_STATUS_COLUMN, NPL_EPA_ID_COLUMN, 'geometry'), 'NPL layer')
+    npl_gdf = apply_metric_projection('npl dataset', npl_gdf, target_crs)
+
+    # Block group boundaries from the Census Bureau (TIGER/Line shapefile)
+    logging.info('Reading block-group dataset: %s', bg_path)
+    bg_source = f'zip://{bg_path}' if bg_path.suffix.lower() == '.zip' else str(bg_path)
+    try:
+        bg_gdf = gpd.read_file(bg_source)
+    except Exception as exc:
+        raise RuntimeError(f'Failed to read block-group data from {bg_path}: {exc}') from exc
+    _require_columns(bg_gdf, (BG_GEOID_COLUMN, 'geometry'), 'block-group data')
+    bg_gdf = apply_metric_projection('block-group dataset', bg_gdf, target_crs)
+
+    # Census blocks centroids CSV with population weights (prepared from raw Census sources)
+    logging.info('Reading blocks CSV: %s', blocks_path)
+    try:
+        blocks_df = pd.read_csv(blocks_path, dtype=str)
+    except Exception as exc:
+        raise RuntimeError(f'Failed to read blocks CSV from {blocks_path}: {exc}') from exc
+    _require_columns(blocks_df, BLOCKS_CSV_REQUIRED_COLUMNS, 'blocks CSV')
+
+    blocks_df = blocks_df.copy()
+    blocks_df['block_geoid'] = blocks_df['GEOID20'].astype(str).str.strip()
+    blocks_df['block_group_geoid'] = blocks_df['block_group_geoid'].astype(str).str.strip()
+    if blocks_df['block_geoid'].eq('').any():
+        raise RuntimeError('Blocks CSV contains blank GEOID20 values')
+    if blocks_df['block_group_geoid'].eq('').any():
+        raise RuntimeError('Blocks CSV contains blank block_group_geoid values')
+
+    try:
+        blocks_df['block_lat'] = pd.to_numeric(blocks_df['INTPTLAT20'], errors='raise')
+        blocks_df['block_lon'] = pd.to_numeric(blocks_df['INTPTLON20'], errors='raise')
+        blocks_df['block_pop'] = pd.to_numeric(blocks_df['POP20'], errors='raise')
+        blocks_df['block_group_pop'] = pd.to_numeric(blocks_df['block_group_pop'], errors='raise')
+        blocks_df['fraction_of_total'] = pd.to_numeric(blocks_df['fraction_of_total'], errors='raise')
+    except Exception as exc:
+        raise RuntimeError(f'Blocks CSV contains invalid numeric values: {exc}') from exc
+
+    blocks_gdf = gpd.GeoDataFrame(
+        blocks_df,
+        geometry=gpd.points_from_xy(blocks_df['block_lon'], blocks_df['block_lat']),
+        crs='EPSG:4326',
+    )
+    blocks_gdf = apply_metric_projection('blocks dataset', blocks_gdf, target_crs)
+
+    return npl_gdf, bg_gdf, blocks_gdf
+
+
+
+
+
+def step1_buffer_and_targeted_bgs(
+    npl_gdf: gpd.GeoDataFrame,
+    bg_gdf: gpd.GeoDataFrame,
+    buffer_meters: float = 10000.0,
+) -> pd.DataFrame:
+    """Step 1: Buffer projected NPL polygons and find intersecting Block Groups."""
+    if npl_gdf is None:
+        raise RuntimeError('npl_gdf is required')
+    if bg_gdf is None:
+        raise RuntimeError('bg_gdf is required')
+
+    _validate_output_dir()
+    _require_columns(npl_gdf, (NPL_STATUS_COLUMN, NPL_EPA_ID_COLUMN, 'geometry'), 'NPL GeoDataFrame')
+    _require_columns(bg_gdf, (BG_GEOID_COLUMN, 'geometry'), 'Block-group GeoDataFrame')
+
+    logging.info('#### Starting Step1: buffering projected NPL polygons and targeting block groups')
+    logging.info('NPL columns: %d, rows: %d', len(npl_gdf.columns), len(npl_gdf))
+    logging.info('Block Group columns: %d, rows: %d', len(bg_gdf.columns), len(bg_gdf))
+
+    npl_active_gdf = npl_gdf[npl_gdf[NPL_STATUS_COLUMN].isin(['F', 'P'])].copy()
+    logging.info('After filtering for active-ish NPL rows (F and P only): %d', len(npl_active_gdf))
+
     logging.info('Buffering NPL polygons by %s meters', buffer_meters)
-    npl_proj['geometry_buffer'] = npl_proj.geometry.buffer(buffer_meters)
-    npl_buffer = npl_proj.set_geometry('geometry_buffer')
+    npl_active_gdf['geometry_buffer'] = npl_active_gdf.geometry.buffer(buffer_meters)
+    npl_buffer = npl_active_gdf.set_geometry('geometry_buffer')
 
-    # Spatial join: block groups that intersect any buffered NPL polygon
     logging.info('Performing spatial join to find targeted block groups')
-    joined = gpd.sjoin(bg_proj, npl_buffer, how='inner', predicate='intersects')
+    joined = gpd.sjoin(bg_gdf, npl_buffer, how='inner', predicate='intersects')
     if joined.empty:
         logging.info('No block groups found within buffer distance')
         return pd.DataFrame()
 
-    # TODO: simplify to known column name
-    # Determine a GEOID column in block groups
-    geoid_candidates = ['GEOID', 'GEOID20', 'GEOID_BG', 'GEOID_BG20', 'geoid']
-    geoid_col = next((c for c in geoid_candidates if c in joined.columns), None)
-    if geoid_col is None:
-        # pick the first object column with length >=12
-        for c in joined.columns:
-            if joined[c].dtype == object and joined[c].astype(str).str.len().max() >= 12:
-                geoid_col = c
-                break
-    if geoid_col is None:
-        raise RuntimeError('Could not determine block-group GEOID column')
-
-    # TODO: simplify to known column name
-    # Determine EPA ID column from NPL layer
-    epa_candidates = ['EPA ID', 'EPA_ID', 'EPAID', 'SITE_ID', 'SITEID']
-    epa_col = next((c for c in npl_proj.columns if c in epa_candidates), None)
-    if epa_col is None:
-        epa_col = next((c for c in npl_proj.columns if 'epa' in c.lower() or 'site' in c.lower()), None)
-    if epa_col is None:
-        # fallback to index
-        epa_col = npl_proj.index.name or 'npl_index'
-        npl_proj = npl_proj.reset_index().rename(columns={'index': epa_col})
-
-    targeted = joined[[geoid_col, epa_col]].drop_duplicates().copy()
-    targeted = targeted.rename(columns={geoid_col: 'GEOID_BG', epa_col: 'EPA_ID'})
+    targeted = joined[[BG_GEOID_COLUMN, NPL_EPA_ID_COLUMN]].drop_duplicates().copy()
+    targeted = targeted.rename(columns={BG_GEOID_COLUMN: 'GEOID_BG', NPL_EPA_ID_COLUMN: 'EPA_ID'})
     # Keep EPA_ID values as provided (exact match on `EPA_ID` column)
     targeted['EPA_ID'] = targeted['EPA_ID'].astype(str).str.strip()
 
@@ -246,98 +305,45 @@ def step1_buffer_and_targeted_bgs(buffer_meters: float = 10000.0):
     return targeted
 
 
-def step2_block_site_distances(targeted_df: pd.DataFrame = None, npl_layer: str = 'SITE_BOUNDARIES_SF') -> pd.DataFrame:
-    """Step 2: For blocks inside targeted block groups, compute distance to each NPL polygon.
+def step2_block_site_distances(
+    targeted_df: pd.DataFrame,
+    blocks_gdf: gpd.GeoDataFrame,
+    npl_gdf: gpd.GeoDataFrame,
+) -> pd.DataFrame:
+    """Step 2: For blocks inside targeted block groups, compute distance to each NPL polygon."""
+    if targeted_df is None:
+        raise RuntimeError('targeted_df is required')
+    if blocks_gdf is None:
+        raise RuntimeError('blocks_gdf is required')
+    if npl_gdf is None:
+        raise RuntimeError('npl_gdf is required')
 
-    Workflow:
-      - Read (or accept) `targeted_df` containing `GEOID_BG` and `EPA_ID` (from step1).
-      - Read block centroids from `BLOCKS_SHAPE_OR_CSV` (CSV or shapefile) and normalize column names.
-      - Keep only blocks where `block_geoid`'s first 12 chars are in targeted GEOIDs.
-      - Read NPL polygon layer `npl_layer` and detect the column that contains the EPA IDs present in `targeted_df`.
-    - For each (GEOID_BG, EPA_ID) pair, compute the shortest distance from each block centroid in that BG to the polygon boundary (meters).
-    - Write `BLOCK_SITE_DISTANCES_CSV` with columns: `GEOID_BLOCK`, `EPA_ID`, `distance_m`.
-
-    Returns the produced DataFrame.
-    """
-    _validate_paths()
+    _require_columns(targeted_df, ('GEOID_BG', 'EPA_ID'), 'targeted_df')
+    _require_columns(blocks_gdf, ('block_geoid', 'block_group_geoid', 'geometry'), 'Blocks GeoDataFrame')
+    _require_columns(npl_gdf, (NPL_EPA_ID_COLUMN, 'geometry'), 'NPL GeoDataFrame')
+    if blocks_gdf.crs is None or npl_gdf.crs is None:
+        raise RuntimeError('Projected inputs must have CRS defined before distance calculations')
+    if blocks_gdf.crs != npl_gdf.crs:
+        raise RuntimeError(f'Blocks and NPL inputs must share the same projected CRS: blocks={blocks_gdf.crs}, npl={npl_gdf.crs}')
 
     logging.info("##############################################################")
     logging.info("#### Starting Step2: computing block-site distances")
 
-    # Load targeted pairs if not provided
-    if targeted_df is None:
-        tgt_path = Path(OUTPUT_DIR) / TARGETED_BG_CSV
-        if not tgt_path.exists():
-            raise RuntimeError(f"Targeted BG CSV not found at {tgt_path}; run step1 first or provide targeted_df")
-        targeted_df = pd.read_csv(tgt_path, dtype=str)
     # Use EPA_ID values as provided (strip whitespace only)
+    targeted_df = targeted_df.copy()
     targeted_df['EPA_ID'] = targeted_df['EPA_ID'].astype(str).str.strip()
-    # Prepare a set of targeted EPA IDs (kept for reference)
-    t_ids = set(targeted_df['EPA_ID'].unique())
-
-    # Read block centroids (CSV or shapefile)
-    blk_path = Path(BLOCKS_SHAPE_OR_CSV)
-    logging.info('Reading block centroids: %s', blk_path)
-    if blk_path.suffix.lower() in ('.csv', '.txt'):
-        df_blocks = pd.read_csv(blk_path, dtype=str)
-        # attempt to normalize census columns if they match census naming
-        try:
-            df_blocks = normalize_census_columns(df_blocks)
-        except Exception:
-            # If normalization fails, continue — user may have already normalized
-            pass
-
-        # require block_geoid and coordinates
-        if not {'block_geoid', 'block_lat', 'block_lon'}.issubset(df_blocks.columns):
-            raise RuntimeError('Block CSV must contain block_geoid, block_lat, block_lon (or be normalizable)')
-
-        # build GeoDataFrame in WGS84 then project
-        gdf_blocks = gpd.GeoDataFrame(
-            df_blocks.copy(),
-            geometry=gpd.points_from_xy(df_blocks['block_lon'].astype(float), df_blocks['block_lat'].astype(float)),
-            crs='EPSG:4326'
-        )
-    else:
-        # shapefile or other vector format
-        gdf_blocks = gpd.read_file(str(blk_path))
-        # try to normalize column names if needed
-        try:
-            gdf_blocks = normalize_census_columns(gdf_blocks)
-        except Exception:
-            pass
-        if 'block_geoid' not in gdf_blocks.columns:
-            raise RuntimeError('Block shapefile must have block_geoid (or be normalizable)')
-
-    # create block_group_geoid and filter to targeted BGs
-    gdf_blocks['block_group_geoid'] = gdf_blocks['block_geoid'].astype(str).str[:12]
     target_bgs = set(targeted_df['GEOID_BG'].astype(str).unique())
-    gdf_blocks_sub = gdf_blocks[gdf_blocks['block_group_geoid'].isin(target_bgs)].copy()
-    logging.info('Blocks in targeted block groups: %d (of %d)', len(gdf_blocks_sub), len(gdf_blocks))
+    gdf_blocks_sub = blocks_gdf[blocks_gdf['block_group_geoid'].astype(str).isin(target_bgs)].copy()
+    logging.info('Blocks in targeted block groups: %d (of %d)', len(gdf_blocks_sub), len(blocks_gdf))
 
     if gdf_blocks_sub.empty:
         logging.info('No blocks found in targeted block groups; nothing to do for Step 2')
         return pd.DataFrame()
 
-    # project blocks to metric CRS
-    target_crs = current_state_crs
-    gdf_blocks_sub = apply_metric_projection(gdf_blocks_sub, target_crs)
-
-    # Read NPL polygon layer and reproject
-    logging.info('Reading NPL polygon layer: %s', npl_layer)
-    npl_gdf = gpd.read_file(NPL_GDB_PATH, layer=npl_layer)
-    npl_gdf = apply_metric_projection(npl_gdf, target_crs)
-
-    # Use the known exact column name `EPA_ID` in the NPL data; fail fast if absent
-    if 'EPA_ID' not in npl_gdf.columns:
-        raise RuntimeError("Expected 'EPA_ID' column in NPL data (not found)")
-    epa_col = 'EPA_ID'
-    logging.info('Using NPL EPA ID column: %s', epa_col)
-
-    # Normalize function for EPA IDs (remove trailing .0, strip, lowercase)
-    # Build a mapping from EPA_ID (as-is) -> polygon geometry
-    npl_gdf['EPA_ID_STR'] = npl_gdf[epa_col].astype(str).str.strip()
-    npl_map = {row['EPA_ID_STR']: row.geometry for _, row in npl_gdf.iterrows()}
-    logging.info('NPL EPA keys (normalized): %d', len(npl_map))
+    npl_lookup = npl_gdf[[NPL_EPA_ID_COLUMN, 'geometry']].copy()
+    npl_lookup[NPL_EPA_ID_COLUMN] = npl_lookup[NPL_EPA_ID_COLUMN].astype(str).str.strip()
+    npl_map = {row[NPL_EPA_ID_COLUMN]: row.geometry for _, row in npl_lookup.iterrows()}
+    logging.info('NPL EPA keys: %d', len(npl_map))
 
     # For each targeted pair (BG, EPA_ID), compute distances for all blocks in that BG
     records = []
@@ -390,7 +396,7 @@ def step2_block_site_distances(targeted_df: pd.DataFrame = None, npl_layer: str 
     return df_out
 
 
-def step3_inverse_distance_scoring(distances_df: pd.DataFrame = None, write_csv: bool = True) -> pd.DataFrame:
+def step3_inverse_distance_scoring(distances_df: pd.DataFrame, write_csv: bool = True) -> pd.DataFrame:
     """Step 3: Convert distance (meters) to inverse-distance proximity score.
 
     - Proximity score = 1 / distance_in_km (distance_km = distance_m / 1000).
@@ -399,18 +405,14 @@ def step3_inverse_distance_scoring(distances_df: pd.DataFrame = None, write_csv:
     - When `write_csv` is True, writes `BLOCK_SITE_DISTANCES_CSV` under `OUTPUT_DIR`
       with the proximity score as the last column.
     """
-    _validate_paths()
-
     if distances_df is None:
-        # Try to load distances produced by Step 2
-        path = Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV
-        if not path.exists():
-            raise RuntimeError('No distances DataFrame provided and distances CSV not found; run step2 first')
-        distances_df = pd.read_csv(path, dtype={})
+        raise RuntimeError('distances_df is required')
 
     # Ensure expected column exists
     if 'distance_m' not in distances_df.columns:
         raise RuntimeError("Expected 'distance_m' column in distances DataFrame")
+
+    distances_df = distances_df.copy()
 
     def calculate_proximity_score(d):
         try:
@@ -421,7 +423,7 @@ def step3_inverse_distance_scoring(distances_df: pd.DataFrame = None, write_csv:
             return None
         # distance in meters -> convert to km
         km = d / 1000.0
-                # proximity score is inverse of distance in km
+        # proximity score is inverse of distance in km
         if km < 0.1:
             return 11.0
 
@@ -432,6 +434,7 @@ def step3_inverse_distance_scoring(distances_df: pd.DataFrame = None, write_csv:
     distances_df['proximity_score'] = distances_df['distance_m'].apply(calculate_proximity_score)
 
     if write_csv:
+        _validate_output_dir()
         out_path = Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV
         out_path.parent.mkdir(parents=True, exist_ok=True)
         # Ensure proximity_score is last column in output — reorder if necessary
@@ -442,92 +445,51 @@ def step3_inverse_distance_scoring(distances_df: pd.DataFrame = None, write_csv:
     return distances_df
 
 
-def export_block_details_for_block_groups(block_group_geoids, blocks_path: str = None, distances_df: pd.DataFrame = None, out_csv: str = None, write_csv: bool = True) -> pd.DataFrame:
+def export_block_details_for_block_groups(
+    block_group_geoids,
+    blocks_gdf: gpd.GeoDataFrame,
+    distances_df: pd.DataFrame,
+    out_csv: str = None,
+    write_csv: bool = True,
+) -> pd.DataFrame:
     """Export detailed per-block rows for the provided block-group GEOIDs.
 
     - block_group_geoids: iterable of block-group GEOID strings (12-char strings expected).
-    - blocks_path: optional path to blocks CSV/shapefile; defaults to BLOCKS_SHAPE_OR_CSV.
-    - distances_df: optional DataFrame from Step 2/3; defaults to OUTPUT_DIR/BLOCK_SITE_DISTANCES_CSV.
+    - blocks_gdf: prepared GeoDataFrame from Step 0.
+    - distances_df: DataFrame from Step 2 or Step 3.
     - out_csv: optional output filename; defaults to OUTPUT_DIR/detailed_blocks_for_bgs.csv.
-
-    The output contains the columns used during final aggregation including:
-    block_geoid, block_group_geoid, block_pop, fraction_of_total,
-    GEOID_BLOCK, EPA_ID, distance_m, proximity_score, weighted_score
-
-    Behavior for missing values:
-    - If `fraction_of_total` is missing but `block_pop` is present, it is computed as
-      block_pop / sum(block_pop in that block group). If the group sum is 0, fraction_of_total
-      is set to 0 for the group's blocks and a warning is logged.
-    - Blocks without any distance/proximity rows are kept (distance/proximity NaN).
     """
-    _validate_paths()
+    if blocks_gdf is None:
+        raise RuntimeError('blocks_gdf is required')
+    if distances_df is None:
+        raise RuntimeError('distances_df is required')
 
     # Normalize and validate block_group_geoids
     if not block_group_geoids:
         raise RuntimeError('Please supply one or more block-group GEOIDs to export')
     bg_set = set(str(g).strip() for g in block_group_geoids)
 
-    # Load distances_df if not provided
-    if distances_df is None:
-        dpath = Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV
-        if not dpath.exists():
-            raise RuntimeError(f"Distances CSV not found at {dpath}; run step2/step3 first or provide distances_df")
-        distances_df = pd.read_csv(dpath, dtype=str)
+    distances_df = distances_df.copy()
 
     # Ensure expected distance columns exist (or will be added)
     # Cast numeric columns where appropriate
+    _require_columns(distances_df, ('GEOID_BLOCK',), 'distances_df')
     for col in ('distance_m', 'proximity_score'):
         if col in distances_df.columns:
             distances_df[col] = pd.to_numeric(distances_df[col], errors='coerce')
-    # Ensure GEOID_BLOCK exists for join
-    if 'GEOID_BLOCK' not in distances_df.columns:
-        # try to find a GEOID-like column and rename it for join
-        geo_candidate = next((c for c in distances_df.columns if c.upper().startswith('GEOID')), None)
-        if geo_candidate:
-            distances_df = distances_df.rename(columns={geo_candidate: 'GEOID_BLOCK'})
-        else:
-            raise RuntimeError("Could not find 'GEOID_BLOCK' column in distances data")
+    if 'proximity_score' not in distances_df.columns:
+        distances_df['proximity_score'] = pd.NA
 
-    # Read blocks data
-    blk_path = Path(blocks_path) if blocks_path else Path(BLOCKS_SHAPE_OR_CSV)
-    logging.info('Reading blocks data for export: %s', blk_path)
-    if blk_path.suffix.lower() in ('.csv', '.txt') or not blk_path.exists():
-        df_blocks = pd.read_csv(blk_path, dtype=str)
-    else:
-        gdf_blocks = gpd.read_file(str(blk_path))
-        df_blocks = pd.DataFrame(gdf_blocks.drop(columns=[c for c in gdf_blocks.columns if c == 'geometry']))
-
-    # Normalize census-like columns
-    try:
-        df_blocks = normalize_census_columns(df_blocks)
-    except Exception:
-        # Normalization optional; continue even if it fails
-        pass
-
-    # Ensure block_geoid exists
-    if 'block_geoid' not in df_blocks.columns:
-        geoid_col = next((c for c in df_blocks.columns if c.upper().startswith('GEOID')), None)
-        if geoid_col is None:
-            raise RuntimeError('Could not find block GEOID column in blocks data')
-        df_blocks = df_blocks.rename(columns={geoid_col: 'block_geoid'})
-
-    # Ensure block_group_geoid exists
-    if 'block_group_geoid' not in df_blocks.columns:
-        df_blocks['block_group_geoid'] = df_blocks['block_geoid'].astype(str).str[:12]
-
-    # Coerce block_geoid / group to strings
+    df_blocks = pd.DataFrame(blocks_gdf.drop(columns='geometry', errors='ignore')).copy()
+    _require_columns(
+        df_blocks,
+        ('block_geoid', 'block_group_geoid', 'block_group_pop', 'block_pop', 'fraction_of_total'),
+        'Blocks GeoDataFrame',
+    )
     df_blocks['block_geoid'] = df_blocks['block_geoid'].astype(str).str.strip()
     df_blocks['block_group_geoid'] = df_blocks['block_group_geoid'].astype(str).str.strip()
-
-    # If there is a generic 'population' column, make sure 'block_pop' exists too
-    if 'block_pop' not in df_blocks.columns and 'population' in df_blocks.columns:
-        df_blocks['block_pop'] = df_blocks['population']
-
-    # Detect or normalize block_group_pop column (prefer explicit column if present)
-    if 'block_group_pop' not in df_blocks.columns:
-        bgpop_candidate = next((c for c in df_blocks.columns if 'group' in c.lower() and 'pop' in c.lower()), None)
-        if bgpop_candidate:
-            df_blocks = df_blocks.rename(columns={bgpop_candidate: 'block_group_pop'})
+    for col in ('block_group_pop', 'block_pop', 'fraction_of_total'):
+        df_blocks[col] = pd.to_numeric(df_blocks[col], errors='raise')
 
     # Filter to requested block groups
     df_sel = df_blocks[df_blocks['block_group_geoid'].isin(bg_set)].copy()
@@ -539,39 +501,6 @@ def export_block_details_for_block_groups(block_group_geoids, blocks_path: str =
         logging.info('No blocks found for requested block-groups; returning empty DataFrame')
         cols = ['block_group_geoid', 'block_geoid', 'block_group_pop', 'block_pop', 'fraction_of_total', 'EPA_ID', 'distance_m', 'proximity_score', 'weighted_score']
         return pd.DataFrame(columns=cols)
-
-    # Ensure block_pop or fraction_of_total present
-    if 'fraction_of_total' not in df_sel.columns:
-        if 'block_pop' in df_sel.columns:
-            # Prefer using block_group_pop column (provided in BLOCKS_SHAPE_OR_CSV) to compute fraction
-            if 'block_group_pop' in df_sel.columns:
-                # coerce numerics
-                df_sel['block_pop'] = pd.to_numeric(df_sel['block_pop'], errors='coerce').fillna(0.0)
-                df_sel['block_group_pop'] = pd.to_numeric(df_sel['block_group_pop'], errors='coerce').fillna(0.0)
-                # Use group-wise block_group_pop (in many sources block_group_pop is repeated per block)
-                bg_pop = df_sel.groupby('block_group_geoid', dropna=False)['block_group_pop'].transform('first')
-                zero_mask = bg_pop == 0
-                if zero_mask.any():
-                    zero_groups = df_sel.loc[zero_mask, 'block_group_geoid'].unique().tolist()
-                    logging.warning('Some block-groups have block_group_pop == 0; fraction_of_total set to 0 for those groups: %s', zero_groups)
-                df_sel['fraction_of_total'] = df_sel['block_pop'] / bg_pop.replace({0: pd.NA})
-                df_sel['fraction_of_total'] = df_sel['fraction_of_total'].fillna(0.0)
-            else:
-                # Fallback: compute fraction from block_pop / sum(block_pop) per group (not preferred)
-                logging.warning('block_group_pop not found in blocks data; falling back to summing block_pop to compute fraction')
-                df_sel['block_pop'] = pd.to_numeric(df_sel['block_pop'], errors='coerce').fillna(0.0)
-                grp_sum = df_sel.groupby('block_group_geoid', dropna=False)['block_pop'].transform('sum')
-                zero_mask = grp_sum == 0
-                if zero_mask.any():
-                    zero_groups = df_sel.loc[zero_mask, 'block_group_geoid'].unique().tolist()
-                    logging.warning('Some block-groups have total population 0; fraction_of_total set to 0 for those groups: %s', zero_groups)
-                df_sel['fraction_of_total'] = df_sel['block_pop'] / grp_sum.replace({0: pd.NA})
-                df_sel['fraction_of_total'] = df_sel['fraction_of_total'].fillna(0.0)
-        else:
-            raise RuntimeError('Blocks data lacks both fraction_of_total and block_pop; cannot compute weights')
-    else:
-        # coerce fraction to numeric
-        df_sel['fraction_of_total'] = pd.to_numeric(df_sel['fraction_of_total'], errors='coerce').fillna(0.0)
 
     # Left join blocks to distances so zero-pop blocks without distances are kept
     merged = df_sel.merge(distances_df, left_on='block_geoid', right_on='GEOID_BLOCK', how='left', suffixes=('', '_dist'))
@@ -608,6 +537,7 @@ def export_block_details_for_block_groups(block_group_geoids, blocks_path: str =
 
     # Write CSV if requested
     if write_csv:
+        _validate_output_dir()
         out_path = Path(out_csv) if out_csv else Path(OUTPUT_DIR) / 'detailed_blocks_for_bgs.csv'
         out_path.parent.mkdir(parents=True, exist_ok=True)
         logging.info('Writing detailed block rows for %d block-groups to %s (rows=%d)', len(bg_set), out_path, len(result))
@@ -616,27 +546,25 @@ def export_block_details_for_block_groups(block_group_geoids, blocks_path: str =
     return result
 
 
-def step4_population_weighting_aggregation(distances_with_scores_df: pd.DataFrame = None, blocks_path: str = None, write_csv: bool = True) -> pd.DataFrame:
+def step4_population_weighting_aggregation(
+    distances_with_scores_df: pd.DataFrame,
+    blocks_gdf: gpd.GeoDataFrame,
+    write_csv: bool = True,
+) -> pd.DataFrame:
     """Step 4: Weight block proximity scores by population fraction and aggregate to Block Group.
 
-    - Reads `distances_with_scores_df` (or loads from `BLOCK_SITE_DISTANCES_CSV`).
-    - Loads block-level population weights from `blocks_path` (or `BLOCKS_SHAPE_OR_CSV`).
     - Joins on block GEOID, multiplies `proximity_score` by population weight (fraction_of_total),
         then sums weighted scores per block group (summing across EPA sites as well).
     - Writes `FINAL_BG_SCORES_CSV` under `OUTPUT_DIR` with columns: `block_group_geoid`,
         `weighted_score`, where `weighted_score` is rounded to 4 decimal places after
         block-level scores have been summed to the block-group level.
-    - Final output includes every valid block group present in `BLOCKS_SHAPE_OR_CSV`;
+    - Final output includes every valid block group present in the prepared blocks GeoDataFrame;
         block groups that never appear in the targeted scoring path receive `weighted_score = 0`.
     """
-    _validate_paths()
-
-    # Load distances with scores
     if distances_with_scores_df is None:
-        path = Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV
-        if not path.exists():
-            raise RuntimeError('No distances DataFrame provided and distances CSV not found; run step3 first')
-        distances_with_scores_df = pd.read_csv(path, dtype=str)
+        raise RuntimeError('distances_with_scores_df is required')
+    if blocks_gdf is None:
+        raise RuntimeError('blocks_gdf is required')
 
     # Ensure required columns
     if 'GEOID_BLOCK' not in distances_with_scores_df.columns:
@@ -644,82 +572,17 @@ def step4_population_weighting_aggregation(distances_with_scores_df: pd.DataFram
     if 'proximity_score' not in distances_with_scores_df.columns:
         raise RuntimeError("Expected 'proximity_score' column in distances DataFrame")
 
+    blocks_df = pd.DataFrame(blocks_gdf.drop(columns='geometry', errors='ignore')).copy()
+    _require_columns(blocks_df, ('block_geoid', 'block_group_geoid', 'fraction_of_total'), 'Blocks GeoDataFrame')
+
     # Coerce proximity_score to numeric (could contain None/empty)
+    distances_with_scores_df = distances_with_scores_df.copy()
     distances_with_scores_df['proximity_score'] = pd.to_numeric(distances_with_scores_df['proximity_score'], errors='coerce')
 
-    # Load block population weights
-    blk_path = blocks_path or BLOCKS_SHAPE_OR_CSV
-    if blk_path is None:
-        raise RuntimeError('No blocks_path provided and BLOCKS_SHAPE_OR_CSV is unset')
+    blocks_df['fraction_of_total'] = pd.to_numeric(blocks_df['fraction_of_total'], errors='raise')
+    blocks_df['block_group_geoid'] = blocks_df['block_group_geoid'].astype('string').str.strip()
 
-    blk_p = Path(blk_path)
-    logging.info('Reading block population/weight data: %s', blk_p)
-    if blk_p.suffix.lower() in ('.csv', '.txt') or not blk_p.exists():
-        # read as CSV (many test files are CSV)
-        df_blocks = pd.read_csv(blk_p, dtype=str)
-        try:
-            df_blocks = normalize_census_columns(df_blocks)
-        except Exception:
-            pass
-    else:
-        # try vector file
-        gdf_blocks = gpd.read_file(str(blk_p))
-        try:
-            gdf_blocks = normalize_census_columns(gdf_blocks)
-        except Exception:
-            pass
-        df_blocks = pd.DataFrame(gdf_blocks.drop(columns=[c for c in gdf_blocks.columns if c == 'geometry']))
-
-    # Identify or compute population fraction (weight)
-    weight_col = None
-    if 'fraction_of_total' in df_blocks.columns:
-        df_blocks['fraction_of_total'] = pd.to_numeric(df_blocks['fraction_of_total'], errors='coerce')
-        weight_col = 'fraction_of_total'
-    else:
-        # Prefer computing fraction from block_pop / block_group_pop (do NOT sum block_pop to get group pop)
-        # Ensure block_pop exists (or population)
-        if 'block_pop' not in df_blocks.columns and 'population' in df_blocks.columns:
-            df_blocks['block_pop'] = df_blocks['population']
-        # Detect or normalize block_group_pop column if present
-        if 'block_group_pop' not in df_blocks.columns:
-            bgpop_candidate = next((c for c in df_blocks.columns if 'group' in c.lower() and 'pop' in c.lower()), None)
-            if bgpop_candidate:
-                df_blocks = df_blocks.rename(columns={bgpop_candidate: 'block_group_pop'})
-        if 'block_pop' in df_blocks.columns and 'block_group_pop' in df_blocks.columns:
-            # coerce numerics
-            df_blocks['block_pop'] = pd.to_numeric(df_blocks['block_pop'], errors='coerce').fillna(0.0)
-            df_blocks['block_group_pop'] = pd.to_numeric(df_blocks['block_group_pop'], errors='coerce').fillna(0.0)
-            # Ensure block_group_geoid exists
-            if 'block_group_geoid' not in df_blocks.columns:
-                df_blocks['block_group_geoid'] = df_blocks['block_geoid'].astype(str).str[:12]
-            # Use the group's block_group_pop (often repeated per block); take first per group
-            bg_pop = df_blocks.groupby('block_group_geoid', dropna=False)['block_group_pop'].transform('first')
-            zero_mask = bg_pop == 0
-            if zero_mask.any():
-                zero_groups = df_blocks.loc[zero_mask, 'block_group_geoid'].unique().tolist()
-                logging.warning('Some block-groups have block_group_pop == 0; fraction_of_total set to 0 for those groups: %s', zero_groups)
-            df_blocks['fraction_of_total'] = df_blocks['block_pop'] / bg_pop.replace({0: pd.NA})
-            df_blocks['fraction_of_total'] = df_blocks['fraction_of_total'].fillna(0.0)
-            weight_col = 'fraction_of_total'
-        else:
-            raise RuntimeError('Population fraction column not found and block_group_pop not present. Please provide `fraction_of_total` or include `block_group_pop` in BLOCKS_SHAPE_OR_CSV (we will not compute block-group pop by summing block_pop).')
-
-    if weight_col is None:
-        raise RuntimeError('Could not find or compute population weight for blocks (expected column `fraction_of_total` or `block_pop`/`block_group_pop`)')
-
-    # Ensure block geoid column exists
-    if 'block_geoid' not in df_blocks.columns:
-        # try GEOID-like columns
-        geoid_col = next((c for c in df_blocks.columns if c.upper().startswith('GEOID')), None)
-        if geoid_col is None:
-            raise RuntimeError('Could not find block GEOID column in blocks data')
-        df_blocks = df_blocks.rename(columns={geoid_col: 'block_geoid'})
-
-    # Ensure block group geoid exists (for final grouping/output universe)
-    if 'block_group_geoid' not in df_blocks.columns:
-        df_blocks['block_group_geoid'] = df_blocks['block_geoid'].astype(str).str[:12]
-
-    all_block_groups = df_blocks[['block_group_geoid']].copy()
+    all_block_groups = blocks_df[['block_group_geoid']].copy()
     all_block_groups['block_group_geoid'] = all_block_groups['block_group_geoid'].astype('string').str.strip()
     all_block_groups = all_block_groups[
         all_block_groups['block_group_geoid'].notna() &
@@ -728,16 +591,21 @@ def step4_population_weighting_aggregation(distances_with_scores_df: pd.DataFram
     logging.info('Prepared %d block groups from blocks source for final output universe', len(all_block_groups))
 
     # Merge targeted distance rows with block weights
-    merged = distances_with_scores_df.merge(df_blocks[['block_geoid', 'block_group_geoid', weight_col]], left_on='GEOID_BLOCK', right_on='block_geoid', how='left')
+    merged = distances_with_scores_df.merge(
+        blocks_df[['block_geoid', 'block_group_geoid', 'fraction_of_total']],
+        left_on='GEOID_BLOCK',
+        right_on='block_geoid',
+        how='left',
+    )
 
     # Drop records without a proximity score
     merged = merged[merged['proximity_score'].notna()].copy()
 
     # Coerce weight to numeric and fill missing weights with 0
-    merged[weight_col] = pd.to_numeric(merged[weight_col], errors='coerce').fillna(0.0)
+    merged['fraction_of_total'] = pd.to_numeric(merged['fraction_of_total'], errors='coerce').fillna(0.0)
 
     # Compute weighted score per record
-    merged['weighted_score'] = merged['proximity_score'].astype(float) * merged[weight_col].astype(float)
+    merged['weighted_score'] = merged['proximity_score'].astype(float) * merged['fraction_of_total'].astype(float)
 
     # Aggregate to block group: sum weighted_score (this naturally sums across multiple EPA sites)
     agg_targeted = merged.groupby('block_group_geoid', dropna=True)['weighted_score'].sum().reset_index()
@@ -748,6 +616,7 @@ def step4_population_weighting_aggregation(distances_with_scores_df: pd.DataFram
     agg['weighted_score'] = agg['weighted_score'].fillna(0.0)
 
     if write_csv:
+        _validate_output_dir()
         out_path = Path(OUTPUT_DIR) / FINAL_BG_SCORES_CSV
         out_path.parent.mkdir(parents=True, exist_ok=True)
         logging.info(
@@ -763,17 +632,12 @@ def step4_population_weighting_aggregation(distances_with_scores_df: pd.DataFram
 
 
 if __name__ == '__main__':
-    logging.info('protoscore prototype loaded — fill globals and import/run functions interactively')
-    # Do not run any processing by default; this file is scaffolded for interactive use.
-    try:
-        _validate_paths()
-    except RuntimeError as e:
-        logging.info(str(e))
-    else:
-        logging.info('All path variables set — implement and call processing functions as needed')
+    logging.info('Running Step 0 input preparation')
+
+    npl_gdf, bg_gdf, blocks_gdf = step0_prepare_inputs()
 
     # Step 1: Buffer NPL sites and find intersecting block groups
-    targeted = step1_buffer_and_targeted_bgs()
+    targeted = step1_buffer_and_targeted_bgs(npl_gdf=npl_gdf, bg_gdf=bg_gdf)
 
     # Sanity checks
     logging.info('Sample EPA_IDS (first 20): %s', targeted['EPA_ID'].astype(str).head(20).tolist())
@@ -781,16 +645,16 @@ if __name__ == '__main__':
 
 
     # Step 2: For blocks in targeted block groups, compute distance to each NPL polygon
-    distances = step2_block_site_distances(targeted_df=targeted)
+    distances = step2_block_site_distances(targeted_df=targeted, blocks_gdf=blocks_gdf, npl_gdf=npl_gdf)
 
     # Step 3: Compute inverse-distance proximity scores and write distances CSV
     distances_with_scores = step3_inverse_distance_scoring(distances, write_csv=True)
     logging.info('Wrote %s with proximity_score column', Path(OUTPUT_DIR) / BLOCK_SITE_DISTANCES_CSV)
 
     # Step 4: Weight block proximity scores by population fraction and aggregate to Block Group
-    final_bg_scores = step4_population_weighting_aggregation(distances_with_scores, blocks_path=BLOCKS_SHAPE_OR_CSV, write_csv=True)
+    final_bg_scores = step4_population_weighting_aggregation(distances_with_scores, blocks_gdf=blocks_gdf, write_csv=True)
     logging.info('Wrote %s with block-group weighted scores', Path(OUTPUT_DIR) / FINAL_BG_SCORES_CSV)
 
     # For detailed debugging: export detailed block rows for specific block-group GEOIDs
     # if EXPORT_BG_LIST:
-    #   export_result = export_block_details_for_block_groups(EXPORT_BG_LIST, blocks_path=BLOCKS_SHAPE_OR_CSV, distances_df=distances_with_scores, out_csv=None, write_csv=True)
+    #   export_result = export_block_details_for_block_groups(EXPORT_BG_LIST, blocks_gdf=blocks_gdf, distances_df=distances_with_scores, out_csv=None, write_csv=True)

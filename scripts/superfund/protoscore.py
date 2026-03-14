@@ -22,6 +22,19 @@ import fiona
 import pandas as pd
 
 STATE_CONFIG = {
+    # specify a metric crs (projection) only if the default EPSG:5070 is not appropriate
+    'AK': {
+        'fips': '02',
+        'postal': 'AK',
+        'name': 'Alaska',
+        'metric_crs': 'EPSG:3338'
+    },
+    'HI': {
+        'fips': '30',
+        'postal': 'HI',
+        'name': 'Hawaii',
+        'metric_crs': 'EPSG:4135'
+    },
     'MT': {
         'fips': '30',
         'postal': 'MT',
@@ -45,7 +58,7 @@ STATE_CONFIG = {
     # Add other states as needed
 }
 
-CURRENT_STATE = 'WY'  # <-- set to the state you want to run the prototype on (must be in STATE_CONFIG)
+CURRENT_STATE = 'HI'  # <-- set to the state you want to run the prototype on (must be in STATE_CONFIG)
 
 if CURRENT_STATE not in STATE_CONFIG:
     raise RuntimeError(f"CURRENT_STATE '{CURRENT_STATE}' is not present in STATE_CONFIG")
@@ -53,6 +66,9 @@ if CURRENT_STATE not in STATE_CONFIG:
 current_state_config = STATE_CONFIG[CURRENT_STATE]
 current_state_fips = current_state_config['fips']
 current_state_postal = current_state_config['postal']
+current_state_crs = 'EPSG:5070'  # default projection for the continental U.S.
+if current_state_config.get('metric_crs') is not None:
+    current_state_crs = current_state_config['metric_crs']
 
 # --- Global file path variables (fill these before running) -----------------
 # Input sources
@@ -71,7 +87,7 @@ FINAL_BG_SCORES_CSV = "final_bg_scores.csv"
 
 # Optional: set a short list of block-group GEOIDs to export detailed block rows for.
 # Example: EXPORT_BG_LIST = ['300010001001', '300010001002']
-EXPORT_BG_LIST = ["300490004005", "300490012012"]  # <-- fill with a small list of 12-char block-group GEOIDs to auto-export after Step 4
+#EXPORT_BG_LIST = []  # <-- fill with a small list of 12-char block-group GEOIDs to auto-export after Step 4
 
 # Logging default
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -84,9 +100,26 @@ def _validate_paths():
             missing.append(name)
     if missing:
         raise RuntimeError(f"Please set the following path variables before running: {', '.join(missing)}")
+
+
+def apply_metric_projection(description,input_proj, metric_crs):
+    """Validate CRS metadata, log the reprojection, and return projected data."""
+    if input_proj.crs is None:
+        raise RuntimeError('Source data must have CRS defined before reprojection')
+
+    original_crs = input_proj.crs.name or str(input_proj.crs)
+    original_epsg = input_proj.crs.to_epsg()
+    logging.info(
+        'PROJECTION LOG: State FIPS %s | Source CRS: %s (EPSG:%s) -> Target CRS: %s',
+        current_state_fips,
+        original_crs,
+        original_epsg if original_epsg is not None else 'N/A',
+        metric_crs,
+    )
+    return input_proj.to_crs(metric_crs)
     
 def normalize_census_columns(df):
-        # Detect which year suffix is present (10 or 20)
+    # Detect which year suffix is present (10 or 20)
     # We look for a unique indicator like 'POP'
     suffix = ""
     if any("20" in col for col in df.columns if "POP" in col):
@@ -121,7 +154,7 @@ def normalize_census_columns(df):
 def step1_buffer_and_targeted_bgs(buffer_meters: float = 10000.0):
     """Step 1: Buffer NPL polygons and find intersecting Block Groups.
 
-    Reads `NPL_GDB_PATH` and `BG_SHP_PATH`, reprojects both to EPSG:5070,
+    Reads `NPL_GDB_PATH` and `BG_SHP_PATH`, reprojects both to the configured metric CRS,
     builds a buffer around NPL site boundaries (`buffer_meters`), performs
     a spatial join to find Block Groups intersecting those buffers, writes
     `TARGETED_BG_CSV` under `OUTPUT_DIR`.
@@ -159,12 +192,10 @@ def step1_buffer_and_targeted_bgs(buffer_meters: float = 10000.0):
             raise
     logging.info("Block Group columns: %d, rows: %d", len(bg_gdf.columns), len(bg_gdf))
 
-    # Reproject both to EPSG:5070 for metric operations
-    target_crs = 'EPSG:5070'
-    if npl_gdf.crs is None or bg_gdf.crs is None:
-        raise RuntimeError('Source data must have CRS defined')
-    npl_proj = npl_gdf.to_crs(target_crs)
-    bg_proj = bg_gdf.to_crs(target_crs)
+    # Reproject input geo data to a projection appropriate for metric operations
+    target_crs = current_state_crs
+    npl_proj = apply_metric_projection('npl dataset', npl_gdf, target_crs)
+    bg_proj = apply_metric_projection('block group dataset', bg_gdf, target_crs)
 
     # Buffer NPL polygons
     logging.info('Buffering NPL polygons by %s meters', buffer_meters)
@@ -288,18 +319,13 @@ def step2_block_site_distances(targeted_df: pd.DataFrame = None, npl_layer: str 
         return pd.DataFrame()
 
     # project blocks to metric CRS
-    target_crs = 'EPSG:5070'
-    if gdf_blocks_sub.crs is None:
-        # assume WGS84 if no CRS
-        gdf_blocks_sub = gdf_blocks_sub.set_crs('EPSG:4326')
-    gdf_blocks_sub = gdf_blocks_sub.to_crs(target_crs)
+    target_crs = current_state_crs
+    gdf_blocks_sub = apply_metric_projection(gdf_blocks_sub, target_crs)
 
     # Read NPL polygon layer and reproject
     logging.info('Reading NPL polygon layer: %s', npl_layer)
     npl_gdf = gpd.read_file(NPL_GDB_PATH, layer=npl_layer)
-    if npl_gdf.crs is None:
-        raise RuntimeError('NPL layer has no CRS')
-    npl_gdf = npl_gdf.to_crs(target_crs)
+    npl_gdf = apply_metric_projection(npl_gdf, target_crs)
 
     # Use the known exact column name `EPA_ID` in the NPL data; fail fast if absent
     if 'EPA_ID' not in npl_gdf.columns:
@@ -765,6 +791,6 @@ if __name__ == '__main__':
     final_bg_scores = step4_population_weighting_aggregation(distances_with_scores, blocks_path=BLOCKS_SHAPE_OR_CSV, write_csv=True)
     logging.info('Wrote %s with block-group weighted scores', Path(OUTPUT_DIR) / FINAL_BG_SCORES_CSV)
 
-    # Optional: export detailed block rows for specific block-group GEOIDs
-    if EXPORT_BG_LIST:
-        export_result = export_block_details_for_block_groups(EXPORT_BG_LIST, blocks_path=BLOCKS_SHAPE_OR_CSV, distances_df=distances_with_scores, out_csv=None, write_csv=True)
+    # For detailed debugging: export detailed block rows for specific block-group GEOIDs
+    # if EXPORT_BG_LIST:
+    #   export_result = export_block_details_for_block_groups(EXPORT_BG_LIST, blocks_path=BLOCKS_SHAPE_OR_CSV, distances_df=distances_with_scores, out_csv=None, write_csv=True)

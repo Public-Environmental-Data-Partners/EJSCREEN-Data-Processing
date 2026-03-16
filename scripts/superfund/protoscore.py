@@ -11,7 +11,6 @@ Interim outputs (written to `OUTPUT_DIR`):
 - FINAL_BG_SCORES_CSV: final_bg_scores.csv
 
 This file is intentionally minimal and hard-wired for rapid prototyping.
-Fill in the empty strings below with your local/WSL paths and then run.
 """
 
 # Standard imports

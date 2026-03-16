@@ -21,7 +21,11 @@ from pathlib import Path
 import fiona
 import geopandas as gpd
 import pandas as pd
-from pyproj import CRS
+
+try:
+    from .state_config import get_state_config, validate_metric_target_crs
+except ImportError:
+    from state_config import get_state_config, validate_metric_target_crs
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
@@ -39,83 +43,18 @@ BLOCKS_CSV_REQUIRED_COLUMNS = (
     'fraction_of_total',
 )
 
-STATE_CONFIG = {
-    # specify a metric crs (projection) only if the default EPSG:5070 is not appropriate
-    'AK': {
-        'fips': '02',
-        'postal': 'AK',
-        'name': 'Alaska',
-        'metric_crs': 'EPSG:3338'
-    },
-    'HI': {
-        'fips': '15',
-        'postal': 'HI',
-        'name': 'Hawaii',
-        # Note there is, apparently, no single ideal projection for all of Hawaii that uses meters as units. 
-        # The commonly used EPSG:3563 is accurate for the main islands but distorts the NW and SE islands,
-        # while the newer ESRI:102007 is designed to minimize distortion across all islands. 
-        # For this prototype, we'll use ESRI:102007, but either would be a reasonable choice for a Hawaii-specific implementation.
-        # TODO: confer with EmmaLi!! and agree on this
-        'metric_crs': 'ESRI:102007'
-    },
-    'MT': {
-        'fips': '30',
-        'postal': 'MT',
-        'name': 'Montana',
-    },
-    'RI': {
-        'fips': '44',
-        'postal': 'RI',
-        'name': 'Rhode Island',
-    },
-    'VT': {
-        'fips': '50',
-        'postal': 'VT',
-        'name': 'Vermont',
-    },
-    'WY': {
-        'fips': '56',
-        'postal': 'WY',
-        'name': 'Wyoming',
-    }
-    # Add other states as needed
-}
-
-CURRENT_STATE = 'HI'  # <-- set to the state you want to run the prototype on (must be in STATE_CONFIG)
-
-
-def _validate_metric_target_crs(metric_crs, description: str) -> CRS:
-    try:
-        target_crs = CRS.from_user_input(metric_crs)
-    except Exception as exc:
-        raise RuntimeError(f'Invalid {description}: {metric_crs}: {exc}') from exc
-
-    if not target_crs.is_projected:
-        raise RuntimeError(f'{description} must be a projected CRS in meters, got non-projected CRS: {metric_crs}')
-
-    axis_units = {axis.unit_name.lower() for axis in target_crs.axis_info if axis.unit_name}
-    if axis_units and not axis_units.issubset({'metre', 'meter'}):
-        raise RuntimeError(
-            f'{description} must use meter units, got {", ".join(sorted(axis_units))}: {metric_crs}'
-        )
-
-    return target_crs
+CURRENT_STATE = 'VT'  # <-- set to the state you want to run the prototype on (must be in state_config.json)
 
 def _get_current_state_settings():
-    if CURRENT_STATE not in STATE_CONFIG:
-        raise RuntimeError(f"CURRENT_STATE '{CURRENT_STATE}' is not present in STATE_CONFIG")
-
-    state_config = STATE_CONFIG[CURRENT_STATE]
-    metric_crs = state_config.get('metric_crs') or 'EPSG:5070'
-    _validate_metric_target_crs(metric_crs, f"metric_crs for {CURRENT_STATE}")
+    state_config = get_state_config(CURRENT_STATE)
     logging.info(
         'Current state: %s, %s, fips: %s, metric crs: %s',
-        state_config['name'],
-        state_config['postal'],
-        state_config['fips'],
-        metric_crs,
+        state_config.name,
+        state_config.postal,
+        state_config.fips,
+        state_config.metric_crs,
     )
-    return state_config, state_config['fips'], state_config['postal'], metric_crs
+    return state_config, state_config.fips, state_config.postal, state_config.metric_crs
 
 current_state_config, current_state_fips, current_state_postal, current_state_crs = _get_current_state_settings()
 
@@ -161,7 +100,7 @@ def _validate_output_dir() -> None:
 
 def apply_metric_projection(description, input_proj, metric_crs):
     """Validate CRS metadata, log the reprojection, and return projected data."""
-    target_crs = _validate_metric_target_crs(metric_crs, f'target CRS for {description}')
+    target_crs = validate_metric_target_crs(metric_crs, f'target CRS for {description}')
 
     if input_proj.crs is None:
         raise RuntimeError(f'{description} has no source CRS defined')

@@ -3,6 +3,8 @@
 # variable for EJScreen. Here, we are loading the JSON file from the 
 # pre-processing script and recreating the steps outlined in the documentation, 
 # rather than the pig scripts. 
+#
+# Author: EmmaLi 
 ###############################################################################
 # Helpful links for quick reference: 
 # documentation: https://www.epa.gov/system/files/documents/2024-07/ejscreen-tech-doc-version-2-3.pdf
@@ -21,14 +23,22 @@ library(plotly)
 options(scipen = 999)
 options(tigris_use_cache = T)
 
+# TODO - add this to a json file / use the one created for superfund! 
 # state: 
-state = "RI"
+state = "KS"
+# using Alberts for CONUS
+state_crs = 5070 
+# custom CRS for HI, based on this EPA resource: https://www.epa.gov/waterdata/spatial-data-waters
+# state_crs = "+proj=aea +lat_1=8 +lat_2=18 +lat_0=3 +lon_0=-157 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs"
+# custom CRS for AK
+# state_crs = "+proj=aea +datum=NAD83 +false_easting=0.0 +false_northing=0.0 +lon_0=-154.0 +lat_1=55.0 +lat_2=65.0 +lat_0=50.0 +units=m"
 
 # grabbing state code: 
 state_codes <- states() %>%
   filter(STUSPS == state) %>%
   as.data.frame() 
 state_code <- state_codes$STATEFP
+state_code_simple <- str_remove(state_code, "^0+")
 
 # find neighboring states: 
 state_buff <- state_codes %>%
@@ -56,7 +66,8 @@ curl_download(b_url,
 unzip(zipfile = paste0(file_loc, ".zip"), exdir = file_loc) 
 file.remove(paste0(file_loc, ".zip"))
 # reading it from the download: 
-b <- st_read(paste0(file_loc, paste0("/tl_2022_", state_code, "_tabblock20.shp")))
+b <- st_read(paste0(file_loc, paste0("/tl_2022_", state_code, "_tabblock20.shp"))) %>%
+  st_transform(., crs = (state_crs))
 
 
 # load block groups (used for plotting)
@@ -71,14 +82,16 @@ curl_download(bg_url,
 unzip(zipfile = paste0(file_loc, ".zip"), exdir = file_loc) 
 file.remove(paste0(file_loc, ".zip"))
 # reading it from the download: 
-bg <- st_read(paste0(file_loc, paste0("/tl_2022_", state_code, "_bg.shp")))
+bg <- st_read(paste0(file_loc, paste0("/tl_2022_", state_code, "_bg.shp"))) %>%
+  st_transform(., crs = (state_crs)) 
+
 
 # reading HPMS line segments
 # if in EJSCREEN-Data-Processing folder, the local root of cloned repo
 prepro_2020 <- aws.s3::s3read_using(st_read, 
                                     object = paste0("s3://pedp-data-preserved/ejscreen-data-processing/traffic/", 
                                                     state, "/preprocessing/HPMS2020_", 
-                                                    state_code, ".json")) %>% 
+                                                    state_code_simple, ".json")) %>% 
   st_transform(., crs = st_crs(b))
 # quick plot to see what we're cookin' with: 
 # mapview(prepro_2020)
@@ -86,6 +99,10 @@ prepro_2020 <- aws.s3::s3read_using(st_read,
 # add data from neighboring states 
 prepro_others <- data.frame()
 for(i in 1:length(intersect_state_codes)) {
+  if (length(intersect_state_codes) == 0) {
+    message(paste0("No neighboring states identified for: ", state))
+    break
+  } 
   state_code_i <- intersect_state_codes[i]
   state_i <- intersect_state_acro[i]
   
@@ -98,13 +115,18 @@ for(i in 1:length(intersect_state_codes)) {
   prepro_others <- rbind(prepro_others, prepro_i) 
 }
 
-prepro_2020 <- rbind(prepro_2020, prepro_others)
+# if statement here for when intersect_state_code is empty (HI, PR, AK)
+if (length(intersect_state_codes) == 0) {
+  message(paste0("No neighboring states identified for: ", state))
+} else {
+  # if it's not empty, bind the highway datasets together 
+  prepro_2020 <- rbind(prepro_2020, prepro_others)
+}
 
 # pulling in OG numbers from EJScreen: 
 # process - go to terminal and navigate to EJSCREEN-Data-Processing/scripts/utilities/validation
-# in terminal, run python geojson2csv.py --state HI
+# in terminal, run python ejam2csv.py --state AK
 # this will add ejam values as a csv file to s3 for this state
-# TODO - i need to fix this for WY and RI - since we changed the data here 
 ptraf <- aws.s3::s3read_using(read.csv,
                               object = paste0("s3://pedp-data-preserved/ejscreen-data-processing/traffic/",
                                               state,
@@ -112,7 +134,10 @@ ptraf <- aws.s3::s3read_using(read.csv,
   select(ejam_uniq_id, traffic.score) %>%
   rename(block_group_geoid = ejam_uniq_id, 
          PTRAF = traffic.score) %>%
-  select(block_group_geoid, PTRAF)
+  select(block_group_geoid, PTRAF) %>%
+  # some of these states are missing leading zeroes (AK, AL, for example)
+  mutate(block_group_geoid = case_when(nchar(as.character(block_group_geoid)) == 11 ~ paste0("0", block_group_geoid), 
+                                       TRUE ~ as.character(block_group_geoid)))
 
 ###############################################################################
 # Start processing script
@@ -121,33 +146,18 @@ ptraf <- aws.s3::s3read_using(read.csv,
 # with traffic lines that fall within a 10km radius of each block group polygon 
 # (line to polygon). This step relates each block group with traffic.
 prepro_10km_buff <- prepro_2020 %>%
+  st_transform(., crs = (state_crs)) %>%
   st_buffer(., 10000)
-sf_use_s2(F)
+
+# run an intersection: 
 bg_10km_intersection <- st_intersection(prepro_10km_buff, bg)
-sf_use_s2(T)
 # mapview(prepro_10km_buff[1:10,])
-# 
-# mapping those that fell out of the intersection: 
+
+# mapping those that fell out of the intersection to confirm they 
+# have 0 pop or are not near highways 
 # bg_no_traff <- bg %>%
 #   filter(!(GEOID %in% bg_10km_intersection$GEOID))
 # mapview(bg_no_traff)
-
-# head(bg_10km_intersection)
-# test <- bg_10km_intersection %>%
-#   mutate(unique_id = paste0(OBJECTID, state_code)) %>%
-#   filter(GEOID == "440090505002")
-# bg_test <- bg %>%
-#   filter(GEOID == "440090505002")
-# hwy_test <- prepro_2020 %>%
-#   mutate(unique_id = paste0(OBJECTID, state_code)) %>%
-#   filter(unique_id %in% test$unique_id)
-# 
-# mapview(bg_test) + 
-#   mapview(hwy_test)
-# 
-# sum(duplicated(hwy_test$OBJECTID))
-# 
-# mapview(prepro_2020 %>% filter(state_code == "9"))
 
 # The second step was to compute the distance between each block
 # centroid within each targeted block group from the first step and the traffic 
@@ -161,6 +171,8 @@ b_no_zero_points <- b %>%
   mutate(block_group_geoid = substr(GEOID20, 0, 12))
 
 # looping through block groups: 
+# TODO - this take foreverrrrrr for states with ~18,000+ block groups. I need 
+# to find a way to batch the loops 
 bg_loop <- unique(bg_10km_intersection$GEOID)
 dist_pair_df <- data.frame()
 for(i in 1:length(bg_loop)){
@@ -247,21 +259,23 @@ final_wt <- test_no_split_traff_pop_wt %>%
 # group was assigned a score of zero when no traffic lines were found within a 
 # 10km buffer.
 
-# push this to s3 (before comparisons w/ ejscreen)
-# write.csv(final_wt, paste0("./outputs/traffic/processing/", state, "_bg_summary.csv"))
-# put_object(
-#   file = paste0("./outputs/traffic/processing/", state, "_bg_summary.csv"),
-#   object =  paste0("s3://pedp-data-preserved/ejscreen-data-processing/traffic/", state, "/processing/bg_summary.csv"),
-#   multipart = T
-# )
+# push this to s3 
+write.csv(final_wt, paste0("./outputs/traffic/processing/", state, "_bg_summary.csv"))
+put_object(
+  file = paste0("./outputs/traffic/processing/", state, "_bg_summary.csv"),
+  object =  paste0("s3://pedp-data-preserved/ejscreen-data-processing/traffic/", state, "/processing/bg_summary.csv"),
+  multipart = T
+)
 
-
-## summary stats: 
+###############################################################################
+# Start comparisons w/ EJScreen
+###############################################################################
+## summary stats & comparisons with EJScreen values 
 # mapping the output: 
 test_weight_all_sf <- final_wt %>%
   merge(., bg %>% select(GEOID), by.x = "block_group_geoid", 
         by.y = "GEOID") %>%
-  merge(., ptraf, by.x = "block_group_geoid", by.y = "ID") %>%
+  merge(., ptraf, by = "block_group_geoid") %>%
   st_as_sf() %>%
   mutate(diff_estimate_minus_ptraf = weighted_score - PTRAF, 
          abs_diff_estimate_minus_ptraf = abs(weighted_score - PTRAF), 
@@ -272,11 +286,10 @@ test_weight_all_sf <- final_wt %>%
 
 
 # adding to s3 for comparisons 
-# WY latest file is v1; RI latest file is v6; started overwriting in HI
-# st_write(test_weight_all_sf,  paste0("./outputs/traffic/processing/", state, "_bg_summary_neighboring_states.geojson"))
+# st_write(test_weight_all_sf,  paste0("./outputs/traffic/processing/", state, "_bg_summary_neighboring_states_alberts.geojson"))
 # put_object(
-#   file = paste0("./outputs/traffic/processing/", state, "_bg_summary_neighboring_states.geojson"),
-#   object = paste0("s3://pedp-data-preserved/ejscreen-data-processing/traffic/", state, "/processing/bg_summary_neighboring_states.geojson"),
+#   file = paste0("./outputs/traffic/processing/", state, "_bg_summary_neighboring_states_alberts.geojson"),
+#   object = paste0("s3://pedp-data-preserved/ejscreen-data-processing/traffic/", state, "/processing/bg_summary_neighboring_states_alberts.geojson"),
 #   multipart = T
 # )
 
@@ -312,6 +325,8 @@ mapview(test_weight_all_sf, zcol = "pct_diff_estimate_praf",
         col.regions = RColorBrewer::brewer.pal(11, "RdBu")) + 
   mapview(prepro_2020 %>%
             filter(state_code == state_code), color = "black", lwd = 1.5)
+
+# mapview(test_weight_all_sf %>% filter(block_group_geoid == "560399677042"))
 
 # making a plot: 
 test_weight_all_df <- test_weight_all_sf %>%

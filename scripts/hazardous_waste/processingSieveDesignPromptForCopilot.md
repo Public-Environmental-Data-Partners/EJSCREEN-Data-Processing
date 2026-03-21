@@ -1,0 +1,54 @@
+
+# Design Spec: Streaming Multi-Layer Compressed Data Processor
+
+## 1. Objective
+Develop a memory-efficient, storage-agnostic Python pipeline to extract, filter, and consolidate records from a nested ZIP archive (ZIP-within-a-ZIP) containing multiple CSV files. The final output should be a single, filtered CSV file.
+
+## 2. Technical Stack Recommendations
+* **Abstraction Layer:** `fsspec` (with `s3fs` for AWS support) to ensure the code handles `s3://` and local file paths identically.
+* **Decompression:** `zipfile` (Standard Library) or `fsspec`’s built-in `zip://` chaining.
+* **Data Processing:** `pandas` using the `chunksize` parameter to maintain a constant memory footprint.
+* **Environment:** Docker-ready, using environment variables or a config object for the **Root URI**.
+
+## 3. Architectural Patterns
+
+### A. Chained Path Logic (The "Straw")
+The implementation must avoid extracting any files to the local disk. 
+* **Virtual Mapping:** Utilize a "chained" filesystem approach where the outer ZIP is opened as a virtual drive, allowing the inner ZIPs to be accessed as if they were standard files.
+* **Stream Handlers:** Pass the resulting "file-like object" from the inner ZIP directly into the CSV parser.
+
+### B. The Streaming Sieve (The "Chunked Filter")
+To handle million-row files in a constrained RAM environment (e.g., a small Docker container):
+* **Iterative Reading:** Read the CSV in segments (e.g., 50k rows per iteration).
+* **Immediate Pruning:** Apply the boolean filtering logic (defined in the DDR: `is_current`, `include_in_national_report`, `is_tsdf`, `is_lqg`) to each segment.
+* **Garbage Collection:** Ensure the original 50k-row chunk is cleared from memory as soon as the "surviving" rows are identified.
+
+
+
+## 4. Execution Sequence
+
+### Phase 1: Initialization
+1.  Define the **Root URI** (Local or S3).
+2.  Open the **Outer ZIP** and inventory the **Inner ZIPs** (e.g., `HD_HANDLER_0.zip` through `HD_HANDLER_4.zip`).
+3.  Initialize the **Global Output File** (Single CSV) and write the header row.
+
+### Phase 2: The Processing Loop
+For each Inner ZIP identified in the inventory:
+1.  **Open Stream:** Reach through the Outer ZIP to open the Inner ZIP.
+2.  **Access CSV:** Identify and open the CSV file contained within that Inner ZIP.
+3.  **Chunked Iterate:**
+    * Load a chunk of rows.
+    * Apply the RCRA criteria filter.
+    * **Append** surviving rows to the **Global Output File**.
+4.  **Close Stream:** Explicitly close the internal pointers before moving to the next Inner ZIP to prevent file-handle leaks.
+
+### Phase 3: Finalization
+1.  Close the Global Output File.
+2.  Log the final "Yield" (Total input records vs. total survivors).
+
+
+
+## 5. Success Criteria for Copilot
+* The code must **not** use `os.makedirs` or any temporary local directories for extraction.
+* The logic must be entirely contained within a `with fsspec.open(...)` or `zipfile.ZipFile(...)` context.
+* The output must be a **single** file, regardless of how many input ZIPs were processed.

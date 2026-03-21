@@ -51,7 +51,13 @@ The following logic is proposed to filter each large dataset, `df`,  to just our
 Testing on `HD_HANDLER_0.csv` (~1,000,000 records) produced the following:
 
 * **Total Records:** 1,000,000
-* **Filtered Records:** 3,961 (approx. 0.4% of total)
+* **Filtered Records:** 3,961 (approx. 0.4% of total)^^
 
-*Note: This reduction is consistent with expectations for the EJScreen methodology, 
+*^^Note: This reduction is consistent with expectations for the EJScreen methodology, 
 which focuses on a subset of approximately 20,000 to 30,000 facilities nationwide.*
+
+### 4. Preprocessing required
+
+Code must read all records in the zipped csvs stored within the downloaded zip
+file, filter them, and then merge them into a single csv for downstream
+indicator calculations.

@@ -1,0 +1,35 @@
+To keep this simple and abstract, think of this process as a **Vertical Pipeline**. Instead of traditional "Batch Processing" (where you move a whole mountain of dirt, then sort it), we are building a **Sieve** that sits directly over the data stream.
+
+Here is the 4-step architectural overview:
+
+### 1. The Virtual Connection (The "Straw")
+Instead of downloading the giant ZIP file, the code creates a virtual connection to the URI (S3 or Local). 
+* Think of this as a straw that only pulls the specific bytes needed at any given moment. 
+* This "straw" reaches through the outer ZIP, then the inner ZIP, until it touches the header of the CSV.
+
+### 2. The Chained Decompressor (The "Unfolder")
+As the data bytes travel through the "straw," they pass through two transparent layers of decompression. 
+* **Layer A:** Unpacks the outer archive.
+* **Layer B:** Unpacks the inner archive.
+* This happens "in-flight." The data exists in its uncompressed form only for the millisecond it takes to read a row, then it's discarded. This is why your local storage stays empty.
+
+
+### 3. The Chunked Sieve (The "Filter")
+The code doesn't try to look at 1,000,000 rows at once. It looks at a **window** (e.g., 50,000 rows).
+* **Load Window:** Pull 50,000 rows into RAM.
+* **Apply Rules:** Instantly drop every row that isn't an "Active TSDF" or "LQG."
+* **Keep Results:** Hold only the ~200 relevant rows from that window.
+* **Clear Window:** Wipe the 50,000 rows from RAM and move to the next "chunk."
+
+### 4. The Unified Accumulator (The "Merge")
+As the "Sieve" finishes a chunk, it sends the survivors to a single output file.
+* This output file stays open for the entire duration of the script.
+* It collects the survivors from File 1, then File 2, and so on.
+* By the time the straw reaches the end of the 5th ZIP, you have one clean CSV containing only the "Gold" records from all five files.
+
+---
+
+### Why this works for Python and R:
+* **The Logic is "Lazy":** Both languages support this "don't touch it until you need it" philosophy.
+* **The Footprint is Constant:** Whether the input is 100MB or 100GB, your RAM usage stays the same because the "window" size is fixed.
+* **The Output is Atomic:** You end up with one file to move into your 10km buffer script, regardless of how messy the source ZIP was.

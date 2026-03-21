@@ -5,12 +5,12 @@ Here is the 4-step architectural overview:
 ### 1. The Virtual Connection (The "Straw")
 Instead of downloading the giant ZIP file, the code creates a virtual connection to the URI (S3 or Local). 
 * Think of this as a straw that only pulls the specific bytes needed at any given moment. 
-* This "straw" reaches through the outer ZIP, then the inner ZIP, until it touches the header of the CSV.
+* This "straw" reaches into the outer ZIP until it touches the header of the selected `HD_HANDLER_*.csv` member.
 
-### 2. The Chained Decompressor (The "Unfolder")
-As the data bytes travel through the "straw," they pass through two transparent layers of decompression. 
+### 2. The ZIP Member Reader (The "Unfolder")
+As the data bytes travel through the "straw," they pass through one transparent layer of decompression. 
 * **Layer A:** Unpacks the outer archive.
-* **Layer B:** Unpacks the inner archive.
+* The code then opens the target `HD_HANDLER_*.csv` member directly from that archive.
 * This happens "in-flight." The data exists in its uncompressed form only for the millisecond it takes to read a row, then it's discarded. This is why your local storage stays empty.
 
 
@@ -25,7 +25,7 @@ The code doesn't try to look at 1,000,000 rows at once. It looks at a **window**
 As the "Sieve" finishes a chunk, it sends the survivors to a single output file.
 * This output file stays open for the entire duration of the script.
 * It collects the survivors from File 1, then File 2, and so on.
-* By the time the straw reaches the end of the 5th ZIP, you have one clean CSV containing only the "Gold" records from all five files.
+* By the time the straw reaches the end of the 5th CSV member, you have one clean CSV containing only the "Gold" records from all five files.
 
 ---
 

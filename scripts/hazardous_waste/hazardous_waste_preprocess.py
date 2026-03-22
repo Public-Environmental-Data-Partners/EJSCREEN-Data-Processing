@@ -11,45 +11,77 @@ from dataclasses import dataclass
 from pathlib import Path
 import argparse
 import csv
+import importlib
 import io
 import logging
 import zipfile
 
-
-DEFAULT_OUTER_ARCHIVE = (
-	"./pipeline/test_data/downloads/HD_HANDLER_20260315.zip"
-)
+try:
+	fsspec = importlib.import_module("fsspec")
+except Exception as _e:  # pragma: no cover - environment dependent
+	fsspec = None
 
 
 @dataclass
 class Config:
-	outer_archive_path: str = DEFAULT_OUTER_ARCHIVE
+	storage_mode: str
+	local_root_path: str = "./pipeline/test_data/"
+	remote_root_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/hazardous_waste/pipeline/"
+	input_relative_path: str = "downloads/HD_HANDLER_20260315.zip"
+	output_relative_path: str = "outputs/hazardous_waste_filtered.csv"
 
 
 def get_config(argv=None) -> Config:
+	try:
+		dotenv = importlib.import_module("dotenv")
+		dotenv.load_dotenv()
+	except Exception:
+		pass
+
 	parser = argparse.ArgumentParser(
-		description="Enumerate HD_HANDLER members inside the outer hazardous-waste archive."
+		description="Enumerate and inspect HD_HANDLER CSV members inside the hazardous-waste archive."
 	)
 	parser.add_argument(
-		"--outer-archive-path",
-		dest="outer_archive_path",
-		default=Config.outer_archive_path,
-		help=f"Path to the outer hazardous-waste ZIP archive (default: {Config.outer_archive_path})",
+		"storage_mode",
+		choices=("local", "remote"),
+		help="Select whether the script reads from the local root path or the remote S3 root path.",
 	)
 	args = parser.parse_args(argv)
-	return Config(outer_archive_path=args.outer_archive_path)
+	return Config(storage_mode=args.storage_mode)
+
+
+def is_s3_uri(path: str) -> bool:
+	return isinstance(path, str) and path.lower().startswith("s3://")
+
+
+def join_root_and_relative_path(root_path: str, relative_path: str) -> str:
+	if is_s3_uri(root_path):
+		return root_path.rstrip("/") + "/" + relative_path.lstrip("/")
+	return str(Path(root_path) / relative_path)
+
+
+def get_active_root_path(cfg: Config) -> str:
+	if cfg.storage_mode == "local":
+		return cfg.local_root_path
+	if cfg.storage_mode == "remote":
+		return cfg.remote_root_path
+	raise ValueError(f"Unsupported storage mode: {cfg.storage_mode}")
+
+
+def get_outer_archive_path(cfg: Config) -> str:
+	return join_root_and_relative_path(get_active_root_path(cfg), cfg.input_relative_path)
 
 
 def enumerate_archive_members(outer_archive_path: str) -> list[str]:
-	archive_path = Path(outer_archive_path)
-	if not archive_path.exists():
-		raise FileNotFoundError(f"Outer archive not found: {outer_archive_path}")
-	if not archive_path.is_file():
-		raise ValueError(f"Outer archive path is not a file: {outer_archive_path}")
+	if fsspec is None:
+		raise RuntimeError("fsspec is not available; cannot open local or remote archive paths")
 
 	try:
-		with zipfile.ZipFile(archive_path, "r") as archive:
-			member_names = [name for name in archive.namelist() if name and not name.endswith("/")]
+		with fsspec.open(outer_archive_path, "rb") as archive_stream:
+			with zipfile.ZipFile(archive_stream, "r") as archive:
+				member_names = [name for name in archive.namelist() if name and not name.endswith("/")]
+	except FileNotFoundError as exc:
+		raise FileNotFoundError(f"Outer archive not found: {outer_archive_path}") from exc
 	except zipfile.BadZipFile as exc:
 		raise RuntimeError(f"Outer archive is not a valid ZIP file: {outer_archive_path}") from exc
 
@@ -68,22 +100,27 @@ def enumerate_archive_members(outer_archive_path: str) -> list[str]:
 
 
 def inspect_first_member_csv(outer_archive_path: str, member_name: str) -> tuple[int, list[str]]:
-	archive_path = Path(outer_archive_path)
+	if fsspec is None:
+		raise RuntimeError("fsspec is not available; cannot open local or remote archive paths")
+
 	try:
-		with zipfile.ZipFile(archive_path, "r") as archive:
-			with archive.open(member_name, "r") as member_stream:
-				text_stream = io.TextIOWrapper(member_stream, encoding="utf-8-sig", newline="")
-				reader = csv.reader(text_stream)
-				try:
-					header_row = next(reader)
-				except StopIteration as exc:
-					raise RuntimeError(f"CSV member is empty: {member_name}") from exc
+		with fsspec.open(outer_archive_path, "rb") as archive_stream:
+			with zipfile.ZipFile(archive_stream, "r") as archive:
+				with archive.open(member_name, "r") as member_stream:
+					text_stream = io.TextIOWrapper(member_stream, encoding="utf-8-sig", newline="")
+					reader = csv.reader(text_stream)
+					try:
+						header_row = next(reader)
+					except StopIteration as exc:
+						raise RuntimeError(f"CSV member is empty: {member_name}") from exc
 
-				if not header_row:
-					raise RuntimeError(f"CSV member has an empty header row: {member_name}")
+					if not header_row:
+						raise RuntimeError(f"CSV member has an empty header row: {member_name}")
 
-				preview_fields = header_row[:5]
-				return len(header_row), preview_fields
+					preview_fields = header_row[:5]
+					return len(header_row), preview_fields
+	except FileNotFoundError as exc:
+		raise FileNotFoundError(f"Outer archive not found: {outer_archive_path}") from exc
 	except KeyError as exc:
 		raise RuntimeError(
 			f"Expected CSV member was not found in the archive: {member_name}"
@@ -93,10 +130,12 @@ def inspect_first_member_csv(outer_archive_path: str, member_name: str) -> tuple
 def main(argv=None) -> int:
 	logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 	cfg = get_config(argv)
+	outer_archive_path = get_outer_archive_path(cfg)
 
-	logging.info("Opening outer archive: %s", cfg.outer_archive_path)
+	logging.info("Storage mode: %s", cfg.storage_mode)
+	logging.info("Opening outer archive: %s", outer_archive_path)
 	try:
-		hd_handler_members = enumerate_archive_members(cfg.outer_archive_path)
+		hd_handler_members = enumerate_archive_members(outer_archive_path)
 	except Exception as exc:
 		logging.error("Slice 1 failed while enumerating archive members: %s", exc)
 		return 1
@@ -109,7 +148,7 @@ def main(argv=None) -> int:
 	logging.info("Inspecting first CSV member: %s", first_member_name)
 	try:
 		header_count, preview_fields = inspect_first_member_csv(
-			cfg.outer_archive_path,
+			outer_archive_path,
 			first_member_name,
 		)
 	except Exception as exc:

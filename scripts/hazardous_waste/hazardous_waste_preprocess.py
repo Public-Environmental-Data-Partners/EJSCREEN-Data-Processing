@@ -90,6 +90,14 @@ def get_outer_archive_path(cfg: Config) -> str:
 	return join_root_and_relative_path(get_active_root_path(cfg), cfg.input_relative_path)
 
 
+def get_local_output_path(cfg: Config) -> str:
+	return join_root_and_relative_path(cfg.local_root_path, cfg.output_relative_path)
+
+
+def get_remote_output_path(cfg: Config) -> str:
+	return join_root_and_relative_path(cfg.remote_root_path, cfg.output_relative_path)
+
+
 def enumerate_archive_members(outer_archive_path: str) -> list[str]:
 	try:
 		with fsspec.open(outer_archive_path, "rb") as archive_stream:
@@ -208,6 +216,124 @@ def filter_member_csv_and_count(outer_archive_path: str, member_name: str, chunk
 	return chunk_count, total_input_rows, total_survivor_rows
 
 
+def write_filtered_member_csv_to_local_output(
+	outer_archive_path: str,
+	member_name: str,
+	chunk_size: int,
+	local_output_path: str,
+) -> tuple[int, int, int]:
+	if chunk_size <= 0:
+		raise ValueError(f"Chunk size must be positive. Received: {chunk_size}")
+	if is_s3_uri(local_output_path):
+		raise ValueError(f"Step 10 writes to local output only. Received: {local_output_path}")
+
+	output_path = Path(local_output_path)
+	output_path.parent.mkdir(parents=True, exist_ok=True)
+
+	chunk_count = 0
+	total_input_rows = 0
+	total_survivor_rows = 0
+	header_written = False
+
+	try:
+		with fsspec.open(outer_archive_path, "rb") as archive_stream:
+			with zipfile.ZipFile(archive_stream, "r") as archive:
+				with archive.open(member_name, "r") as member_stream:
+					text_stream = io.TextIOWrapper(member_stream, encoding="utf-8-sig", newline="")
+					chunk_iterator = pd.read_csv(text_stream, chunksize=chunk_size, low_memory=False)
+					for chunk_index, chunk_df in enumerate(chunk_iterator, start=1):
+						filtered_chunk_df = apply_hazardous_waste_sieve(chunk_df)
+						write_mode = "a" if header_written else "w"
+						filtered_chunk_df.to_csv(
+							output_path,
+							mode=write_mode,
+							index=False,
+							header=not header_written,
+						)
+						input_row_count = len(chunk_df)
+						survivor_row_count = len(filtered_chunk_df)
+						logging.info(
+							"Write chunk %d rows: input=%d survivors=%d",
+							chunk_index,
+							input_row_count,
+							survivor_row_count,
+						)
+						total_input_rows += input_row_count
+						total_survivor_rows += survivor_row_count
+						chunk_count = chunk_index
+						header_written = True
+	except FileNotFoundError as exc:
+		raise FileNotFoundError(f"Outer archive not found: {outer_archive_path}") from exc
+	except KeyError as exc:
+		raise RuntimeError(
+			f"Expected CSV member was not found in the archive: {member_name}"
+		) from exc
+
+	if chunk_count == 0:
+		raise RuntimeError(f"Chunked CSV read produced no data rows: {member_name}")
+
+	return chunk_count, total_input_rows, total_survivor_rows
+
+
+def write_filtered_member_csv_to_remote_output(
+	outer_archive_path: str,
+	member_name: str,
+	chunk_size: int,
+	remote_output_path: str,
+	header_row: list[str],
+) -> tuple[int, int, int]:
+	if chunk_size <= 0:
+		raise ValueError(f"Chunk size must be positive. Received: {chunk_size}")
+	if not is_s3_uri(remote_output_path):
+		raise ValueError(f"Step 11 writes to remote S3 output only. Received: {remote_output_path}")
+
+	chunk_count = 0
+	total_input_rows = 0
+	total_survivor_rows = 0
+	filtered_chunks: list[pd.DataFrame] = []
+
+	try:
+		with fsspec.open(outer_archive_path, "rb") as archive_stream:
+			with zipfile.ZipFile(archive_stream, "r") as archive:
+				with archive.open(member_name, "r") as member_stream:
+					text_stream = io.TextIOWrapper(member_stream, encoding="utf-8-sig", newline="")
+					chunk_iterator = pd.read_csv(text_stream, chunksize=chunk_size, low_memory=False)
+					for chunk_index, chunk_df in enumerate(chunk_iterator, start=1):
+						filtered_chunk_df = apply_hazardous_waste_sieve(chunk_df)
+						input_row_count = len(chunk_df)
+						survivor_row_count = len(filtered_chunk_df)
+						logging.info(
+							"Remote write chunk %d rows: input=%d survivors=%d",
+							chunk_index,
+							input_row_count,
+							survivor_row_count,
+						)
+						if survivor_row_count > 0:
+							filtered_chunks.append(filtered_chunk_df)
+						total_input_rows += input_row_count
+						total_survivor_rows += survivor_row_count
+						chunk_count = chunk_index
+	except FileNotFoundError as exc:
+		raise FileNotFoundError(f"Outer archive not found: {outer_archive_path}") from exc
+	except KeyError as exc:
+		raise RuntimeError(
+			f"Expected CSV member was not found in the archive: {member_name}"
+		) from exc
+
+	if chunk_count == 0:
+		raise RuntimeError(f"Chunked CSV read produced no data rows: {member_name}")
+
+	if filtered_chunks:
+		output_df = pd.concat(filtered_chunks, ignore_index=True)
+	else:
+		output_df = pd.DataFrame(columns=header_row)
+
+	with fsspec.open(remote_output_path, "w") as output_stream:
+		output_df.to_csv(output_stream, index=False)
+
+	return chunk_count, total_input_rows, total_survivor_rows
+
+
 def chunk_read_member_csv(outer_archive_path: str, member_name: str, chunk_size: int) -> tuple[int, int]:
 	if chunk_size <= 0:
 		raise ValueError(f"Chunk size must be positive. Received: {chunk_size}")
@@ -248,6 +374,8 @@ def main(argv=None) -> int:
 		logging.error("Runtime dependency initialization failed: %s", exc)
 		return 1
 	outer_archive_path = get_outer_archive_path(cfg)
+	local_output_path = get_local_output_path(cfg)
+	remote_output_path = get_remote_output_path(cfg)
 
 	logging.info("Storage mode: %s", cfg.storage_mode)
 	logging.info("Opening outer archive: %s", outer_archive_path)
@@ -305,6 +433,42 @@ def main(argv=None) -> int:
 	logging.info("Counts-only sieve complete. Filter chunks processed: %d", filter_chunk_count)
 	logging.info("Counts-only sieve complete. Total input rows: %d", total_input_rows)
 	logging.info("Counts-only sieve complete. Total survivor rows: %d", total_survivor_rows)
+
+	logging.info("Writing filtered rows from the first CSV member to local output: %s", local_output_path)
+	try:
+		write_chunk_count, write_total_input_rows, write_total_survivor_rows = write_filtered_member_csv_to_local_output(
+			outer_archive_path,
+			first_member_name,
+			cfg.chunk_size,
+			local_output_path,
+		)
+	except Exception as exc:
+		logging.error("Slice 6 failed while writing filtered rows to local output: %s", exc)
+		return 1
+
+	logging.info("Local filtered output write complete. Chunks processed: %d", write_chunk_count)
+	logging.info("Local filtered output write complete. Total input rows: %d", write_total_input_rows)
+	logging.info("Local filtered output write complete. Total survivor rows written: %d", write_total_survivor_rows)
+	logging.info("Local filtered output path: %s", local_output_path)
+
+	if cfg.storage_mode == "remote":
+		logging.info("Writing filtered rows from the first CSV member to remote output: %s", remote_output_path)
+		try:
+			remote_write_chunk_count, remote_write_total_input_rows, remote_write_total_survivor_rows = write_filtered_member_csv_to_remote_output(
+				outer_archive_path,
+				first_member_name,
+				cfg.chunk_size,
+				remote_output_path,
+				header_row,
+			)
+		except Exception as exc:
+			logging.error("Slice 7 failed while writing filtered rows to remote output: %s", exc)
+			return 1
+
+		logging.info("Remote filtered output write complete. Chunks processed: %d", remote_write_chunk_count)
+		logging.info("Remote filtered output write complete. Total input rows: %d", remote_write_total_input_rows)
+		logging.info("Remote filtered output write complete. Total survivor rows written: %d", remote_write_total_survivor_rows)
+		logging.info("Remote filtered output path: %s", remote_output_path)
 
 	return 0
 

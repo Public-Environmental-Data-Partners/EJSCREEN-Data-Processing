@@ -5,6 +5,10 @@ Slice 1 purpose:
   Open the outer hazardous-waste archive and enumerate the HD_HANDLER members
   inside it. This first slice is intentionally narrow so local archive access can
   be tested before any filtering or output logic is introduced.
+
+Module requirements note:
+	Remote-mode reading requires fsspec and s3fs to be installed.
+	Local-mode reading does not require those modules.
 """
 
 from dataclasses import dataclass
@@ -21,6 +25,21 @@ try:
 except Exception as _e:  # pragma: no cover - environment dependent
 	fsspec = None
 
+try:
+	pd = importlib.import_module("pandas")
+except Exception as _e:  # pragma: no cover - environment dependent
+	pd = None
+
+
+REQUIRED_SIEVE_COLUMNS = (
+	"CURRENT RECORD",
+	"INCLUDE IN NATIONAL REPORT",
+	"TSD ACTIVITY",
+	"FED WASTE GENERATOR",
+	"LOCATION LONGITUDE",
+	"LOCATION LATITUDE",
+)
+
 
 @dataclass
 class Config:
@@ -29,6 +48,7 @@ class Config:
 	remote_root_path: str = "s3://pedp-data-preserved/ejscreen-data-processing/hazardous_waste/pipeline/"
 	input_relative_path: str = "downloads/HD_HANDLER_20260315.zip"
 	output_relative_path: str = "outputs/hazardous_waste_filtered.csv"
+	chunk_size: int = 50000
 
 
 def get_config(argv=None) -> Config:
@@ -99,7 +119,7 @@ def enumerate_archive_members(outer_archive_path: str) -> list[str]:
 	return sorted(hd_handler_members)
 
 
-def inspect_first_member_csv(outer_archive_path: str, member_name: str) -> tuple[int, list[str]]:
+def read_member_csv_header(outer_archive_path: str, member_name: str) -> list[str]:
 	if fsspec is None:
 		raise RuntimeError("fsspec is not available; cannot open local or remote archive paths")
 
@@ -117,14 +137,59 @@ def inspect_first_member_csv(outer_archive_path: str, member_name: str) -> tuple
 					if not header_row:
 						raise RuntimeError(f"CSV member has an empty header row: {member_name}")
 
-					preview_fields = header_row[:5]
-					return len(header_row), preview_fields
+					return header_row
 	except FileNotFoundError as exc:
 		raise FileNotFoundError(f"Outer archive not found: {outer_archive_path}") from exc
 	except KeyError as exc:
 		raise RuntimeError(
 			f"Expected CSV member was not found in the archive: {member_name}"
 		) from exc
+
+
+def validate_required_sieve_columns(header_row: list[str], member_name: str) -> list[str]:
+	header_set = set(header_row)
+	missing_columns = [column_name for column_name in REQUIRED_SIEVE_COLUMNS if column_name not in header_set]
+	if missing_columns:
+		raise RuntimeError(
+			"CSV member is missing required sieve columns: "
+			f"{missing_columns}. Member examined: {member_name}"
+		)
+	return [column_name for column_name in REQUIRED_SIEVE_COLUMNS if column_name in header_set]
+
+
+def chunk_read_member_csv(outer_archive_path: str, member_name: str, chunk_size: int) -> tuple[int, int]:
+	if fsspec is None:
+		raise RuntimeError("fsspec is not available; cannot open local or remote archive paths")
+	if pd is None:
+		raise RuntimeError("pandas is not available; cannot chunk-read CSV members")
+	if chunk_size <= 0:
+		raise ValueError(f"Chunk size must be positive. Received: {chunk_size}")
+
+	total_rows = 0
+	chunk_count = 0
+
+	try:
+		with fsspec.open(outer_archive_path, "rb") as archive_stream:
+			with zipfile.ZipFile(archive_stream, "r") as archive:
+				with archive.open(member_name, "r") as member_stream:
+					text_stream = io.TextIOWrapper(member_stream, encoding="utf-8-sig", newline="")
+					chunk_iterator = pd.read_csv(text_stream, chunksize=chunk_size, low_memory=False)
+					for chunk_index, chunk_df in enumerate(chunk_iterator, start=1):
+						chunk_row_count = len(chunk_df)
+						logging.info("Chunk %d rows: %d", chunk_index, chunk_row_count)
+						total_rows += chunk_row_count
+						chunk_count = chunk_index
+	except FileNotFoundError as exc:
+		raise FileNotFoundError(f"Outer archive not found: {outer_archive_path}") from exc
+	except KeyError as exc:
+		raise RuntimeError(
+			f"Expected CSV member was not found in the archive: {member_name}"
+		) from exc
+
+	if chunk_count == 0:
+		raise RuntimeError(f"Chunked CSV read produced no data rows: {member_name}")
+
+	return chunk_count, total_rows
 
 
 def main(argv=None) -> int:
@@ -147,16 +212,32 @@ def main(argv=None) -> int:
 	first_member_name = hd_handler_members[0]
 	logging.info("Inspecting first CSV member: %s", first_member_name)
 	try:
-		header_count, preview_fields = inspect_first_member_csv(
+		header_row = read_member_csv_header(
 			outer_archive_path,
 			first_member_name,
 		)
+		required_columns_found = validate_required_sieve_columns(header_row, first_member_name)
 	except Exception as exc:
-		logging.error("Slice 2 failed while inspecting the first CSV member: %s", exc)
+		logging.error("Slice 3 failed while reading and validating the first CSV header: %s", exc)
 		return 1
 
-	logging.info("First CSV member is readable and has %d header columns", header_count)
-	logging.info("Header preview: %s", preview_fields)
+	logging.info("First CSV member is readable and has %d header columns", len(header_row))
+	logging.info("Header preview: %s", header_row[:5])
+	logging.info("Required sieve columns found: %s", required_columns_found)
+
+	logging.info("Chunk-reading first CSV member with chunk size: %d", cfg.chunk_size)
+	try:
+		chunk_count, total_rows = chunk_read_member_csv(
+			outer_archive_path,
+			first_member_name,
+			cfg.chunk_size,
+		)
+	except Exception as exc:
+		logging.error("Slice 4 failed while chunk-reading the first CSV member: %s", exc)
+		return 1
+
+	logging.info("Chunked read complete. Chunks processed: %d", chunk_count)
+	logging.info("Chunked read complete. Total data rows read: %d", total_rows)
 
 	return 0
 

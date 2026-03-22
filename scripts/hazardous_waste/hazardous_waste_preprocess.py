@@ -11,6 +11,10 @@ Purpose:
 Module requirements note:
 	All modes require pandas and fsspec to be installed.
 	Remote-mode reading also requires python-dotenv and s3fs.
+	
+Credits:
+  - Designed by Anne Gunn and Gemimi
+  - Implemented by GitHub Copilot, GPT-5.4, and Anne Gunn	
 """
 
 from dataclasses import dataclass

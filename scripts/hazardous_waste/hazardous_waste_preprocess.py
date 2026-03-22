@@ -149,6 +149,65 @@ def validate_required_sieve_columns(header_row: list[str], member_name: str) -> 
 	return [column_name for column_name in REQUIRED_SIEVE_COLUMNS if column_name in header_set]
 
 
+def create_filter_masks(chunk_df: pd.DataFrame) -> dict[str, pd.Series]:
+	return {
+		"is_tsdf": chunk_df["TSD ACTIVITY"] == "Y",
+		"is_lqg": chunk_df["FED WASTE GENERATOR"] == "1",
+		"is_current": chunk_df["CURRENT RECORD"] == "Y",
+		"include_in_national_report": chunk_df["INCLUDE IN NATIONAL REPORT"] == "Y",
+	}
+
+
+def apply_hazardous_waste_sieve(chunk_df: pd.DataFrame) -> pd.DataFrame:
+	masks = create_filter_masks(chunk_df)
+	combined_mask = (
+		masks["is_current"]
+		& masks["include_in_national_report"]
+		& (masks["is_tsdf"] | masks["is_lqg"])
+	)
+	return chunk_df[combined_mask].copy()
+
+
+def filter_member_csv_and_count(outer_archive_path: str, member_name: str, chunk_size: int) -> tuple[int, int, int]:
+	if chunk_size <= 0:
+		raise ValueError(f"Chunk size must be positive. Received: {chunk_size}")
+
+	total_input_rows = 0
+	total_survivor_rows = 0
+	chunk_count = 0
+
+	try:
+		with fsspec.open(outer_archive_path, "rb") as archive_stream:
+			with zipfile.ZipFile(archive_stream, "r") as archive:
+				with archive.open(member_name, "r") as member_stream:
+					text_stream = io.TextIOWrapper(member_stream, encoding="utf-8-sig", newline="")
+					chunk_iterator = pd.read_csv(text_stream, chunksize=chunk_size, low_memory=False)
+					for chunk_index, chunk_df in enumerate(chunk_iterator, start=1):
+						filtered_chunk_df = apply_hazardous_waste_sieve(chunk_df)
+						input_row_count = len(chunk_df)
+						survivor_row_count = len(filtered_chunk_df)
+						logging.info(
+							"Filter chunk %d rows: input=%d survivors=%d",
+							chunk_index,
+							input_row_count,
+							survivor_row_count,
+						)
+						total_input_rows += input_row_count
+						total_survivor_rows += survivor_row_count
+						chunk_count = chunk_index
+	except FileNotFoundError as exc:
+		raise FileNotFoundError(f"Outer archive not found: {outer_archive_path}") from exc
+	except KeyError as exc:
+		raise RuntimeError(
+			f"Expected CSV member was not found in the archive: {member_name}"
+		) from exc
+
+	if chunk_count == 0:
+		raise RuntimeError(f"Chunked CSV read produced no data rows: {member_name}")
+
+	return chunk_count, total_input_rows, total_survivor_rows
+
+
 def chunk_read_member_csv(outer_archive_path: str, member_name: str, chunk_size: int) -> tuple[int, int]:
 	if chunk_size <= 0:
 		raise ValueError(f"Chunk size must be positive. Received: {chunk_size}")
@@ -231,6 +290,21 @@ def main(argv=None) -> int:
 
 	logging.info("Chunked read complete. Chunks processed: %d", chunk_count)
 	logging.info("Chunked read complete. Total data rows read: %d", total_rows)
+
+	logging.info("Running hazardous-waste sieve counts-only pass on the first CSV member")
+	try:
+		filter_chunk_count, total_input_rows, total_survivor_rows = filter_member_csv_and_count(
+			outer_archive_path,
+			first_member_name,
+			cfg.chunk_size,
+		)
+	except Exception as exc:
+		logging.error("Slice 5 failed while running the counts-only sieve pass: %s", exc)
+		return 1
+
+	logging.info("Counts-only sieve complete. Filter chunks processed: %d", filter_chunk_count)
+	logging.info("Counts-only sieve complete. Total input rows: %d", total_input_rows)
+	logging.info("Counts-only sieve complete. Total survivor rows: %d", total_survivor_rows)
 
 	return 0
 

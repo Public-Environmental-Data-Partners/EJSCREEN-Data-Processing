@@ -7,28 +7,20 @@ Slice 1 purpose:
   be tested before any filtering or output logic is introduced.
 
 Module requirements note:
-	Remote-mode reading requires fsspec and s3fs to be installed.
-	Local-mode reading does not require those modules.
+	All modes require pandas and fsspec to be installed.
+	Remote-mode reading also requires python-dotenv and s3fs.
 """
 
 from dataclasses import dataclass
 from pathlib import Path
 import argparse
 import csv
-import importlib
 import io
 import logging
 import zipfile
 
-try:
-	fsspec = importlib.import_module("fsspec")
-except Exception as _e:  # pragma: no cover - environment dependent
-	fsspec = None
-
-try:
-	pd = importlib.import_module("pandas")
-except Exception as _e:  # pragma: no cover - environment dependent
-	pd = None
+import fsspec
+import pandas as pd
 
 
 REQUIRED_SIEVE_COLUMNS = (
@@ -52,12 +44,6 @@ class Config:
 
 
 def get_config(argv=None) -> Config:
-	try:
-		dotenv = importlib.import_module("dotenv")
-		dotenv.load_dotenv()
-	except Exception:
-		pass
-
 	parser = argparse.ArgumentParser(
 		description="Enumerate and inspect HD_HANDLER CSV members inside the hazardous-waste archive."
 	)
@@ -68,6 +54,18 @@ def get_config(argv=None) -> Config:
 	)
 	args = parser.parse_args(argv)
 	return Config(storage_mode=args.storage_mode)
+
+
+def initialize_runtime_dependencies(cfg: Config) -> None:
+	if cfg.storage_mode != "remote":
+		return
+
+	import dotenv
+	import s3fs
+
+	dotenv.load_dotenv()
+	if s3fs is None:
+		raise RuntimeError("s3fs failed to import for remote mode")
 
 
 def is_s3_uri(path: str) -> bool:
@@ -93,9 +91,6 @@ def get_outer_archive_path(cfg: Config) -> str:
 
 
 def enumerate_archive_members(outer_archive_path: str) -> list[str]:
-	if fsspec is None:
-		raise RuntimeError("fsspec is not available; cannot open local or remote archive paths")
-
 	try:
 		with fsspec.open(outer_archive_path, "rb") as archive_stream:
 			with zipfile.ZipFile(archive_stream, "r") as archive:
@@ -120,9 +115,6 @@ def enumerate_archive_members(outer_archive_path: str) -> list[str]:
 
 
 def read_member_csv_header(outer_archive_path: str, member_name: str) -> list[str]:
-	if fsspec is None:
-		raise RuntimeError("fsspec is not available; cannot open local or remote archive paths")
-
 	try:
 		with fsspec.open(outer_archive_path, "rb") as archive_stream:
 			with zipfile.ZipFile(archive_stream, "r") as archive:
@@ -158,10 +150,6 @@ def validate_required_sieve_columns(header_row: list[str], member_name: str) -> 
 
 
 def chunk_read_member_csv(outer_archive_path: str, member_name: str, chunk_size: int) -> tuple[int, int]:
-	if fsspec is None:
-		raise RuntimeError("fsspec is not available; cannot open local or remote archive paths")
-	if pd is None:
-		raise RuntimeError("pandas is not available; cannot chunk-read CSV members")
 	if chunk_size <= 0:
 		raise ValueError(f"Chunk size must be positive. Received: {chunk_size}")
 
@@ -195,6 +183,11 @@ def chunk_read_member_csv(outer_archive_path: str, member_name: str, chunk_size:
 def main(argv=None) -> int:
 	logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 	cfg = get_config(argv)
+	try:
+		initialize_runtime_dependencies(cfg)
+	except Exception as exc:
+		logging.error("Runtime dependency initialization failed: %s", exc)
+		return 1
 	outer_archive_path = get_outer_archive_path(cfg)
 
 	logging.info("Storage mode: %s", cfg.storage_mode)

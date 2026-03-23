@@ -98,7 +98,7 @@ BLOCKS_CSV_REQUIRED_COLUMNS = (
 
 @dataclass(slots=True)
 class Config:
-	state: str = 'MT'
+	state: str = 'VT'
 	input_path: str = DEFAULT_LOCAL_PIPELINE_PATH
 	output_path: str = DEFAULT_LOCAL_PIPELINE_PATH
 	hazardous_waste_sites_path: str | None = None
@@ -731,7 +731,61 @@ def step4_population_weighting_aggregation(
 	blocks_gdf: gpd.GeoDataFrame,
 	output_path: str | None = None,
 ) -> pd.DataFrame:
-	raise NotImplementedError('Step 4 is not implemented yet for hazardous waste')
+	if distances_with_scores_df is None:
+		raise RuntimeError('distances_with_scores_df is required')
+	if blocks_gdf is None:
+		raise RuntimeError('blocks_gdf is required')
+	if 'GEOID_BLOCK' not in distances_with_scores_df.columns:
+		raise RuntimeError("Expected 'GEOID_BLOCK' column in distances DataFrame")
+	if 'proximity_score' not in distances_with_scores_df.columns:
+		raise RuntimeError("Expected 'proximity_score' column in distances DataFrame")
+
+	blocks_df = pd.DataFrame(blocks_gdf.drop(columns='geometry', errors='ignore')).copy()
+	_require_columns(blocks_df, ('block_geoid', 'block_group_geoid', 'fraction_of_total'), 'Blocks GeoDataFrame')
+
+	distances_with_scores_df = distances_with_scores_df.copy()
+	distances_with_scores_df['proximity_score'] = pd.to_numeric(
+		distances_with_scores_df['proximity_score'],
+		errors='coerce',
+	)
+
+	blocks_df['fraction_of_total'] = pd.to_numeric(blocks_df['fraction_of_total'], errors='raise')
+	blocks_df['block_geoid'] = blocks_df['block_geoid'].astype('string').str.strip()
+	blocks_df['block_group_geoid'] = blocks_df['block_group_geoid'].astype('string').str.strip()
+
+	all_block_groups = blocks_df[['block_group_geoid']].copy()
+	all_block_groups['block_group_geoid'] = all_block_groups['block_group_geoid'].astype('string').str.strip()
+	all_block_groups = all_block_groups[
+		all_block_groups['block_group_geoid'].notna() & all_block_groups['block_group_geoid'].ne('')
+	].drop_duplicates().reset_index(drop=True)
+	logging.info('Prepared %d block groups from blocks source for final output universe', len(all_block_groups))
+
+	merged = distances_with_scores_df.merge(
+		blocks_df[['block_geoid', 'block_group_geoid', 'fraction_of_total']],
+		left_on='GEOID_BLOCK',
+		right_on='block_geoid',
+		how='left',
+	)
+	merged = merged[merged['proximity_score'].notna()].copy()
+	merged['fraction_of_total'] = pd.to_numeric(merged['fraction_of_total'], errors='coerce').fillna(0.0)
+	merged['weighted_score'] = merged['proximity_score'].astype(float) * merged['fraction_of_total'].astype(float)
+
+	agg_targeted = merged.groupby('block_group_geoid', dropna=True)['weighted_score'].sum().reset_index()
+	agg_targeted['weighted_score'] = agg_targeted['weighted_score'].round(4)
+
+	agg = all_block_groups.merge(agg_targeted, on='block_group_geoid', how='left')
+	agg['weighted_score'] = agg['weighted_score'].fillna(0.0)
+
+	if output_path:
+		logging.info(
+			'Writing final block-group scores to %s (rows=%d, targeted_groups=%d)',
+			output_path,
+			len(agg),
+			len(agg_targeted),
+		)
+		write_df_s3_or_local(agg[['block_group_geoid', 'weighted_score']], output_path)
+
+	return agg
 
 
 def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
@@ -779,15 +833,20 @@ def main(argv=None) -> int:
 				blocks_gdf=blocks_gdf,
 				hazardous_waste_gdf=hazardous_waste_gdf,
 			)
-			step3_inverse_distance_scoring(
+			distances_with_scores_df = step3_inverse_distance_scoring(
 				distances_df,
 				output_path=paths.block_site_distances_path,
+			)
+			step4_population_weighting_aggregation(
+				distances_with_scores_df,
+				blocks_gdf=blocks_gdf,
+				output_path=paths.final_bg_scores_path,
 			)
 	except Exception as exc:
 		logging.exception('Hazardous-waste proximity pipeline failed: %s', exc)
 		return 1
 
-	logging.info('Hazardous-waste proximity pipeline completed successfully through Step 3')
+	logging.info('Hazardous-waste proximity pipeline completed successfully')
 	return 0
 
 

@@ -92,7 +92,7 @@ def get_config(argv=None) -> Config:
     parser.add_argument('--dry-run', action='store_true', help='If set, do not write any files, just show what would be done')
     # New runtime parameter to select the data type (default: superfund)
     parser.add_argument('--data-type', '--type', dest='data_type', type=str, default=Config.data_type,
-                        choices=['superfund', 'traffic'], help='Data type to request/process (default: superfund)')
+                        choices=['superfund', 'traffic', 'hazardous_waste'], help='Data type to request/process (default: superfund)')
 
     # If script invoked with no args, print a one-line error and the full help text, then exit non-zero
     import sys
@@ -357,8 +357,8 @@ def main(argv=None) -> None:
             "EJ.DISPARITY.traffic.score.eo","state.EJ.DISPARITY.traffic.score.eo",
             "EJ.DISPARITY.traffic.score.supp"
         ],
-        "superfund": ["proximity.npl", "pctile.proximity.npl"]
-
+        "superfund": ["proximity.npl", "pctile.proximity.npl"],
+        "hazardous_waste": ["proximity.tsdf", "pctile.proximity.tsdf"]
     }
 
     # Construct desired list based on selected data type (default: superfund)

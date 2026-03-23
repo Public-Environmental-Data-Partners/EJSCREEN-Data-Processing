@@ -1,4 +1,4 @@
-"""compareSuperfund.py
+"""compareScores2Ejam.py
 
 Compare two CSVs of block-group weighted scores and produce summary output.
 

@@ -25,6 +25,8 @@ scripts/traffic/.Rhistory
 scripts/utilities/validation/test_files/
 scripts/superfund/pipeline
 test.out
+*.csv
+*.zip
 
 # Dev-specific experiments and temp tools
 scripts/utilities/agScratch/

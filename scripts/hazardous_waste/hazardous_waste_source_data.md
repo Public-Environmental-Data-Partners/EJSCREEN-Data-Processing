@@ -1,63 +1,58 @@
-# DRAFT Design Decision Record: Hazardous Waste Proximity Indicator Source Data and Filtering #
+# Design Decision Record: Hazardous Waste Proximity Source Data and Filtering
 
-**Date:** 2026-03-18
-
-This text is based on a draft by Gemini and on research and prototype coding done by 
-AG, Gemini, and GitHub CoPilot ChatGPT 5.4
+**Date:** 2026-03-27
+**Indicator:** Hazardous Waste Proximity (TSDF & LQG)
+**Target Version:** EJScreen 2.3 Compatibility
 
 ---
 
 ### 1. Problem Statement
 
 The "Hazardous Waste Proximity" indicator requires an authoritative, focused list of Hazardous Waste facility locations (i.e. latitude and longitude). There are two general types of site:
-- LGQ (large quantity generator) sites, the sources -- These are sites such as chemical plants, refineries, and large manufacturers that generate more than 2,200 lbs of hazardous waste per month.
-- TSDF (Treatment, Storage, Disposal Facility) sites, the sinks -- These facilities receive waste from other companies to incinerate it, treat it, or bury it in specialized landfills.
+- **LQG (Large Quantity Generator) sites, the sources**: These are sites such as chemical plants, refineries, and large manufacturers that generate more than 2,200 lbs of hazardous waste per month.
+- **TSDF (Treatment, Storage, Disposal Facility) sites, the sinks**: These facilities receive waste from other companies to incinerate it, treat it, or bury it in specialized landfills.
 
-The federal data set that acts as the raw source for the data contains a large superset of the data we need for processing.
-The raw `HD_HANDLER` dataset (approx. 4.1 million records) acts as a historical registry for all RCRA-regulated entities.
-[RCRA: Resource Conservation and Recovery Act] 
-For our indicator, the dataset must be pruned to include only active, significant facilities (TSDFs and LQGs) to avoid over-counting from historical or minor environmental locations.
+The federal RCRAInfo dataset contains a large superset of data (approx. 4.1 million records) acting as a historical registry. To achieve high correlation with EPA EJScreen/EJAM results, this dataset must be pruned to a specific "Regulatory Universe" of the significant facilities nationwide. The goal is to have a high correlation with the original EJAM sites and block scores but there is likely to be some drift due to the source file contents changing over time.
 
-**Source Data Set:**
+---
 
-- [RCRAInfo Public Data Access (CSV Downloads)](https://rcrapublic.epa.gov/rcra-hwip/data-access/csv-downloads)
-- File to download: `hd.zip` (Handler Data)
-- Primary Table: `HD_HANDLER` (Distributed across 5 CSV files)
+### 2. Source Data Architecture
 
-To assemble one authoritative list, the 5 CSV files in the zip must be filtered and then reassembled
-into a single csv file for downstream processing.
+To assemble the authoritative list, the pipeline must join three distinct relational components found within the [RCRAInfo Public Data Access](https://rcrapublic.epa.gov/rcra-hwip/data-access/csv-downloads) downloads.
 
-### 2. Implementation: Filter Logic
-(All code shown is Python using dataframe syntax. It should be easily translated into R if need be.)
+| Component | Source File | Purpose |
+| :--- | :--- | :--- |
+| **Master Registry** | `HD_BASIC.csv` (inside `hd.zip`) | The "Phone Book": Contains the single authoritative **Latitude/Longitude** and Handler Name for every registered ID. |
+| **Regulatory Universe** | `HD_REPORTING.csv` (inside `hd_reporting.zip`) | The "Scorecard": Contains the specific EPA flags for **Operating TSDFs** and **Active LQGs**. |
+| **Temporal Activity** | `BR_REPORTING_2021.csv` (or 2023) | The "Safety Net": A list of IDs that actually reported hazardous waste handling in the most recent **Biennial Report** cycle. |
+
+---
+
+### 3. Implementation: Filter Logic
+
+The "Hazardous Waste Proximity" universe is defined as the **Union** of facilities that are either designated as permanent infrastructure (TSDFs) or identified by recent high-volume activity (LQGs).
 
 **The Filter Formula:**
-The following logic is proposed to filter each large dataset, `df`,  to just our required list:
+A facility is included in the final indicator calculation if its `HANDLER_ID` meets **ANY** of the following conditions:
 
-`df_filtered = df[is_current & include_in_national_report & (is_tsdf | is_lqg)]`
+1.  **Operating TSDF**:
+    * `HD_REPORTING['OPERATING_TSDF'] == 'Y'`
+    * OR `HD_REPORTING['TSDF_UNIVERSE']` is not null.
+2.  **Active LQG Universe**:
+    * `HD_REPORTING['LQG_UNIVERSE']` is not null.
+3.  **Recent Reporting Event**:
+    * `HANDLER_ID` is present in the `BR_REPORTING` (Biennial Report) summary file for the target year (2021 or 2023).
 
-**Variable Definitions:**
+---
 
-* **`is_current`**: `df['CURRENT RECORD'] == 'Y'`
-*Ensures the record is the most up-to-date version in the registry.*
-* **`include_in_national_report`**: `df['INCLUDE IN NATIONAL REPORT'] == 'Y'`
-*Acts as a proxy for "active/significant" status by selecting facilities included in the biennial reporting cycle.*
-* **`is_tsdf`**: `df['TSD ACTIVITY'] == 'Y'`
-*Treatment, Storage, and Disposal facilities.*
-* **`is_lqg`**: `df['FED WASTE GENERATOR'] == '1'`
-*Large Quantity Generators (the highest volume hazardous waste producers).*
+### 4. Data Assembly Workflow
 
-### 3. Observed filtering results on a data sample
+1.  **ID Extraction**: Extract a unique list of `HANDLER_ID`s from the `BR_REPORTING` dataset.
+2.  **Universe Flagging**: Filter `HD_REPORTING` using the logic in Section 3 to identify the "National Significant Subset."
+3.  **Spatial Join**: Perform an inner join between the filtered IDs and `HD_BASIC` to retrieve the `LOCATION_LATITUDE` and `LOCATION_LONGITUDE`.
+4.  **Deduplication**: Ensure one record per `HANDLER_ID` to prevent score inflation from historical source records.
 
-Testing on `HD_HANDLER_0.csv` (~1,000,000 records) produced the following:
+A design stretch goal:
 
-* **Total Records:** 1,000,000
-* **Filtered Records:** 3,961 (approx. 0.4% of total)^^
-
-*^^Note: This reduction is consistent with expectations for the EJScreen methodology, 
-which focuses on a subset of approximately 20,000 to 30,000 facilities nationwide.*
-
-### 4. Preprocessing required
-
-Code must read all records in the zipped csvs stored within the downloaded zip
-file, filter them, and then merge them into a single csv for downstream
-indicator calculations.
+See if we can build code that reaches into the original downloaded wrapper zip, hd.zip, to directly read and process records within 
+its contained zips and without having to unzip the component files first.

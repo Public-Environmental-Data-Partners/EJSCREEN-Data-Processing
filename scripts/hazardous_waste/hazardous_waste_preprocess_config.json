@@ -1,0 +1,46 @@
+{
+  "local_root_path": "./pipeline/test_data/",
+  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/hazardous_waste/pipeline/",
+  "downloads_relative_path": "downloads",
+  "default_outer_archive_filename": "HD.zip",
+  "active_nested_sources": [
+    {
+      "source_key": "hd_basic",
+      "logical_name": "HD_BASIC",
+      "inventory_phase": "active",
+      "description": "Master registry source for authoritative handler names and coordinates.",
+      "outer_archive_filename": null,
+      "inner_zip_member_filename": "HD_BASIC.zip",
+      "target_csv_globs": [
+        "HD_BASIC_*.csv"
+      ],
+      "target_biennial_year": null
+    },
+    {
+      "source_key": "hd_reporting",
+      "logical_name": "HD_REPORTING",
+      "inventory_phase": "active",
+      "description": "Regulatory-universe source containing TSDF and LQG flags.",
+      "outer_archive_filename": null,
+      "inner_zip_member_filename": "HD_REPORTING.zip",
+      "target_csv_globs": [
+        "HD_REPORTING_*.csv"
+      ],
+      "target_biennial_year": null
+    },
+    {
+      "source_key": "br_reporting",
+      "logical_name": "BR_REPORTING",
+      "inventory_phase": "active",
+      "description": "Temporal activity source containing recent biennial reporting rows.",
+      "outer_archive_filename": "BR_REPORTING_2023.zip",
+      "inner_zip_member_filename": null,
+      "target_csv_globs": [
+        "BR_REPORTING_2023_*.csv"
+      ],
+      "target_biennial_year": 2023
+    }
+  ],
+  "deferred_sources": [
+  ]
+}

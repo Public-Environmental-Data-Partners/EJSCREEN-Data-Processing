@@ -1,37 +1,42 @@
-To keep this simple and abstract, think of this process as a **Vertical Pipeline**. Instead of traditional "Batch Processing" (where you move a whole mountain of dirt, then sort it), we are building a **Sieve** that sits directly over the data stream.
+To keep this simple and abstract, think of this process as a **Vertical Pipeline**. Instead of downloading and unpacking the whole RCRA universe, we build a **Sieve** that sits directly over the source stream, pulls only the pieces we need, and assembles one authoritative site table.
 
 Here is the 4-step architectural overview:
 
 ### 1. The Virtual Connection (The "Straw")
-Instead of downloading the giant ZIP file, the code creates a virtual connection to the URI (S3 or Local). 
-* Think of this as a straw that only pulls the specific bytes needed at any given moment. 
-* This "straw" reaches into the outer ZIP until it touches the header of the selected `HD_HANDLER_*.csv` member.
+Instead of downloading the full EPA package and unzipping it by hand, the code creates a virtual connection to the root URI (S3 or Local).
+* Think of this as a straw that only pulls the specific bytes needed at any given moment.
+* This straw first reaches the wrapper archives such as `hd.zip` and `hd_reporting.zip`.
+* From there, the intended design continues through the contained ZIP members until it reaches the specific component files that matter: `HD_BASIC.csv`, `HD_REPORTING.csv`, and the target `BR_REPORTING_*.csv` file for the analysis year.
 
-### 2. The ZIP Member Reader (The "Unfolder")
-As the data bytes travel through the "straw," they pass through one transparent layer of decompression. 
-* **Layer A:** Unpacks the outer archive.
-* The code then opens the target `HD_HANDLER_*.csv` member directly from that archive.
-* This happens "in-flight." The data exists in its uncompressed form only for the millisecond it takes to read a row, then it's discarded. The full uncompressed source data is never staged to local storage; only the final filtered output is written.
+### 2. The Nested Archive Reader (The "Unfolder")
+As the data bytes travel through the straw, they pass through the archive layers needed to expose the component tables.
+* **Layer A:** Open the downloaded wrapper archive.
+* **Layer B:** Open the inner ZIP member that contains the target CSV.
+* **Layer C:** Stream the CSV rows directly into the parser without extracting the full file to disk.
+* This happens in-flight. The data exists in uncompressed form only long enough to read and classify rows, then it is discarded. The goal is to avoid staging the raw national source files on local storage.
 
+### 3. The Relational Sieve (The "Filter")
+The sieve is no longer a direct pass over one `HD_HANDLER` stream. It now works across three source components, each with a different job.
+* **`HD_REPORTING` is the scorecard:** It identifies facilities that belong in the regulatory universe because they are operating TSDFs or part of the LQG universe.
+* **`BR_REPORTING` is the safety net:** It contributes `HANDLER_ID`s that showed recent hazardous-waste reporting activity in the target biennial cycle.
+* **`HD_BASIC` is the phone book:** It supplies the authoritative handler name and latitude/longitude for the IDs that survive the universe filter.
+* The effective sieve is therefore a set-building step: collect the qualifying `HANDLER_ID`s from `HD_REPORTING` and `BR_REPORTING`, take their union, and only then pull the matching site records from `HD_BASIC`.
 
-### 3. The Chunked Sieve (The "Filter")
-The code doesn't try to look at 1,000,000 rows at once. It looks at a **window** (e.g., 50,000 rows).
-* **Load Window:** Pull 50,000 rows into RAM.
-* **Apply Rules:** Instantly drop every row that isn't an "Active TSDF" or "LQG."
-* **Keep Results:** Hold only the ~200 relevant rows from that window.
-* **Clear Window:** Wipe the 50,000 rows from RAM and move to the next "chunk."
-
-### 4. The Unified Accumulator (The "Merge")
-As the "Sieve" finishes a chunk, it sends the survivors to a single output file.
-* This output file stays open for the entire duration of the script.
-* It collects the survivors from File 1, then File 2, and so on.
-* By the time the straw reaches the end of the 5th CSV member, you have one clean CSV containing only the "Gold" records from all five files.
+### 4. The Spatial Join and Canonical Output (The "Merge")
+Once the candidate universe of `HANDLER_ID`s is built, the pipeline assembles the final site file.
+* Join the filtered ID universe back to `HD_BASIC` to recover coordinates and names.
+* Deduplicate to one record per `HANDLER_ID` so historical registry duplication does not inflate downstream scores.
+* Write one clean canonical CSV that becomes the single hazardous-waste site input for proximity processing.
+* The output is atomic even though the source data is fragmented across multiple relational components and archive layers.
 
 ---
 
 ### Why this works for Python and R:
-* **The Logic is "Lazy":** Both languages support this "don't touch it until you need it" philosophy.
-* **The Footprint is Constant:** Whether the input is 100MB or 100GB, your RAM usage stays the same because the "window" size is fixed.
-* **The Output is Atomic:** You end up with one file to move into your 10km buffer script, regardless of how messy the source ZIP was.
+* **The Logic is "Lazy":** Both languages can stream from file-like objects and postpone work until a row or chunk is actually needed.
+* **The Footprint is Controlled:** The large source tables can still be processed in bounded chunks rather than loaded all at once.
+* **The Coordinates Stay Authoritative:** `HD_BASIC` remains the single source of truth for site location, instead of mixing location fields from less reliable downstream slices.
+* **The Output is Canonical:** You end up with one site table keyed to `HANDLER_ID`, ready for buffer and scoring work.
 
-(Generated by AG and Gemini, 21 Mar 2026. Updated slightly by CoPilot to match as-built, 22 Mar 2026)
+Implementation note: nested outer-zip to inner-zip streaming is the target design for this pipeline. If that access path proves disproportionately elaborate in code, implementation may temporarily fall back to a simpler staging step, but the conceptual source architecture above remains the design target.
+
+(Generated by AG and Gemini, 21 Mar 2026. Rebuilt by Copilot on 27 Mar 2026 to reflect the current source-data design direction.)

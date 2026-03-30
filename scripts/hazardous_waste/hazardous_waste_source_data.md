@@ -1,6 +1,6 @@
 # Design Decision Record: Hazardous Waste Proximity Source Data and Filtering
 
-**Date:** 2026-03-27
+**Date:** 2026-03-30
 **Indicator:** Hazardous Waste Proximity (TSDF & LQG)
 **Target Version:** EJScreen 2.3 Compatibility
 
@@ -8,51 +8,87 @@
 
 ### 1. Problem Statement
 
-The "Hazardous Waste Proximity" indicator requires an authoritative, focused list of Hazardous Waste facility locations (i.e. latitude and longitude). There are two general types of site:
-- **LQG (Large Quantity Generator) sites, the sources**: These are sites such as chemical plants, refineries, and large manufacturers that generate more than 2,200 lbs of hazardous waste per month.
-- **TSDF (Treatment, Storage, Disposal Facility) sites, the sinks**: These facilities receive waste from other companies to incinerate it, treat it, or bury it in specialized landfills.
+The "Hazardous Waste Proximity" indicator requires a focused national list of hazardous-waste sites with usable coordinates. There are two general classes of site we care about:
+- **LQG (Large Quantity Generator) sites, the sources**: facilities that generate hazardous waste at the large-quantity level.
+- **TSDF (Treatment, Storage, Disposal Facility) sites, the sinks**: facilities that receive, treat, store, or dispose of hazardous waste.
 
-The federal RCRAInfo dataset contains a large superset of data (approx. 4.1 million records) acting as a historical registry. To achieve high correlation with EPA EJScreen/EJAM results, this dataset must be pruned to a specific "Regulatory Universe" of the significant facilities nationwide. The goal is to have a high correlation with the original EJAM sites and block scores but there is likely to be some drift due to the source file contents changing over time.
-
----
-
-### 2. Source Data Architecture
-
-To assemble the authoritative list, the pipeline must join three distinct relational components found within the [RCRAInfo Public Data Access](https://rcrapublic.epa.gov/rcra-hwip/data-access/csv-downloads) downloads.
-
-| Component | Source File | Purpose |
-| :--- | :--- | :--- |
-| **Master Registry** | `HD_BASIC.csv` (inside `hd.zip`) | The "Phone Book": Contains the single authoritative **Latitude/Longitude** and Handler Name for every registered ID. |
-| **Regulatory Universe** | `HD_REPORTING.csv` (inside `hd_reporting.zip`) | The "Scorecard": Contains the specific EPA flags for **Operating TSDFs** and **Active LQGs**. |
-| **Temporal Activity** | `BR_REPORTING_2021.csv` (or 2023) | The "Safety Net": A list of IDs that actually reported hazardous waste handling in the most recent **Biennial Report** cycle. |
+The full federal RCRAInfo download is much broader than the subset needed for EJ-style proximity scoring. The preprocessing objective is therefore to identify a defensible national site universe that is both geographically usable and reasonably aligned to the original EJScreen/EJAM concept, even if some drift remains because the source files have changed over time.
 
 ---
 
-### 3. Implementation: Filter Logic
+### 2. Current Source Decision
 
-The "Hazardous Waste Proximity" universe is defined as the **Union** of facilities that are either designated as permanent infrastructure (TSDFs) or identified by recent high-volume activity (LQGs).
+Based on inspection of the local files currently in hand, the working design is now **HD_REPORTING-first**.
 
-**The Filter Formula:**
-A facility is included in the final indicator calculation if its `HANDLER_ID` meets **ANY** of the following conditions:
+`HD_REPORTING` currently appears to provide all of the core fields needed for an initial rebuild:
+- `HANDLER ID`
+- `HANDLER NAME`
+- `LOCATION LATITUDE`
+- `LOCATION LONGITUDE`
+- `GENSTATUS`
+- `OPERATING TSDF`
 
-1.  **Operating TSDF**:
-    * `HD_REPORTING['OPERATING_TSDF'] == 'Y'`
-    * OR `HD_REPORTING['TSDF_UNIVERSE']` is not null.
-2.  **Active LQG Universe**:
-    * `HD_REPORTING['LQG_UNIVERSE']` is not null.
-3.  **Recent Reporting Event**:
-    * `HANDLER_ID` is present in the `BR_REPORTING` (Biennial Report) summary file for the target year (2021 or 2023).
+That means the first implementation path does **not** depend on a separate coordinate join. Instead, the pipeline can attempt to derive both the site universe logic and the site locations from `HD_REPORTING` alone.
+
+`BR_REPORTING_2023` remains relevant, but it is now treated as a **possible narrowing filter** rather than a mandatory source. If testing shows that `HD_REPORTING` alone yields too many sites, includes too many stale records, or otherwise appears broader than the intended indicator universe, then `BR_REPORTING` can be layered in as a secondary constraint to prefer recent reporting activity.
+
+---
+
+### 3. Working Filter Logic
+
+The current working assumption is that a site should be included if it satisfies either the TSDF condition or the LQG condition.
+
+**The provisional filter formula:**
+
+1. **Operating TSDF**
+    Use `OPERATING TSDF` as the TSDF indicator.
+
+    The field does not behave like a simple `Y/N` flag. In the local file inspection, values such as `L--S--` and `---S--` appear to represent positive TSDF classifications, while `------` appears to represent absence of TSDF status.
+
+    The current working interpretation is therefore:
+    - include as TSDF when `OPERATING TSDF` contains one or more meaningful letter codes
+    - exclude as TSDF when `OPERATING TSDF` is blank or all dashes
+
+2. **Large Quantity Generator**
+    Use `GENSTATUS` as the LQG indicator.
+
+    The observed values include:
+    - `LQG`
+    - `SQG`
+    - `VSQG`
+    - `N`
+
+    The current working interpretation is:
+    - include as LQG when `GENSTATUS == 'LQG'`
+    - do not include `SQG`, `VSQG`, or `N` in the initial site universe
+
+3. **Optional BR tightening pass**
+    If testing suggests that `HD_REPORTING` alone is too broad or includes too many records that are not sufficiently current, then `BR_REPORTING_2023` may be used as an additional narrowing step.
+
+    In that case, the working rule would be:
+    - start from the `HD_REPORTING`-derived TSDF/LQG universe
+    - optionally require presence in `BR_REPORTING_2023` for categories where current activity matters
+    - evaluate the effect empirically before making that tightening rule permanent
 
 ---
 
 ### 4. Data Assembly Workflow
 
-1.  **ID Extraction**: Extract a unique list of `HANDLER_ID`s from the `BR_REPORTING` dataset.
-2.  **Universe Flagging**: Filter `HD_REPORTING` using the logic in Section 3 to identify the "National Significant Subset."
-3.  **Spatial Join**: Perform an inner join between the filtered IDs and `HD_BASIC` to retrieve the `LOCATION_LATITUDE` and `LOCATION_LONGITUDE`.
-4.  **Deduplication**: Ensure one record per `HANDLER_ID` to prevent score inflation from historical source records.
+The current workflow is intentionally simpler than the prior three-source design.
 
-A design stretch goal:
+1. **Read and validate `HD_REPORTING`**
+    Confirm that the file contains the expected identifier, status, and coordinate fields.
 
-See if we can build code that reaches into the original downloaded wrapper zip, hd.zip, to directly read and process records within 
-its contained zips and without having to unzip the component files first.
+2. **Build the provisional site universe**
+    Keep rows where either:
+    - `GENSTATUS == 'LQG'`, or
+    - `OPERATING TSDF` indicates an actual TSDF classification rather than an all-dash placeholder.
+
+3. **Retain coordinates directly from `HD_REPORTING`**
+    Use `LOCATION LATITUDE` and `LOCATION LONGITUDE` from the same filtered rows.
+
+4. **Deduplicate by `HANDLER_ID`**
+    Ensure one retained record per handler so the final site file does not inflate downstream scores.
+
+5. **Optionally test `BR_REPORTING_2023` as a narrowing filter**
+    If the provisional `HD_REPORTING` universe looks too broad, compare results with a version that requires recent reporting activity or otherwise uses `BR_REPORTING_2023` to tighten the site set.

@@ -8,6 +8,9 @@ Purpose:
 	- block_site_distances.csv (intermediate output from Step 2)
 	- final_bg_scores.csv (final output from Step 4)
 
+Sample commandline:
+  python scripts/hazardous_waste/hazardous_waste_proximity.py --state MT --input-path ./pipeline/test_data --output-path ./pipeline/test_data
+
 Behavior summary:
   - Uses externalized state metadata from state_config.json.
   - Supports local paths or S3 URIs for inputs and outputs.
@@ -441,7 +444,6 @@ def step0_prepare_inputs(
 		hazardous_waste_df,
 		(
 			HAZARDOUS_WASTE_HANDLER_ID_COLUMN,
-			HAZARDOUS_WASTE_STATE_COLUMN,
 			HAZARDOUS_WASTE_LATITUDE_COLUMN,
 			HAZARDOUS_WASTE_LONGITUDE_COLUMN,
 		),
@@ -452,9 +454,16 @@ def step0_prepare_inputs(
 	hazardous_waste_df[HAZARDOUS_WASTE_HANDLER_ID_COLUMN] = (
 		hazardous_waste_df[HAZARDOUS_WASTE_HANDLER_ID_COLUMN].astype(str).str.strip()
 	)
-	hazardous_waste_df[HAZARDOUS_WASTE_STATE_COLUMN] = (
-		hazardous_waste_df[HAZARDOUS_WASTE_STATE_COLUMN].astype(str).str.strip().str.upper()
-	)
+	if HAZARDOUS_WASTE_STATE_COLUMN in hazardous_waste_df.columns:
+		hazardous_waste_df[HAZARDOUS_WASTE_STATE_COLUMN] = (
+			hazardous_waste_df[HAZARDOUS_WASTE_STATE_COLUMN].astype(str).str.strip().str.upper()
+		)
+	else:
+		logging.info(
+			'Hazardous-waste sites CSV does not include %s; continuing because the current proximity flow does not require it',
+			HAZARDOUS_WASTE_STATE_COLUMN,
+		)
+		hazardous_waste_df[HAZARDOUS_WASTE_STATE_COLUMN] = ''
 	logging.info(
 		'Canonical hazardous-waste sites available nationwide for state %s processing: %d',
 		state_config.postal,

@@ -41,6 +41,7 @@ import io
 import json
 import logging
 import zipfile
+from collections import Counter
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -96,6 +97,8 @@ class Config:
 	remote_root_path: str
 	downloads_relative_path: str
 	outer_archive_filename: str
+	provisional_output_relative_path: str
+	canonical_output_relative_path: str
 	active_nested_sources: tuple[SourceDescriptor, ...]
 	deferred_sources: tuple[SourceDescriptor, ...]
 
@@ -115,6 +118,29 @@ class HdReportingUniverseSummary:
 	qualifying_rows: int
 	neither_rows: int
 	unique_handler_ids: int
+
+
+@dataclass(frozen=True, slots=True)
+class SiteExtractionSummary:
+	total_rows: int
+	lqg_rows: int
+	tsdf_rows: int
+	both_rows: int
+	qualifying_rows: int
+	neither_rows: int
+	validation_failure_count: int
+	provisional_row_count: int
+	unique_handler_ids: int
+	validation_reason_counts: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizationSummary:
+	provisional_row_count: int
+	exact_duplicates_removed: int
+	duplicate_handler_id_count: int
+	coordinate_conflict_count: int
+	canonical_row_count: int
 
 
 def build_source_descriptor(raw_descriptor: dict) -> SourceDescriptor:
@@ -166,6 +192,8 @@ def get_config(argv=None) -> Config:
 		remote_root_path=config_payload["remote_root_path"],
 		downloads_relative_path=config_payload["downloads_relative_path"],
 		outer_archive_filename=args.outer_archive_filename,
+		provisional_output_relative_path=config_payload["provisional_output_relative_path"],
+		canonical_output_relative_path=config_payload["canonical_output_relative_path"],
 		active_nested_sources=tuple(
 			build_source_descriptor(raw_descriptor)
 			for raw_descriptor in config_payload.get("active_nested_sources", [])
@@ -227,11 +255,32 @@ def get_source_outer_archive_path(cfg: Config, source: SourceDescriptor) -> str:
 	)
 
 
+def get_provisional_output_path(cfg: Config) -> str:
+	return join_root_and_relative_path(get_active_root_path(cfg), cfg.provisional_output_relative_path)
+
+
+def get_canonical_output_path(cfg: Config) -> str:
+	return join_root_and_relative_path(get_active_root_path(cfg), cfg.canonical_output_relative_path)
+
+
 def open_binary_input_stream(path: str):
 	if is_s3_uri(path):
 		fsspec = load_fsspec_module()
 		return fsspec.open(path, "rb")
 	return open(path, "rb")
+
+
+def ensure_local_parent_dir(path: str) -> None:
+	if not is_s3_uri(path):
+		Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+
+def open_text_output_stream(path: str):
+	ensure_local_parent_dir(path)
+	if is_s3_uri(path):
+		fsspec = load_fsspec_module()
+		return fsspec.open(path, "w", newline="")
+	return open(path, "w", encoding="utf-8", newline="")
 
 
 def list_archive_members(archive: zipfile.ZipFile) -> list[str]:
@@ -298,6 +347,22 @@ def normalize_handler_id(value: str | None) -> str:
 	return normalize_cell_text(value).upper()
 
 
+def parse_float_or_none(value: str | None) -> float | None:
+	normalized_value = normalize_cell_text(value)
+	if not normalized_value:
+		return None
+	try:
+		return float(normalized_value)
+	except ValueError:
+		return None
+
+
+def has_usable_coordinates(row: dict[str, str]) -> bool:
+	latitude = parse_float_or_none(row.get("LOCATION LATITUDE"))
+	longitude = parse_float_or_none(row.get("LOCATION LONGITUDE"))
+	return latitude is not None and longitude is not None
+
+
 def is_lqg_status(value: str | None) -> bool:
 	return normalize_cell_text(value).upper() == "LQG"
 
@@ -313,6 +378,224 @@ def classify_hd_reporting_row(row: dict[str, str]) -> tuple[bool, bool]:
 	is_lqg = is_lqg_status(row.get("GENSTATUS"))
 	has_tsdf = has_meaningful_tsdf_status(row.get("OPERATING TSDF"))
 	return is_lqg, has_tsdf
+
+
+def classify_hd_reporting_validation_failure(row: dict[str, str]) -> tuple[str, str] | None:
+	validation_errors = []
+	if not normalize_handler_id(row.get("HANDLER ID")):
+		validation_errors.append("missing_handler_id")
+	if not has_usable_coordinates(row):
+		validation_errors.append("invalid_coordinates")
+	if not validation_errors:
+		return None
+	validation_reason = ";".join(validation_errors)
+	return validation_reason, f"HD_REPORTING row failed site-level validation: {validation_reason}"
+
+
+def build_hd_reporting_site_row(
+	row: dict[str, str],
+	csv_member_name: str,
+	source_member_row_number: int,
+	is_lqg: bool,
+	has_tsdf: bool,
+) -> dict[str, str]:
+	return {
+		"HANDLER ID": normalize_handler_id(row.get("HANDLER ID")),
+		"HANDLER NAME": normalize_cell_text(row.get("HANDLER NAME")),
+		"LOCATION LATITUDE": normalize_cell_text(row.get("LOCATION LATITUDE")),
+		"LOCATION LONGITUDE": normalize_cell_text(row.get("LOCATION LONGITUDE")),
+		"GENSTATUS": normalize_cell_text(row.get("GENSTATUS")),
+		"OPERATING TSDF": normalize_cell_text(row.get("OPERATING TSDF")),
+		"is_lqg_site": "Y" if is_lqg else "N",
+		"is_tsdf_site": "Y" if has_tsdf else "N",
+		"site_class": "both" if is_lqg and has_tsdf else "tsdf" if has_tsdf else "lqg",
+		"source_dataset": "HD_REPORTING",
+		"source_member_filename": csv_member_name,
+		"source_member_row_number": str(source_member_row_number),
+	}
+
+
+def get_provisional_output_fieldnames() -> list[str]:
+	return [
+		"HANDLER ID",
+		"HANDLER NAME",
+		"LOCATION LATITUDE",
+		"LOCATION LONGITUDE",
+		"GENSTATUS",
+		"OPERATING TSDF",
+		"is_lqg_site",
+		"is_tsdf_site",
+		"site_class",
+		"source_dataset",
+		"source_member_filename",
+		"source_member_row_number",
+	]
+
+
+def get_canonical_sort_key(row: dict[str, str]) -> tuple[int, int, str, int]:
+	site_class_priority = {
+		"both": 3,
+		"tsdf": 2,
+		"lqg": 1,
+	}.get(row.get("site_class", ""), 0)
+	return (
+		site_class_priority,
+		1 if row.get("HANDLER NAME", "") else 0,
+		row.get("source_member_filename", ""),
+		-int(row.get("source_member_row_number", "0")),
+	)
+
+
+def rows_have_coordinate_conflict(rows: list[dict[str, str]]) -> bool:
+	coordinate_pairs = {
+		(normalize_cell_text(row.get("LOCATION LATITUDE")), normalize_cell_text(row.get("LOCATION LONGITUDE")))
+		for row in rows
+	}
+	return len(coordinate_pairs) > 1
+
+
+def extract_hd_reporting_sites(cfg: Config, provisional_output_path: str) -> tuple[list[dict[str, str]], SiteExtractionSummary]:
+	source = get_required_source(cfg, "hd_reporting")
+	source_outer_archive_path = get_source_outer_archive_path(cfg, source)
+	provisional_rows: list[dict[str, str]] = []
+	validation_reason_counter: Counter[str] = Counter()
+	total_rows = 0
+	total_lqg_rows = 0
+	total_tsdf_rows = 0
+	total_both_rows = 0
+	total_qualifying_rows = 0
+	validation_failure_count = 0
+	provisional_fieldnames = get_provisional_output_fieldnames()
+
+	with open_text_output_stream(provisional_output_path) as output_stream:
+		writer = csv.DictWriter(output_stream, fieldnames=provisional_fieldnames)
+		writer.writeheader()
+
+		with open_outer_zip_archive(source_outer_archive_path) as outer_archive:
+			outer_member_names = list_archive_members(outer_archive)
+			inner_zip_member_name = require_member_present(
+				member_names=outer_member_names,
+				expected_member_name=source.inner_zip_member_filename,
+				archive_label=f"archive {source_outer_archive_path}",
+			)
+
+			with open_inner_zip_archive(outer_archive, inner_zip_member_name) as inner_archive:
+				inner_member_names = list_archive_members(inner_archive)
+				matched_csv_members = select_matching_members(
+					member_names=inner_member_names,
+					patterns=source.target_csv_globs,
+					source_name=source.logical_name,
+				)
+
+				for matched_csv_member in matched_csv_members:
+					logging.info("Streaming HD_REPORTING site rows from %s", matched_csv_member)
+					with open_inner_csv_text_stream(inner_archive, matched_csv_member) as text_stream:
+						reader = csv.DictReader(text_stream)
+						if reader.fieldnames is None:
+							raise RuntimeError(f"CSV member is missing a header row: {matched_csv_member}")
+						validate_required_columns(tuple(reader.fieldnames), SOURCE_REQUIRED_COLUMNS["hd_reporting"], source.logical_name, matched_csv_member)
+
+						source_member_row_number = 0
+						for row in reader:
+							source_member_row_number += 1
+							total_rows += 1
+							is_lqg, has_tsdf = classify_hd_reporting_row(row)
+							if is_lqg:
+								total_lqg_rows += 1
+							if has_tsdf:
+								total_tsdf_rows += 1
+							if is_lqg and has_tsdf:
+								total_both_rows += 1
+							if not (is_lqg or has_tsdf):
+								continue
+
+							total_qualifying_rows += 1
+							validation_failure = classify_hd_reporting_validation_failure(row)
+							if validation_failure is not None:
+								validation_failure_count += 1
+								validation_reason_counter[validation_failure[0]] += 1
+								continue
+
+							provisional_row = build_hd_reporting_site_row(
+								row=row,
+								csv_member_name=matched_csv_member,
+								source_member_row_number=source_member_row_number,
+								is_lqg=is_lqg,
+								has_tsdf=has_tsdf,
+							)
+							writer.writerow(provisional_row)
+							provisional_rows.append(provisional_row)
+
+	unique_handler_ids = len({row["HANDLER ID"] for row in provisional_rows})
+	return provisional_rows, SiteExtractionSummary(
+		total_rows=total_rows,
+		lqg_rows=total_lqg_rows,
+		tsdf_rows=total_tsdf_rows,
+		both_rows=total_both_rows,
+		qualifying_rows=total_qualifying_rows,
+		neither_rows=total_rows - total_qualifying_rows,
+		validation_failure_count=validation_failure_count,
+		provisional_row_count=len(provisional_rows),
+		unique_handler_ids=unique_handler_ids,
+		validation_reason_counts=tuple(sorted(validation_reason_counter.items())),
+	)
+
+
+def finalize_hd_reporting_sites(
+	provisional_rows: list[dict[str, str]],
+	canonical_output_path: str,
+) -> FinalizationSummary:
+	provisional_row_count = len(provisional_rows)
+	fieldnames = get_provisional_output_fieldnames()
+	if not provisional_rows:
+		with open_text_output_stream(canonical_output_path) as output_stream:
+			writer = csv.DictWriter(output_stream, fieldnames=fieldnames)
+			writer.writeheader()
+		return FinalizationSummary(
+			provisional_row_count=0,
+			exact_duplicates_removed=0,
+			duplicate_handler_id_count=0,
+			coordinate_conflict_count=0,
+			canonical_row_count=0,
+		)
+
+	business_columns = [column_name for column_name in fieldnames if not column_name.startswith("source_member_")]
+	seen_exact_keys: set[tuple[str, ...]] = set()
+	candidate_rows: list[dict[str, str]] = []
+	exact_duplicates_removed = 0
+	for row in provisional_rows:
+		exact_key = tuple(row[column_name] for column_name in business_columns)
+		if exact_key in seen_exact_keys:
+			exact_duplicates_removed += 1
+			continue
+		seen_exact_keys.add(exact_key)
+		candidate_rows.append(row)
+
+	rows_by_handler_id: dict[str, list[dict[str, str]]] = {}
+	for row in candidate_rows:
+		rows_by_handler_id.setdefault(row["HANDLER ID"], []).append(row)
+
+	duplicate_handler_id_count = sum(1 for rows in rows_by_handler_id.values() if len(rows) > 1)
+	coordinate_conflict_count = sum(1 for rows in rows_by_handler_id.values() if len(rows) > 1 and rows_have_coordinate_conflict(rows))
+
+	canonical_rows: list[dict[str, str]] = []
+	for handler_id in sorted(rows_by_handler_id):
+		group_rows = rows_by_handler_id[handler_id]
+		selected_row = max(group_rows, key=get_canonical_sort_key)
+		canonical_rows.append(selected_row)
+
+	with open_text_output_stream(canonical_output_path) as output_stream:
+		writer = csv.DictWriter(output_stream, fieldnames=fieldnames)
+		writer.writeheader()
+		writer.writerows(canonical_rows)
+
+	return FinalizationSummary(
+		provisional_row_count=provisional_row_count,
+		exact_duplicates_removed=exact_duplicates_removed,
+		duplicate_handler_id_count=duplicate_handler_id_count,
+		coordinate_conflict_count=coordinate_conflict_count,
+		canonical_row_count=len(canonical_rows),
+	)
 
 
 def parse_csv_header_line(text_stream: io.TextIOWrapper, csv_member_name: str) -> tuple[str, ...]:
@@ -448,77 +731,6 @@ def summarize_hd_reporting_member(inner_archive: zipfile.ZipFile, csv_member_nam
 	)
 
 
-def extract_hd_reporting_universe(cfg: Config) -> set[str]:
-	source = get_required_source(cfg, "hd_reporting")
-	source_outer_archive_path = get_source_outer_archive_path(cfg, source)
-	qualifying_handler_ids: set[str] = set()
-	total_rows = 0
-	total_lqg_rows = 0
-	total_tsdf_rows = 0
-	total_both_rows = 0
-	total_qualifying_rows = 0
-
-	with open_outer_zip_archive(source_outer_archive_path) as outer_archive:
-		outer_member_names = list_archive_members(outer_archive)
-		inner_zip_member_name = require_member_present(
-			member_names=outer_member_names,
-			expected_member_name=source.inner_zip_member_filename,
-			archive_label=f"archive {source_outer_archive_path}",
-		)
-
-		with open_inner_zip_archive(outer_archive, inner_zip_member_name) as inner_archive:
-			inner_member_names = list_archive_members(inner_archive)
-			matched_csv_members = select_matching_members(
-				member_names=inner_member_names,
-				patterns=source.target_csv_globs,
-				source_name=source.logical_name,
-			)
-
-			for matched_csv_member in matched_csv_members:
-				member_summary = summarize_hd_reporting_member(inner_archive, matched_csv_member)
-				logging.info(
-					"HD_REPORTING member summary for %s: total=%d lqg=%d tsdf=%d both=%d qualifying=%d neither=%d unique_handlers=%d",
-					matched_csv_member,
-					member_summary.total_rows,
-					member_summary.lqg_rows,
-					member_summary.tsdf_rows,
-					member_summary.both_rows,
-					member_summary.qualifying_rows,
-					member_summary.neither_rows,
-					member_summary.unique_handler_ids,
-				)
-
-				with open_inner_csv_text_stream(inner_archive, matched_csv_member) as text_stream:
-					reader = csv.DictReader(text_stream)
-					for row in reader:
-						total_rows += 1
-						is_lqg, has_tsdf = classify_hd_reporting_row(row)
-						if is_lqg:
-							total_lqg_rows += 1
-						if has_tsdf:
-							total_tsdf_rows += 1
-						if is_lqg and has_tsdf:
-							total_both_rows += 1
-						if not (is_lqg or has_tsdf):
-							continue
-						total_qualifying_rows += 1
-						handler_id = normalize_handler_id(row.get("HANDLER ID"))
-						if handler_id:
-							qualifying_handler_ids.add(handler_id)
-
-	logging.info(
-		"HD_REPORTING universe summary: total=%d lqg=%d tsdf=%d both=%d qualifying=%d neither=%d unique_handlers=%d",
-		total_rows,
-		total_lqg_rows,
-		total_tsdf_rows,
-		total_both_rows,
-		total_qualifying_rows,
-		total_rows - total_qualifying_rows,
-		len(qualifying_handler_ids),
-	)
-	return qualifying_handler_ids
-
-
 def inventory_configured_sources(cfg: Config) -> None:
 	outer_archive_path = get_outer_archive_path(cfg)
 	with open_outer_zip_archive(outer_archive_path) as default_outer_archive:
@@ -629,13 +841,40 @@ def main(argv=None) -> int:
 		logging.info("Downloads relative path: %s", cfg.downloads_relative_path)
 		logging.info("HD outer archive filename: %s", cfg.outer_archive_filename)
 		logging.info("HD outer archive path: %s", get_outer_archive_path(cfg))
+		logging.info("Provisional output path: %s", get_provisional_output_path(cfg))
+		logging.info("Canonical output path: %s", get_canonical_output_path(cfg))
 
 		inventory_configured_sources(cfg)
-		extract_hd_reporting_universe(cfg)
+		provisional_rows, extraction_summary = extract_hd_reporting_sites(
+			cfg,
+			provisional_output_path=get_provisional_output_path(cfg),
+		)
+		finalization_summary = finalize_hd_reporting_sites(
+			provisional_rows=provisional_rows,
+			canonical_output_path=get_canonical_output_path(cfg),
+		)
 	except Exception as exc:
 		logging.error("Hazardous waste preprocessing proof slice failed: %s", exc)
 		return 1
 
+	logging.info(
+		"HD_REPORTING site extraction summary: total=%d lqg=%d tsdf=%d both=%d qualifying=%d neither=%d validation_failures=%d provisional_rows=%d unique_handlers=%d",
+		extraction_summary.total_rows,
+		extraction_summary.lqg_rows,
+		extraction_summary.tsdf_rows,
+		extraction_summary.both_rows,
+		extraction_summary.qualifying_rows,
+		extraction_summary.neither_rows,
+		extraction_summary.validation_failure_count,
+		extraction_summary.provisional_row_count,
+		extraction_summary.unique_handler_ids,
+	)
+	for validation_reason, reason_count in extraction_summary.validation_reason_counts:
+		logging.info("HD_REPORTING validation rejects [%s]: %d", validation_reason, reason_count)
+	logging.info("Exact duplicate provisional rows removed: %d", finalization_summary.exact_duplicates_removed)
+	logging.info("Duplicate HANDLER ID groups encountered: %d", finalization_summary.duplicate_handler_id_count)
+	logging.info("Coordinate conflict groups encountered: %d", finalization_summary.coordinate_conflict_count)
+	logging.info("Canonical site rows written: %d", finalization_summary.canonical_row_count)
 	logging.info("Hazardous waste preprocessing proof slice completed successfully")
 	return 0
 

@@ -26,7 +26,7 @@ sf_use_s2(T)
 
 # TODO - add this to a json file / use the one created for superfund! 
 # state: 
-state = "CA"
+state = "WY"
 # using Alberts for CONUS
 state_crs = 5070 
 # custom CRS for HI, based on this EPA resource: https://www.epa.gov/waterdata/spatial-data-waters
@@ -56,6 +56,17 @@ intersect_state_geoid <- unique(state_intersects$GEOID)
 intersect_state_codes <- intersect_state_geoid[!grepl(state_code, intersect_state_geoid)] %>%
   # remove leading zeroes 
   str_remove(., "^0+")
+
+# efficiency notes from Anne: 
+# - pull in bg geoids later if we're skating close to memory limits 
+# - distance pairs loop, instead, calculate weighted scores in the loop and 
+#   keep it to block group geoid, traffic objectid, and weight 
+# - try terra instead of sf package 
+
+# future: 
+# - config file could just contain data from neighboring states 
+# - merge code in the future - shouldhave a shared folder in scripts of common 
+#   config files, etc. 
 ###############################################################################
 # loading in data 
 # load blocks 
@@ -135,6 +146,18 @@ if (length(intersect_state_codes) == 0) {
 # process - go to terminal and navigate to EJSCREEN-Data-Processing/scripts/utilities/validation
 # in terminal, run python ejam2csv.py --state AK
 # this will add ejam values as a csv file to s3 for this state
+
+# NOTE - for larger, more complex states, this involves using the ECHO_modeules
+# package in python. Otherwise, the API will timeout. Here is the specific 
+# script in python: 
+
+# from ECHO_modules.get_data import get_ejscreen
+# import pandas as pd
+# results = get_ejscreen(regions="CA", region_type="fips")
+# results_df = pd.DataFrame(results)
+# results_df.to_csv("./outputs/traffic/ca_ejam.csv", index = False)
+
+# pulling traffic prox scores: 
 ptraf <- aws.s3::s3read_using(read.csv,
                               object = paste0("s3://pedp-data-preserved/ejscreen-data-processing/traffic/",
                                               state,
@@ -150,23 +173,19 @@ ptraf <- aws.s3::s3read_using(read.csv,
 ###############################################################################
 # Start processing script
 ###############################################################################
-# The first step was to overlay block groups
-# with traffic lines that fall within a 10km radius of each block group polygon 
-# (line to polygon). This step relates each block group with traffic.
-prepro_10km_buff <- prepro_2020 %>%
-  st_transform(., crs = (state_crs)) %>%
-  st_buffer(., 10000)
+# First, find block groups that are within 10km of a traffic line segment: 
+# NOTE - this spatial join is NOT the same as buffering lines & running an 
+# intersection. There are VERY SLIGHT differences due to rounding errors, where 
+# the spatial join produced 162 more matches than the buffer + intersection. 
+# The spatial join seems to be more mathematically correct & it generally produced
+# the same results, but will include matches that are sooooooo on the edge of 
+# being included. 
+# This has been documented here: https://github.com/Public-Environmental-Data-Partners/EJSCREEN-Data-Processing/issues/10#issue-4179700260
+bg_10km_intersection <- st_join(bg, prepro_2020, 
+                                join = st_is_within_distance, 
+                                dist = units::set_units(10000, "m"),
+                                left = T) 
 
-# run an intersection: 
-bg_10km_intersection <- st_intersection(prepro_10km_buff, bg) %>%
-  mutate(unique_id = paste0(OBJECTID, "_", state_code)) 
-# mapview(prepro_10km_buff[1:10,])
-
-# mapping those that fell out of the intersection to confirm they 
-# have 0 pop or are not near highways 
-# bg_no_traff <- bg %>%
-#   filter(!(GEOID %in% bg_10km_intersection$GEOID))
-# mapview(bg_no_traff)
 
 # The second step was to compute the distance between each block
 # centroid within each targeted block group from the first step and the traffic 
@@ -178,55 +197,6 @@ b_no_zero_points <- b %>%
   filter(POP20 > 0) %>%
   # create the block group geoid
   mutate(block_group_geoid = substr(GEOID20, 0, 12))
-
-# looping through block groups: 
-# TODO - this take foreverrrrrr for states with ~18,000+ block groups. I need 
-# to find a way to batch the loops 
-bg_loop <- unique(bg_10km_intersection$GEOID)
-dist_pair_list <- list()
-for(i in 1:length(bg_loop)){
-  bg_loop_i <- bg_loop[i]
-  
-  # show loop progress if i is a multiple of 10 
-  if(i %% 100 == 0) {
-    print(paste0("On BG GEOID: ", bg_loop_i, "; loop ", i, " out of ", length(bg_loop)))
-    # tictoc::tic()
-  }
-  
-  # finding the correct block group intersection: 
-  bg_i <- bg_10km_intersection %>% 
-    filter(GEOID == bg_loop_i)
-  b_i <- b_no_zero_points %>%
-    filter(block_group_geoid == bg_loop_i)
-  traff_i <- prepro_2020 %>% 
-    filter(unique_id %in% bg_i$unique_id)
-  
-  # running distances: 
-  distance_i <- st_distance(b_i, traff_i, by_element = F)
-  distance_df <- distance_i %>%
-    as.data.frame() 
-  colnames(distance_df) <- traff_i$unique_id
-  rownames(distance_df) <- b_i$GEOID20
-  # pivot to long: 
-  distance_df_long <- distance_df %>%
-    tibble::rownames_to_column("GEOID20") %>%
-    pivot_longer(., cols = 2:(ncol(distance_df) + 1), 
-                 names_to = "unique_id", 
-                 values_to = "distance_m") %>%
-    mutate(distance_m_num = as.numeric(distance_m))
-  
-  dist_pair_list[[i]] <- distance_df_long
-  # tictoc::toc()
-}
-
-# create a data frame, and drop all geometries (we don't need them anymore)
-dist_pair_df <- bind_rows(dist_pair_list) %>%
-  as.data.frame() %>%
-  select(-starts_with("geom"))
-
-# remove large files from the environment to free up some memory 
-rm(bg_10km_intersection)
-rm(dist_pair_list)
 
 # creating variables that are involved in future calculations: 
 ## recreate population weight table: 
@@ -243,37 +213,82 @@ b_weights <- b_no_zero_points %>%
   as.data.frame() %>%
   select(GEOID20, fraction_of_total)
 
-# Next, each block/line combination score was multiplied by the AADT
+# Each block/line combination score is multiplied by the AADT
 # estimate associated with each highway segment.
 prepro_2020_simple <- prepro_2020 %>%
   as.data.frame() %>%
   select(unique_id, aadt)
 
-# The third step was to calculate the score for each block/line combination 
-# using inverse distance. A maximum score of 10 was used for all distances under 
-# 0.1 km. 
-test_no_split_traff_pop_wt <- dist_pair_df %>%
-  # here, assuming distance in km
-  mutate(dist_pair_km = distance_m_num/1000, 
-         # capping inverse distance to max 10
-         inverse_distance = 1/dist_pair_km, 
-         inverse_distance = case_when(inverse_distance > 10 ~ 10, 
-                                      TRUE ~ inverse_distance)) %>%
-  # Next, each block/line combination score was multiplied by the AADT
-  # estimate associated with each highway segment.
-  left_join(., prepro_2020_simple, by = "unique_id") %>%
-  mutate(inv_dist_traff = inverse_distance * aadt) %>%
-  # The final step was to multiply each block/line combination by its block group 
-  # population weight 
-  merge(., b_weights, by = "GEOID20") %>%
-  mutate(inv_dist_traff_wt = inv_dist_traff * fraction_of_total)
 
+# looping through block groups: 
+bg_intersection_filt <- bg_10km_intersection %>% filter(!is.na(unique_id))
+bg_loop <- unique(bg_intersection_filt$GEOID)
+dist_pair_list <- list()
+for(i in 1:length(bg_loop)){
+  bg_loop_i <- bg_loop[i]
+  
+  # show loop progress if i is a multiple of 10 
+  if(i %% 100 == 0) {
+    print(paste0("On BG GEOID: ", bg_loop_i, "; loop ", i, 
+                 " out of ", length(bg_loop)))
+  }
+  
+  # finding the correct block group intersection: 
+  bg_i <- bg_intersection_filt %>% 
+    filter(GEOID == bg_loop_i)
+  b_i <- b_no_zero_points %>%
+    filter(block_group_geoid == bg_loop_i)
+  traff_i <- prepro_2020 %>% 
+    filter(unique_id %in% bg_i$unique_id)
+  
+  # running distances: 
+  distance_i <- st_distance(b_i, traff_i, by_element = F)
+  distance_df <- distance_i %>%
+    as.data.frame() 
+  colnames(distance_df) <- traff_i$unique_id
+  rownames(distance_df) <- b_i$GEOID20
+  
+  # pivot to long: 
+  distance_df_long <- distance_df %>%
+    tibble::rownames_to_column("GEOID20") %>%
+    pivot_longer(., cols = 2:(ncol(distance_df) + 1), 
+                 names_to = "unique_id", 
+                 values_to = "distance_m") %>%
+    mutate(distance_m_num = as.numeric(distance_m)) %>%
+    # drop geometries - we don't need them here
+    as.data.frame() %>%
+    select(-starts_with("geom")) %>%
+    # here, assuming distance in km
+    mutate(dist_pair_km = distance_m_num/1000, 
+           # capping inverse distance to max 10
+           inverse_distance = 1/dist_pair_km, 
+           inverse_distance = case_when(inverse_distance > 10 ~ 10, 
+                                        TRUE ~ inverse_distance)) %>%
+    # Next, each block/line combination score was multiplied by the AADT
+    # estimate associated with each highway segment.
+    left_join(., prepro_2020_simple, by = "unique_id") %>%
+    mutate(inv_dist_traff = inverse_distance * aadt) %>%
+    # The final step was to multiply each block/line combination by its block group 
+    # population weight 
+    merge(., b_weights, by = "GEOID20") %>%
+    mutate(inv_dist_traff_wt = inv_dist_traff * fraction_of_total) %>%
+    select(GEOID20, unique_id, inv_dist_traff_wt)
+  
+  # add it to the list! 
+  dist_pair_list[[i]] <- distance_df_long
+}
 
-# and to then aggregate the results to get the total block group score.
-final_wt <- test_no_split_traff_pop_wt %>%
-  as.data.frame() %>%
-  select(-starts_with("geom")) %>%
-  # create the block group geoid
+# bind data together to form a data frame: 
+dist_pair_df <- bind_rows(dist_pair_list) 
+
+# remove large files from the environment to free up some memory 
+rm(bg_10km_intersection)
+rm(dist_pair_list)
+rm(bg_intersection_filt)
+
+# group the data by block groups & sum the scores to create the final 
+# weighted score
+final_wt <- dist_pair_df %>%
   mutate(block_group_geoid = substr(GEOID20, 0, 12)) %>%
   group_by(block_group_geoid) %>%
   summarize(weighted_score = sum(inv_dist_traff_wt, na.rm = T))
@@ -287,7 +302,8 @@ final_wt <- test_no_split_traff_pop_wt %>%
 write.csv(final_wt, paste0("./outputs/traffic/processing/", state, "_bg_summary.csv"))
 put_object(
   file = paste0("./outputs/traffic/processing/", state, "_bg_summary.csv"),
-  object =  paste0("s3://pedp-data-preserved/ejscreen-data-processing/traffic/", state, "/processing/bg_summary.csv"),
+  object =  paste0("s3://pedp-data-preserved/ejscreen-data-processing/traffic/", 
+                   state, "/processing/bg_summary.csv"),
   multipart = T
 )
 

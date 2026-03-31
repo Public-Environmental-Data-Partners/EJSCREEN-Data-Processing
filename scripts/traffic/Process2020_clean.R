@@ -57,16 +57,6 @@ intersect_state_codes <- intersect_state_geoid[!grepl(state_code, intersect_stat
   # remove leading zeroes 
   str_remove(., "^0+")
 
-# efficiency notes from Anne: 
-# - pull in bg geoids later if we're skating close to memory limits 
-# - distance pairs loop, instead, calculate weighted scores in the loop and 
-#   keep it to block group geoid, traffic objectid, and weight 
-# - try terra instead of sf package 
-
-# future: 
-# - config file could just contain data from neighboring states 
-# - merge code in the future - shouldhave a shared folder in scripts of common 
-#   config files, etc. 
 ###############################################################################
 # loading in data 
 # load blocks 
@@ -147,7 +137,7 @@ if (length(intersect_state_codes) == 0) {
 # in terminal, run python ejam2csv.py --state AK
 # this will add ejam values as a csv file to s3 for this state
 
-# NOTE - for larger, more complex states, this involves using the ECHO_modeules
+# NOTE - for larger, more complex states, this involves using the ECHO_modeles
 # package in python. Otherwise, the API will timeout. Here is the specific 
 # script in python: 
 
@@ -156,6 +146,10 @@ if (length(intersect_state_codes) == 0) {
 # results = get_ejscreen(regions="CA", region_type="fips")
 # results_df = pd.DataFrame(results)
 # results_df.to_csv("./outputs/traffic/ca_ejam.csv", index = False)
+
+# for CA or even larger states, we wrote a python script in 
+# scripts/utilities/pull_ejscreen_data.py
+# from this issue: https://github.com/edgi-govdata-archiving/EJAM-API/issues/26#issuecomment-4163529789
 
 # pulling traffic prox scores: 
 ptraf <- aws.s3::s3read_using(read.csv,
@@ -293,10 +287,11 @@ final_wt <- dist_pair_df %>%
   group_by(block_group_geoid) %>%
   summarize(weighted_score = sum(inv_dist_traff_wt, na.rm = T))
 
-
 # A non-zero population block
 # group was assigned a score of zero when no traffic lines were found within a 
 # 10km buffer.
+# TODO - currently, this is just NA. We need just one more step to merge the 
+# bg data frame to this final_wt function, and replace NAs with zeros. 
 
 # push this to s3 
 write.csv(final_wt, paste0("./outputs/traffic/processing/", state, "_bg_summary.csv"))
@@ -326,10 +321,13 @@ test_weight_all_sf <- final_wt %>%
 
 
 # adding to s3 for comparisons 
-st_write(test_weight_all_sf,  paste0("./outputs/traffic/processing/", state, "_bg_summary_neighboring_states_alberts.geojson"))
+st_write(test_weight_all_sf,  paste0("./outputs/traffic/processing/",
+                                     state, "_bg_summary_neighboring_states_alberts.geojson"))
 put_object(
-  file = paste0("./outputs/traffic/processing/", state, "_bg_summary_neighboring_states_alberts.geojson"),
-  object = paste0("s3://pedp-data-preserved/ejscreen-data-processing/traffic/", state, "/processing/bg_summary_neighboring_states_alberts.geojson"),
+  file = paste0("./outputs/traffic/processing/", 
+                state, "_bg_summary_neighboring_states_alberts.geojson"),
+  object = paste0("s3://pedp-data-preserved/ejscreen-data-processing/traffic/", 
+                  state, "/processing/bg_summary_neighboring_states_alberts.geojson"),
   multipart = T
 )
 

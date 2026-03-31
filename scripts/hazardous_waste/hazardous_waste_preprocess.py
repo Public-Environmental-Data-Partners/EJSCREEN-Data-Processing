@@ -14,7 +14,8 @@ Current slice:
 	- Enumerates `BR_REPORTING_2023` from its own ZIP file.
 	- Reads CSV headers from the matched members, logs key columns needed downstream,
 	  and fails fast when the discovered schema does not match the current working design.
-	- Streams `HD_REPORTING` rows and logs the provisional LQG-or-TSDF universe counts.
+	- Streams `HD_REPORTING` rows, applies the revised EJScreen significant-facility mask,
+	  and logs condition counts plus the filtered output counts.
 
 Sample command lines:
 	- Local storage, all other options default:
@@ -51,8 +52,14 @@ SOURCE_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
 	"hd_reporting": (
 		"HANDLER ID",
 		"HANDLER NAME",
-		"GENSTATUS",
+		"LOCATION CITY",
+		"LOCATION STATE",
+		"LOCATION ZIP",
 		"OPERATING TSDF",
+		"FED WASTE GENERATOR",
+		"STATE WASTE GENERATOR",
+		"IN A UNIVERSE",
+		"ACTIVE SITE",
 		"LOCATION LATITUDE",
 		"LOCATION LONGITUDE",
 	),
@@ -66,8 +73,14 @@ SOURCE_KEY_COLUMNS: dict[str, tuple[str, ...]] = {
 	"hd_reporting": (
 		"HANDLER ID",
 		"HANDLER NAME",
-		"GENSTATUS",
+		"LOCATION CITY",
+		"LOCATION STATE",
+		"LOCATION ZIP",
 		"OPERATING TSDF",
+		"FED WASTE GENERATOR",
+		"STATE WASTE GENERATOR",
+		"IN A UNIVERSE",
+		"ACTIVE SITE",
 		"LOCATION LATITUDE",
 		"LOCATION LONGITUDE",
 	),
@@ -112,34 +125,37 @@ class CsvSchemaSummary:
 @dataclass(frozen=True, slots=True)
 class HdReportingUniverseSummary:
 	total_rows: int
-	lqg_rows: int
-	tsdf_rows: int
-	both_rows: int
+	operating_tsdf_rows: int
+	federal_lqg_rows: int
+	state_lqg_rows: int
+	significant_facility_rows: int
+	active_mask_rows: int
 	qualifying_rows: int
-	neither_rows: int
+	rejected_rows: int
 	unique_handler_ids: int
 
 
 @dataclass(frozen=True, slots=True)
 class SiteExtractionSummary:
 	total_rows: int
-	lqg_rows: int
-	tsdf_rows: int
-	both_rows: int
+	operating_tsdf_rows: int
+	federal_lqg_rows: int
+	state_lqg_rows: int
+	significant_facility_rows: int
+	active_mask_rows: int
 	qualifying_rows: int
-	neither_rows: int
+	rejected_rows: int
 	validation_failure_count: int
 	provisional_row_count: int
 	unique_handler_ids: int
+	handler_dedup_removed_count: int
 	validation_reason_counts: tuple[tuple[str, int], ...]
 
 
 @dataclass(frozen=True, slots=True)
 class FinalizationSummary:
 	provisional_row_count: int
-	exact_duplicates_removed: int
-	duplicate_handler_id_count: int
-	coordinate_conflict_count: int
+	handler_dedup_removed_count: int
 	canonical_row_count: int
 
 
@@ -360,24 +376,33 @@ def parse_float_or_none(value: str | None) -> float | None:
 def has_usable_coordinates(row: dict[str, str]) -> bool:
 	latitude = parse_float_or_none(row.get("LOCATION LATITUDE"))
 	longitude = parse_float_or_none(row.get("LOCATION LONGITUDE"))
-	return latitude is not None and longitude is not None
-
-
-def is_lqg_status(value: str | None) -> bool:
-	return normalize_cell_text(value).upper() == "LQG"
-
-
-def has_meaningful_tsdf_status(value: str | None) -> bool:
-	normalized_value = normalize_cell_text(value).upper()
-	if not normalized_value:
+	if latitude is None or longitude is None:
 		return False
-	return any(character.isalnum() for character in normalized_value if character != "-")
+	return latitude != 0.0 and longitude != 0.0
 
 
-def classify_hd_reporting_row(row: dict[str, str]) -> tuple[bool, bool]:
-	is_lqg = is_lqg_status(row.get("GENSTATUS"))
-	has_tsdf = has_meaningful_tsdf_status(row.get("OPERATING TSDF"))
-	return is_lqg, has_tsdf
+def is_yes_flag(value: str | None) -> bool:
+	return normalize_cell_text(value).upper() == "Y"
+
+
+def is_one_flag(value: str | None) -> bool:
+	return normalize_cell_text(value) == "1"
+
+
+def has_operating_tsdf_status(value: str | None) -> bool:
+	return bool(value) and value != "------"
+
+
+def is_active_site(row: dict[str, str]) -> bool:
+	return is_yes_flag(row.get("IN A UNIVERSE")) or normalize_cell_text(row.get("ACTIVE SITE")).upper() == "H"
+
+
+def classify_hd_reporting_row(row: dict[str, str]) -> tuple[bool, bool, bool, bool]:
+	is_operating_tsdf = has_operating_tsdf_status(row.get("OPERATING TSDF"))
+	is_federal_lqg = is_one_flag(row.get("FED WASTE GENERATOR"))
+	is_state_lqg = is_one_flag(row.get("STATE WASTE GENERATOR"))
+	is_significant_facility = is_operating_tsdf or is_federal_lqg
+	return is_operating_tsdf, is_federal_lqg, is_state_lqg, is_significant_facility
 
 
 def classify_hd_reporting_validation_failure(row: dict[str, str]) -> tuple[str, str] | None:
@@ -396,19 +421,27 @@ def build_hd_reporting_site_row(
 	row: dict[str, str],
 	csv_member_name: str,
 	source_member_row_number: int,
-	is_lqg: bool,
-	has_tsdf: bool,
+	is_operating_tsdf: bool,
+	is_federal_lqg: bool,
+	is_state_lqg: bool,
 ) -> dict[str, str]:
+	is_lqg_site = is_federal_lqg
+	site_class = "both" if is_operating_tsdf and is_lqg_site else "tsdf" if is_operating_tsdf else "lqg"
 	return {
 		"HANDLER ID": normalize_handler_id(row.get("HANDLER ID")),
 		"HANDLER NAME": normalize_cell_text(row.get("HANDLER NAME")),
+		"LOCATION CITY": normalize_cell_text(row.get("LOCATION CITY")),
+		"LOCATION STATE": normalize_cell_text(row.get("LOCATION STATE")),
+		"LOCATION ZIP": normalize_cell_text(row.get("LOCATION ZIP")),
 		"LOCATION LATITUDE": normalize_cell_text(row.get("LOCATION LATITUDE")),
 		"LOCATION LONGITUDE": normalize_cell_text(row.get("LOCATION LONGITUDE")),
-		"GENSTATUS": normalize_cell_text(row.get("GENSTATUS")),
 		"OPERATING TSDF": normalize_cell_text(row.get("OPERATING TSDF")),
-		"is_lqg_site": "Y" if is_lqg else "N",
-		"is_tsdf_site": "Y" if has_tsdf else "N",
-		"site_class": "both" if is_lqg and has_tsdf else "tsdf" if has_tsdf else "lqg",
+		"FED WASTE GENERATOR": normalize_cell_text(row.get("FED WASTE GENERATOR")),
+		"IN A UNIVERSE": normalize_cell_text(row.get("IN A UNIVERSE")),
+		"ACTIVE SITE": normalize_cell_text(row.get("ACTIVE SITE")),
+		"is_lqg_site": "Y" if is_lqg_site else "N",
+		"is_tsdf_site": "Y" if is_operating_tsdf else "N",
+		"site_class": site_class,
 		"source_dataset": "HD_REPORTING",
 		"source_member_filename": csv_member_name,
 		"source_member_row_number": str(source_member_row_number),
@@ -419,10 +452,15 @@ def get_provisional_output_fieldnames() -> list[str]:
 	return [
 		"HANDLER ID",
 		"HANDLER NAME",
+		"LOCATION CITY",
+		"LOCATION STATE",
+		"LOCATION ZIP",
 		"LOCATION LATITUDE",
 		"LOCATION LONGITUDE",
-		"GENSTATUS",
 		"OPERATING TSDF",
+		"FED WASTE GENERATOR",
+		"IN A UNIVERSE",
+		"ACTIVE SITE",
 		"is_lqg_site",
 		"is_tsdf_site",
 		"site_class",
@@ -446,23 +484,17 @@ def get_canonical_sort_key(row: dict[str, str]) -> tuple[int, int, str, int]:
 	)
 
 
-def rows_have_coordinate_conflict(rows: list[dict[str, str]]) -> bool:
-	coordinate_pairs = {
-		(normalize_cell_text(row.get("LOCATION LATITUDE")), normalize_cell_text(row.get("LOCATION LONGITUDE")))
-		for row in rows
-	}
-	return len(coordinate_pairs) > 1
-
-
 def extract_hd_reporting_sites(cfg: Config, provisional_output_path: str) -> tuple[list[dict[str, str]], SiteExtractionSummary]:
 	source = get_required_source(cfg, "hd_reporting")
 	source_outer_archive_path = get_source_outer_archive_path(cfg, source)
 	provisional_rows: list[dict[str, str]] = []
 	validation_reason_counter: Counter[str] = Counter()
 	total_rows = 0
-	total_lqg_rows = 0
-	total_tsdf_rows = 0
-	total_both_rows = 0
+	total_operating_tsdf_rows = 0
+	total_federal_lqg_rows = 0
+	total_state_lqg_rows = 0
+	total_significant_facility_rows = 0
+	total_active_mask_rows = 0
 	total_qualifying_rows = 0
 	validation_failure_count = 0
 	provisional_fieldnames = get_provisional_output_fieldnames()
@@ -499,14 +531,19 @@ def extract_hd_reporting_sites(cfg: Config, provisional_output_path: str) -> tup
 						for row in reader:
 							source_member_row_number += 1
 							total_rows += 1
-							is_lqg, has_tsdf = classify_hd_reporting_row(row)
-							if is_lqg:
-								total_lqg_rows += 1
-							if has_tsdf:
-								total_tsdf_rows += 1
-							if is_lqg and has_tsdf:
-								total_both_rows += 1
-							if not (is_lqg or has_tsdf):
+							is_operating_tsdf, is_federal_lqg, is_state_lqg, is_significant_facility = classify_hd_reporting_row(row)
+							passes_active_mask = is_active_site(row)
+							if is_operating_tsdf:
+								total_operating_tsdf_rows += 1
+							if is_federal_lqg:
+								total_federal_lqg_rows += 1
+							if is_state_lqg:
+								total_state_lqg_rows += 1
+							if is_significant_facility:
+								total_significant_facility_rows += 1
+							if passes_active_mask:
+								total_active_mask_rows += 1
+							if not (is_significant_facility and passes_active_mask):
 								continue
 
 							total_qualifying_rows += 1
@@ -520,23 +557,28 @@ def extract_hd_reporting_sites(cfg: Config, provisional_output_path: str) -> tup
 								row=row,
 								csv_member_name=matched_csv_member,
 								source_member_row_number=source_member_row_number,
-								is_lqg=is_lqg,
-								has_tsdf=has_tsdf,
+								is_operating_tsdf=is_operating_tsdf,
+								is_federal_lqg=is_federal_lqg,
+								is_state_lqg=is_state_lqg,
 							)
 							writer.writerow(provisional_row)
 							provisional_rows.append(provisional_row)
 
+	handler_dedup_removed_count = len(provisional_rows) - len({row["HANDLER ID"] for row in provisional_rows})
 	unique_handler_ids = len({row["HANDLER ID"] for row in provisional_rows})
 	return provisional_rows, SiteExtractionSummary(
 		total_rows=total_rows,
-		lqg_rows=total_lqg_rows,
-		tsdf_rows=total_tsdf_rows,
-		both_rows=total_both_rows,
+		operating_tsdf_rows=total_operating_tsdf_rows,
+		federal_lqg_rows=total_federal_lqg_rows,
+		state_lqg_rows=total_state_lqg_rows,
+		significant_facility_rows=total_significant_facility_rows,
+		active_mask_rows=total_active_mask_rows,
 		qualifying_rows=total_qualifying_rows,
-		neither_rows=total_rows - total_qualifying_rows,
+		rejected_rows=total_rows - total_qualifying_rows,
 		validation_failure_count=validation_failure_count,
 		provisional_row_count=len(provisional_rows),
 		unique_handler_ids=unique_handler_ids,
+		handler_dedup_removed_count=handler_dedup_removed_count,
 		validation_reason_counts=tuple(sorted(validation_reason_counter.items())),
 	)
 
@@ -553,36 +595,21 @@ def finalize_hd_reporting_sites(
 			writer.writeheader()
 		return FinalizationSummary(
 			provisional_row_count=0,
-			exact_duplicates_removed=0,
-			duplicate_handler_id_count=0,
-			coordinate_conflict_count=0,
+			handler_dedup_removed_count=0,
 			canonical_row_count=0,
 		)
 
-	business_columns = [column_name for column_name in fieldnames if not column_name.startswith("source_member_")]
-	seen_exact_keys: set[tuple[str, ...]] = set()
-	candidate_rows: list[dict[str, str]] = []
-	exact_duplicates_removed = 0
-	for row in provisional_rows:
-		exact_key = tuple(row[column_name] for column_name in business_columns)
-		if exact_key in seen_exact_keys:
-			exact_duplicates_removed += 1
-			continue
-		seen_exact_keys.add(exact_key)
-		candidate_rows.append(row)
-
-	rows_by_handler_id: dict[str, list[dict[str, str]]] = {}
-	for row in candidate_rows:
-		rows_by_handler_id.setdefault(row["HANDLER ID"], []).append(row)
-
-	duplicate_handler_id_count = sum(1 for rows in rows_by_handler_id.values() if len(rows) > 1)
-	coordinate_conflict_count = sum(1 for rows in rows_by_handler_id.values() if len(rows) > 1 and rows_have_coordinate_conflict(rows))
-
+	sorted_rows = sorted(provisional_rows, key=get_canonical_sort_key, reverse=True)
+	seen_handler_ids: set[str] = set()
 	canonical_rows: list[dict[str, str]] = []
-	for handler_id in sorted(rows_by_handler_id):
-		group_rows = rows_by_handler_id[handler_id]
-		selected_row = max(group_rows, key=get_canonical_sort_key)
-		canonical_rows.append(selected_row)
+	for row in sorted_rows:
+		handler_id = row["HANDLER ID"]
+		if handler_id in seen_handler_ids:
+			continue
+		seen_handler_ids.add(handler_id)
+		canonical_rows.append(row)
+	canonical_rows.sort(key=lambda row: row["HANDLER ID"])
+	handler_dedup_removed_count = provisional_row_count - len(canonical_rows)
 
 	with open_text_output_stream(canonical_output_path) as output_stream:
 		writer = csv.DictWriter(output_stream, fieldnames=fieldnames)
@@ -591,9 +618,7 @@ def finalize_hd_reporting_sites(
 
 	return FinalizationSummary(
 		provisional_row_count=provisional_row_count,
-		exact_duplicates_removed=exact_duplicates_removed,
-		duplicate_handler_id_count=duplicate_handler_id_count,
-		coordinate_conflict_count=coordinate_conflict_count,
+		handler_dedup_removed_count=handler_dedup_removed_count,
 		canonical_row_count=len(canonical_rows),
 	)
 
@@ -694,9 +719,11 @@ def open_outer_csv_text_stream(outer_archive: zipfile.ZipFile, csv_member_name: 
 
 def summarize_hd_reporting_member(inner_archive: zipfile.ZipFile, csv_member_name: str) -> HdReportingUniverseSummary:
 	total_rows = 0
-	lqg_rows = 0
-	tsdf_rows = 0
-	both_rows = 0
+	operating_tsdf_rows = 0
+	federal_lqg_rows = 0
+	state_lqg_rows = 0
+	significant_facility_rows = 0
+	active_mask_rows = 0
 	qualifying_rows = 0
 	unique_handler_ids: set[str] = set()
 
@@ -707,14 +734,19 @@ def summarize_hd_reporting_member(inner_archive: zipfile.ZipFile, csv_member_nam
 
 		for row in reader:
 			total_rows += 1
-			is_lqg, has_tsdf = classify_hd_reporting_row(row)
-			if is_lqg:
-				lqg_rows += 1
-			if has_tsdf:
-				tsdf_rows += 1
-			if is_lqg and has_tsdf:
-				both_rows += 1
-			if is_lqg or has_tsdf:
+			is_operating_tsdf, is_federal_lqg, is_state_lqg, is_significant_facility = classify_hd_reporting_row(row)
+			passes_active_mask = is_active_site(row)
+			if is_operating_tsdf:
+				operating_tsdf_rows += 1
+			if is_federal_lqg:
+				federal_lqg_rows += 1
+			if is_state_lqg:
+				state_lqg_rows += 1
+			if is_significant_facility:
+				significant_facility_rows += 1
+			if passes_active_mask:
+				active_mask_rows += 1
+			if is_significant_facility and passes_active_mask:
 				qualifying_rows += 1
 				handler_id = normalize_handler_id(row.get("HANDLER ID"))
 				if handler_id:
@@ -722,11 +754,13 @@ def summarize_hd_reporting_member(inner_archive: zipfile.ZipFile, csv_member_nam
 
 	return HdReportingUniverseSummary(
 		total_rows=total_rows,
-		lqg_rows=lqg_rows,
-		tsdf_rows=tsdf_rows,
-		both_rows=both_rows,
+		operating_tsdf_rows=operating_tsdf_rows,
+		federal_lqg_rows=federal_lqg_rows,
+		state_lqg_rows=state_lqg_rows,
+		significant_facility_rows=significant_facility_rows,
+		active_mask_rows=active_mask_rows,
 		qualifying_rows=qualifying_rows,
-		neither_rows=total_rows - qualifying_rows,
+		rejected_rows=total_rows - qualifying_rows,
 		unique_handler_ids=len(unique_handler_ids),
 	)
 
@@ -858,22 +892,22 @@ def main(argv=None) -> int:
 		return 1
 
 	logging.info(
-		"HD_REPORTING site extraction summary: total=%d lqg=%d tsdf=%d both=%d qualifying=%d neither=%d validation_failures=%d provisional_rows=%d unique_handlers=%d",
+		"HD_REPORTING site extraction summary: total=%d operating_tsdf=%d federal_lqg=%d state_lqg=%d significant_facility=%d active_mask=%d qualifying=%d rejected=%d validation_failures=%d provisional_rows=%d unique_handlers=%d",
 		extraction_summary.total_rows,
-		extraction_summary.lqg_rows,
-		extraction_summary.tsdf_rows,
-		extraction_summary.both_rows,
+		extraction_summary.operating_tsdf_rows,
+		extraction_summary.federal_lqg_rows,
+		extraction_summary.state_lqg_rows,
+		extraction_summary.significant_facility_rows,
+		extraction_summary.active_mask_rows,
 		extraction_summary.qualifying_rows,
-		extraction_summary.neither_rows,
+		extraction_summary.rejected_rows,
 		extraction_summary.validation_failure_count,
 		extraction_summary.provisional_row_count,
 		extraction_summary.unique_handler_ids,
 	)
 	for validation_reason, reason_count in extraction_summary.validation_reason_counts:
 		logging.info("HD_REPORTING validation rejects [%s]: %d", validation_reason, reason_count)
-	logging.info("Exact duplicate provisional rows removed: %d", finalization_summary.exact_duplicates_removed)
-	logging.info("Duplicate HANDLER ID groups encountered: %d", finalization_summary.duplicate_handler_id_count)
-	logging.info("Coordinate conflict groups encountered: %d", finalization_summary.coordinate_conflict_count)
+	logging.info("Provisional rows removed by HANDLER ID dedup: %d", finalization_summary.handler_dedup_removed_count)
 	logging.info("Canonical site rows written: %d", finalization_summary.canonical_row_count)
 	logging.info("Hazardous waste preprocessing proof slice completed successfully")
 	return 0

@@ -11,6 +11,9 @@ matched rows is also written to the test output path used in examples.
 
 Defaults are set to sample files under `test_files/` for convenience; use the
 command-line arguments to point to your own CSVs and column names.
+
+ag specific commandline example:
+  python3 ./compareScores2Ejam.py --state MT --file-ejam ./test_files/MT/ejam_hazardous_waste_subset.csv --score-ejam proximity.tsdf --file-b ../../hazardous_waste/pipeline/test_data/MT/final_bg_scores.csv --out ./test_files/MT/compare_ejam_hazardous_waste_subset_vs_final_bg_scores.png
 """
 from __future__ import annotations
 import argparse
@@ -130,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--id-b', type=str, default='block_group_geoid', help='ID column name in file B')
     parser.add_argument('--score-new', type=str, default='weighted_score', help='Score column name in file B')
 
-    parser.add_argument('--out', type=str, default=None, help='Output PNG path. Default: ./test_files/{STATE}/compare_ejam_superfund_subset_vs_final_bg_scores.png')
+    parser.add_argument('--out', type=str, default=None, help='Output PNG path. Default: ./test_files/{STATE}/{state}_compare_ejam_SF_subset_to_weighted_scores.png')
     parser.add_argument('--min-matched', type=int, default=5, help='Minimum matched rows required (otherwise exit non-zero)')
 
     args = parser.parse_args(argv)
@@ -143,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
 
     path_ejam = Path(args.file_ejam or f'./test_files/{state}/ejam_superfund_subset.csv')
     path_b = Path(args.file_b or f'../../superfund/pipeline/test_data/{state}/final_bg_scores.csv')
-    out_path = Path(args.out or f'./test_files/{state}/compare_ejam_superfund_subset_vs_final_bg_scores.png')
+    out_path = Path(args.out or f'./test_files/{state}/compare_ejam_superfund_subset_vs_final_bg_scores_{state}.png')
 
     # Read inputs
     try:
@@ -195,12 +198,13 @@ def main(argv: list[str] | None = None) -> int:
 
     export_df = df_sorted.copy()
     export_df['matched_id'] = '\t' + export_df['matched_id'].astype(str)
-    matched_rows_path = Path(f'./test_files/{state}/matched_rows.csv')
+    matched_rows_path = out_path.with_name('matched_rows.csv')
     matched_rows_path.parent.mkdir(parents=True, exist_ok=True)
-    print(export_df.to_csv(matched_rows_path, index=False))
+    export_df.to_csv(matched_rows_path, index=False)
+    print(f"Matched rows written to: {matched_rows_path}")
 
     # Create plot and summary
-    summarize_and_plot(df_joined, 'matched_id', args.score_ejam, args.score_new, out_path, title=f"Compare {args.score_ejam} vs {args.score_new}")
+    summarize_and_plot(df_joined, 'matched_id', args.score_ejam, args.score_new, out_path, title=f"{state}: Compare {args.score_ejam} vs {args.score_new}")
 
     if len(df_joined) < args.min_matched:
         print(f"Fewer than {args.min_matched} matched rows ({len(df_joined)}). Exiting with code 3.")

@@ -313,6 +313,8 @@ def main(argv=None) -> None:
     url = "https://ejamapi-84652557241.us-central1.run.app/data"
     # Use configured state code (uppercased)
     request_data = {"buffer": 0, "fips": config.state_code, "scale": "blockgroup"}
+    print("URL:", url)
+    print(request_data)
 
     resp = requests.post(url, json=request_data)
     resp.raise_for_status()

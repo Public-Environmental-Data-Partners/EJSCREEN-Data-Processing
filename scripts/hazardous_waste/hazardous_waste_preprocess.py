@@ -2,37 +2,24 @@
 hazardous_waste_preprocess.py
 
 Purpose:
-	Prove the current hazardous-waste preprocessing access path by enumerating
-	the configured source archives and validating the CSV schemas we now believe
-	are relevant.
+	Provide the hazardous-waste preprocessing entrypoint while keeping runtime
+	infrastructure separate from source-specific filtering logic.
 
-Current slice:
-	- Loads archive names and source layout from the config file.
-	- Supports local or remote root paths.
-	- Accepts only the main `HD.zip` filename as a runtime filename override.
-	- Enumerates `HD_REPORTING` from inside `HD.zip`.
-	- Enumerates `BR_REPORTING_2023` from its own ZIP file.
-	- Reads CSV headers from the matched members, logs key columns needed downstream,
-	  and fails fast when the discovered schema does not match the current working design.
-	- Streams `HD_REPORTING` rows, applies the revised EJScreen significant-facility mask,
-	  and logs condition counts plus the filtered output counts.
+Current transitional slice:
+	- Keeps the current local-or-remote runtime pattern and ZIP access helpers.
+	- Preserves the existing config loading, path resolution, and fail-fast schema checks.
+	- Isolates the current HD_REPORTING-specific extraction path behind a single pipeline call.
+	- Writes the same provisional and canonical outputs as the current implementation.
 
-Sample command lines:
-	- Local storage, all other options default:
-	  python3 ./scripts/hazardous_waste/hazardous_waste_preprocess.py local
-	- Remote storage, all other options default:
-	  python3 ./scripts/hazardous_waste/hazardous_waste_preprocess.py remote
-	- Local storage with a different `HD.zip` filename:
-	  python3 ./scripts/hazardous_waste/hazardous_waste_preprocess.py local --hd-outer-archive-filename HD.zip
-
-This slice intentionally stops before schema validation, filtering, joins,
-or audit outputs.
+This is a transitional structure change for the planned RCRA_FACILITIES plus
+BR_REPORTING rewrite. The current HD_REPORTING-specific filtering logic remains
+in place temporarily so it can be replaced cleanly in the next steps.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import argparse
 import csv
@@ -48,58 +35,19 @@ from collections import Counter
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_FILE_PATH = SCRIPT_DIR / "hazardous_waste_preprocess_config.json"
 
-SOURCE_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
-	"hd_reporting": (
-		"HANDLER ID",
-		"HANDLER NAME",
-		"LOCATION CITY",
-		"LOCATION STATE",
-		"LOCATION ZIP",
-		"OPERATING TSDF",
-		"FED WASTE GENERATOR",
-		"STATE WASTE GENERATOR",
-		"IN A UNIVERSE",
-		"ACTIVE SITE",
-		"LOCATION LATITUDE",
-		"LOCATION LONGITUDE",
-	),
-	"br_reporting": (
-		"HANDLER ID",
-		"REPORT CYCLE",
-	),
-}
-
-SOURCE_KEY_COLUMNS: dict[str, tuple[str, ...]] = {
-	"hd_reporting": (
-		"HANDLER ID",
-		"HANDLER NAME",
-		"LOCATION CITY",
-		"LOCATION STATE",
-		"LOCATION ZIP",
-		"OPERATING TSDF",
-		"FED WASTE GENERATOR",
-		"STATE WASTE GENERATOR",
-		"IN A UNIVERSE",
-		"ACTIVE SITE",
-		"LOCATION LATITUDE",
-		"LOCATION LONGITUDE",
-	),
-	"br_reporting": (
-		"HANDLER ID",
-		"REPORT CYCLE",
-	),
-}
-
 
 @dataclass(frozen=True, slots=True)
 class SourceDescriptor:
 	source_key: str
 	logical_name: str
-	inventory_phase: str
 	description: str
-	outer_archive_filename: str | None
+	relative_path: str
 	inner_zip_member_filename: str | None
 	target_csv_globs: tuple[str, ...]
+	required_columns: tuple[str, ...]
+	key_columns: tuple[str, ...]
+	handler_id_column: str
+	id_normalization: str
 	target_biennial_year: int | None = None
 
 
@@ -108,12 +56,11 @@ class Config:
 	storage_mode: str
 	local_root_path: str
 	remote_root_path: str
-	downloads_relative_path: str
-	outer_archive_filename: str
 	provisional_output_relative_path: str
 	canonical_output_relative_path: str
-	active_nested_sources: tuple[SourceDescriptor, ...]
-	deferred_sources: tuple[SourceDescriptor, ...]
+	planned_master_rcra_source: SourceDescriptor
+	planned_br_reporting_source: SourceDescriptor
+	current_hd_reporting_source: SourceDescriptor
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,15 +106,24 @@ class FinalizationSummary:
 	canonical_row_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class CurrentSliceResult:
+	extraction_summary: SiteExtractionSummary
+	finalization_summary: FinalizationSummary
+
+
 def build_source_descriptor(raw_descriptor: dict) -> SourceDescriptor:
 	return SourceDescriptor(
 		source_key=raw_descriptor["source_key"],
 		logical_name=raw_descriptor["logical_name"],
-		inventory_phase=raw_descriptor["inventory_phase"],
 		description=raw_descriptor["description"],
-		outer_archive_filename=raw_descriptor.get("outer_archive_filename"),
+		relative_path=raw_descriptor["relative_path"],
 		inner_zip_member_filename=raw_descriptor.get("inner_zip_member_filename"),
 		target_csv_globs=tuple(raw_descriptor.get("target_csv_globs", [])),
+		required_columns=tuple(raw_descriptor["required_columns"]),
+		key_columns=tuple(raw_descriptor["key_columns"]),
+		handler_id_column=raw_descriptor["handler_id_column"],
+		id_normalization=raw_descriptor["id_normalization"],
 		target_biennial_year=raw_descriptor.get("target_biennial_year"),
 	)
 
@@ -181,10 +137,12 @@ def load_config_payload() -> dict:
 
 def get_config(argv=None) -> Config:
 	config_payload = load_config_payload()
-	default_outer_archive_filename = config_payload["default_outer_archive_filename"]
+	planned_sources_payload = config_payload["planned_sources"]
+	current_slice_payload = config_payload["current_slice"]
+	default_hd_archive_filename = Path(current_slice_payload["hd_reporting_source"]["relative_path"]).name
 
 	parser = argparse.ArgumentParser(
-		description="Enumerate the configured hazardous-waste source archives."
+		description="Run the hazardous-waste preprocessing transition script."
 	)
 	parser.add_argument(
 		"storage_mode",
@@ -193,31 +151,30 @@ def get_config(argv=None) -> Config:
 	)
 	parser.add_argument(
 		"--hd-outer-archive-filename",
-		dest="outer_archive_filename",
-		default=default_outer_archive_filename,
+		dest="hd_outer_archive_filename",
+		default=default_hd_archive_filename,
 		help=(
-			"Override only the main HD outer archive filename. "
-			f"Default from config: {default_outer_archive_filename}"
+			"Override only the transitional HD outer archive filename used by the current slice. "
+			f"Default from config: {default_hd_archive_filename}"
 		),
 	)
 	args = parser.parse_args(argv)
+
+	current_hd_source = build_source_descriptor(current_slice_payload["hd_reporting_source"])
+	current_hd_source = replace(
+		current_hd_source,
+		relative_path=str(Path(current_hd_source.relative_path).with_name(args.hd_outer_archive_filename)),
+	)
 
 	return Config(
 		storage_mode=args.storage_mode,
 		local_root_path=config_payload["local_root_path"],
 		remote_root_path=config_payload["remote_root_path"],
-		downloads_relative_path=config_payload["downloads_relative_path"],
-		outer_archive_filename=args.outer_archive_filename,
 		provisional_output_relative_path=config_payload["provisional_output_relative_path"],
 		canonical_output_relative_path=config_payload["canonical_output_relative_path"],
-		active_nested_sources=tuple(
-			build_source_descriptor(raw_descriptor)
-			for raw_descriptor in config_payload.get("active_nested_sources", [])
-		),
-		deferred_sources=tuple(
-			build_source_descriptor(raw_descriptor)
-			for raw_descriptor in config_payload.get("deferred_sources", [])
-		),
+		planned_master_rcra_source=build_source_descriptor(planned_sources_payload["master_rcra_source"]),
+		planned_br_reporting_source=build_source_descriptor(planned_sources_payload["br_reporting_source"]),
+		current_hd_reporting_source=current_hd_source,
 	)
 
 
@@ -256,19 +213,12 @@ def get_active_root_path(cfg: Config) -> str:
 	raise ValueError(f"Unsupported storage mode: {cfg.storage_mode}")
 
 
-def get_outer_archive_path(cfg: Config) -> str:
-	return join_root_and_relative_path(
-		get_active_root_path(cfg),
-		str(Path(cfg.downloads_relative_path) / cfg.outer_archive_filename),
-	)
+def get_source_path(cfg: Config, source: SourceDescriptor) -> str:
+	return join_root_and_relative_path(get_active_root_path(cfg), source.relative_path)
 
 
-def get_source_outer_archive_path(cfg: Config, source: SourceDescriptor) -> str:
-	archive_filename = source.outer_archive_filename or cfg.outer_archive_filename
-	return join_root_and_relative_path(
-		get_active_root_path(cfg),
-		str(Path(cfg.downloads_relative_path) / archive_filename),
-	)
+def get_current_hd_outer_archive_path(cfg: Config) -> str:
+	return get_source_path(cfg, cfg.current_hd_reporting_source)
 
 
 def get_provisional_output_path(cfg: Config) -> str:
@@ -279,11 +229,29 @@ def get_canonical_output_path(cfg: Config) -> str:
 	return join_root_and_relative_path(get_active_root_path(cfg), cfg.canonical_output_relative_path)
 
 
+def log_runtime_context(cfg: Config) -> None:
+	logging.info("Config file: %s", CONFIG_FILE_PATH)
+	logging.info("Storage mode: %s", cfg.storage_mode)
+	logging.info("Active root path: %s", get_active_root_path(cfg))
+	logging.info("Current-slice HD outer archive path: %s", get_current_hd_outer_archive_path(cfg))
+	logging.info("Planned master RCRA source path: %s", get_source_path(cfg, cfg.planned_master_rcra_source))
+	logging.info("Planned BR reporting source path: %s", get_source_path(cfg, cfg.planned_br_reporting_source))
+	logging.info("Provisional output path: %s", get_provisional_output_path(cfg))
+	logging.info("Canonical output path: %s", get_canonical_output_path(cfg))
+
+
 def open_binary_input_stream(path: str):
 	if is_s3_uri(path):
 		fsspec = load_fsspec_module()
 		return fsspec.open(path, "rb")
 	return open(path, "rb")
+
+
+def open_text_input_stream(path: str):
+	if is_s3_uri(path):
+		fsspec = load_fsspec_module()
+		return fsspec.open(path, "r", encoding="utf-8-sig", newline="")
+	return open(path, "r", encoding="utf-8-sig", newline="")
 
 
 def ensure_local_parent_dir(path: str) -> None:
@@ -331,26 +299,11 @@ def select_matching_members(member_names: list[str], patterns: tuple[str, ...], 
 
 
 def get_required_columns_for_source(source: SourceDescriptor) -> tuple[str, ...]:
-	try:
-		return SOURCE_REQUIRED_COLUMNS[source.source_key]
-	except KeyError as exc:
-		raise RuntimeError(f"No required-column definition exists for source {source.source_key!r}") from exc
+	return source.required_columns
 
 
 def get_key_columns_for_source(source: SourceDescriptor) -> tuple[str, ...]:
-	try:
-		return SOURCE_KEY_COLUMNS[source.source_key]
-	except KeyError as exc:
-		raise RuntimeError(f"No key-column definition exists for source {source.source_key!r}") from exc
-
-
-def get_required_source(cfg: Config, source_key: str) -> SourceDescriptor:
-	matching_sources = [source for source in cfg.active_nested_sources if source.source_key == source_key]
-	if not matching_sources:
-		raise RuntimeError(f"Configured active source not found: {source_key}")
-	if len(matching_sources) > 1:
-		raise RuntimeError(f"Expected exactly one active source for {source_key}, found {len(matching_sources)}")
-	return matching_sources[0]
+	return source.key_columns
 
 
 def normalize_cell_text(value: str | None) -> str:
@@ -485,8 +438,8 @@ def get_canonical_sort_key(row: dict[str, str]) -> tuple[int, int, str, int]:
 
 
 def extract_hd_reporting_sites(cfg: Config, provisional_output_path: str) -> tuple[list[dict[str, str]], SiteExtractionSummary]:
-	source = get_required_source(cfg, "hd_reporting")
-	source_outer_archive_path = get_source_outer_archive_path(cfg, source)
+	source = cfg.current_hd_reporting_source
+	source_outer_archive_path = get_source_path(cfg, source)
 	provisional_rows: list[dict[str, str]] = []
 	validation_reason_counter: Counter[str] = Counter()
 	total_rows = 0
@@ -525,7 +478,7 @@ def extract_hd_reporting_sites(cfg: Config, provisional_output_path: str) -> tup
 						reader = csv.DictReader(text_stream)
 						if reader.fieldnames is None:
 							raise RuntimeError(f"CSV member is missing a header row: {matched_csv_member}")
-						validate_required_columns(tuple(reader.fieldnames), SOURCE_REQUIRED_COLUMNS["hd_reporting"], source.logical_name, matched_csv_member)
+						validate_required_columns(tuple(reader.fieldnames), source.required_columns, source.logical_name, matched_csv_member)
 
 						source_member_row_number = 0
 						for row in reader:
@@ -717,6 +670,95 @@ def open_outer_csv_text_stream(outer_archive: zipfile.ZipFile, csv_member_name: 
 		raise RuntimeError(f"CSV member not found in outer archive: {csv_member_name}") from exc
 
 
+def inventory_direct_csv_source(cfg: Config, source: SourceDescriptor) -> None:
+	source_path = get_source_path(cfg, source)
+	logging.info("------------------------------------------------------------")
+	logging.info("Inventorying planned source: %s", source.logical_name)
+	logging.info("Source description: %s", source.description)
+	logging.info("Source path: %s", source_path)
+	logging.info("Required columns for %s: %s", source.logical_name, list(source.required_columns))
+	with open_text_input_stream(source_path) as text_stream:
+		column_names = parse_csv_header_line(text_stream, Path(source.relative_path).name)
+	schema_summary = CsvSchemaSummary(
+		csv_member_name=Path(source.relative_path).name,
+		column_names=column_names,
+	)
+	validate_required_columns(column_names, source.required_columns, source.logical_name, schema_summary.csv_member_name)
+	log_source_schema(source, schema_summary)
+
+
+def inventory_outer_zip_csv_source(cfg: Config, source: SourceDescriptor) -> None:
+	source_path = get_source_path(cfg, source)
+	logging.info("------------------------------------------------------------")
+	logging.info("Inventorying planned source: %s", source.logical_name)
+	logging.info("Source description: %s", source.description)
+	logging.info("Source path: %s", source_path)
+	if source.target_biennial_year is not None:
+		logging.info("Configured biennial year for %s: %s", source.logical_name, source.target_biennial_year)
+	logging.info("Required columns for %s: %s", source.logical_name, list(source.required_columns))
+	with open_outer_zip_archive(source_path) as outer_archive:
+		outer_member_names = list_archive_members(outer_archive)
+		logging.info("Outer archive member count for %s: %d", source.logical_name, len(outer_member_names))
+		for member_name in outer_member_names:
+			logging.info("Outer archive member for %s: %s", source.logical_name, member_name)
+
+		if source.inner_zip_member_filename:
+			inner_zip_member_name = require_member_present(
+				member_names=outer_member_names,
+				expected_member_name=source.inner_zip_member_filename,
+				archive_label=f"archive {source_path}",
+			)
+			logging.info("Configured inner ZIP member for %s: %s", source.logical_name, inner_zip_member_name)
+			with open_inner_zip_archive(outer_archive, inner_zip_member_name) as inner_archive:
+				inner_member_names = list_archive_members(inner_archive)
+				logging.info("Inner archive member count for %s: %d", source.logical_name, len(inner_member_names))
+				for inner_member_name in inner_member_names:
+					logging.info("Inner archive member for %s: %s", source.logical_name, inner_member_name)
+				matched_csv_members = select_matching_members(
+					member_names=inner_member_names,
+					patterns=source.target_csv_globs,
+					source_name=source.logical_name,
+				)
+				schema_summaries = []
+				for matched_csv_member in matched_csv_members:
+					logging.info("Matched CSV member for %s: %s", source.logical_name, matched_csv_member)
+					with open_inner_csv_text_stream(inner_archive, matched_csv_member) as text_stream:
+						column_names = parse_csv_header_line(text_stream, matched_csv_member)
+					schema_summary = CsvSchemaSummary(
+						csv_member_name=matched_csv_member,
+						column_names=column_names,
+					)
+					validate_required_columns(column_names, source.required_columns, source.logical_name, matched_csv_member)
+					log_source_schema(source, schema_summary)
+					schema_summaries.append(schema_summary)
+				validate_consistent_member_schema(schema_summaries, source.logical_name)
+				return
+
+		matched_csv_members = select_matching_members(
+			member_names=outer_member_names,
+			patterns=source.target_csv_globs,
+			source_name=source.logical_name,
+		)
+		schema_summaries = []
+		for matched_csv_member in matched_csv_members:
+			logging.info("Matched CSV member for %s: %s", source.logical_name, matched_csv_member)
+			with open_outer_csv_text_stream(outer_archive, matched_csv_member) as text_stream:
+				column_names = parse_csv_header_line(text_stream, matched_csv_member)
+			schema_summary = CsvSchemaSummary(
+				csv_member_name=matched_csv_member,
+				column_names=column_names,
+			)
+			validate_required_columns(column_names, source.required_columns, source.logical_name, matched_csv_member)
+			log_source_schema(source, schema_summary)
+			schema_summaries.append(schema_summary)
+		validate_consistent_member_schema(schema_summaries, source.logical_name)
+
+
+def inventory_planned_source_layout(cfg: Config) -> None:
+	inventory_direct_csv_source(cfg, cfg.planned_master_rcra_source)
+	inventory_outer_zip_csv_source(cfg, cfg.planned_br_reporting_source)
+
+
 def summarize_hd_reporting_member(inner_archive: zipfile.ZipFile, csv_member_name: str) -> HdReportingUniverseSummary:
 	total_rows = 0
 	operating_tsdf_rows = 0
@@ -765,132 +807,77 @@ def summarize_hd_reporting_member(inner_archive: zipfile.ZipFile, csv_member_nam
 	)
 
 
-def inventory_configured_sources(cfg: Config) -> None:
-	outer_archive_path = get_outer_archive_path(cfg)
-	with open_outer_zip_archive(outer_archive_path) as default_outer_archive:
-		default_outer_member_names = list_archive_members(default_outer_archive)
-		logging.info("HD outer archive member count: %d", len(default_outer_member_names))
-		for outer_member_name in default_outer_member_names:
-			logging.info("HD outer archive member: %s", outer_member_name)
+def inventory_current_source_layout(cfg: Config) -> None:
+	source = cfg.current_hd_reporting_source
+	source_outer_archive_path = get_source_path(cfg, source)
+	with open_outer_zip_archive(source_outer_archive_path) as outer_archive:
+		outer_member_names = list_archive_members(outer_archive)
+		logging.info("------------------------------------------------------------")
+		logging.info("Inventorying current-slice source: %s", source.logical_name)
+		logging.info("Source description: %s", source.description)
+		logging.info("Source outer archive path: %s", source_outer_archive_path)
+		logging.info("Required columns for %s: %s", source.logical_name, list(source.required_columns))
+		logging.info("Outer archive member count: %d", len(outer_member_names))
+		for outer_member_name in outer_member_names:
+			logging.info("Outer archive member: %s", outer_member_name)
 
-		for source in cfg.active_nested_sources:
-			logging.info("------------------------------------------------------------")
-			logging.info("Inventorying source: %s", source.logical_name)
-			logging.info("Source description: %s", source.description)
-			if source.target_biennial_year is not None:
-				logging.info("Configured biennial year for %s: %s", source.logical_name, source.target_biennial_year)
-
-			source_outer_archive_path = get_source_outer_archive_path(cfg, source)
-			logging.info("Source outer archive path for %s: %s", source.logical_name, source_outer_archive_path)
-			required_columns = get_required_columns_for_source(source)
-			logging.info("Required columns for %s: %s", source.logical_name, list(required_columns))
-
-			if source.outer_archive_filename is None:
-				source_outer_archive = default_outer_archive
-				source_outer_member_names = default_outer_member_names
-			else:
-				with open_outer_zip_archive(source_outer_archive_path) as source_archive:
-					source_outer_member_names = list_archive_members(source_archive)
-					logging.info("Outer archive member count for %s: %d", source.logical_name, len(source_outer_member_names))
-					for member_name in source_outer_member_names:
-						logging.info("Outer archive member for %s: %s", source.logical_name, member_name)
-					matched_csv_members = select_matching_members(
-						member_names=source_outer_member_names,
-						patterns=source.target_csv_globs,
-						source_name=source.logical_name,
-					)
-					schema_summaries = []
-					for matched_csv_member in matched_csv_members:
-						logging.info("Matched CSV member for %s: %s", source.logical_name, matched_csv_member)
-						with open_outer_csv_text_stream(source_archive, matched_csv_member) as text_stream:
-							column_names = parse_csv_header_line(text_stream, matched_csv_member)
-						schema_summary = CsvSchemaSummary(
-							csv_member_name=matched_csv_member,
-							column_names=column_names,
-						)
-						validate_required_columns(column_names, required_columns, source.logical_name, matched_csv_member)
-						log_source_schema(source, schema_summary)
-						schema_summaries.append(schema_summary)
-					validate_consistent_member_schema(schema_summaries, source.logical_name)
-					continue
-
-			if not source.inner_zip_member_filename:
-				raise RuntimeError(
-					f"Source inside HD.zip is missing inner_zip_member_filename: {source.logical_name}"
-				)
-
-			inner_zip_member_name = require_member_present(
-				member_names=source_outer_member_names,
-				expected_member_name=source.inner_zip_member_filename,
-				archive_label=f"archive {source_outer_archive_path}",
+		if not source.inner_zip_member_filename:
+			raise RuntimeError(
+				f"Current-slice source is missing inner_zip_member_filename: {source.logical_name}"
 			)
-			logging.info("Configured inner ZIP member: %s", inner_zip_member_name)
 
-			with open_inner_zip_archive(source_outer_archive, inner_zip_member_name) as inner_archive:
-				inner_member_names = list_archive_members(inner_archive)
-				logging.info("Inner archive member count for %s: %d", source.logical_name, len(inner_member_names))
-				for inner_member_name in inner_member_names:
-					logging.info("Inner archive member for %s: %s", source.logical_name, inner_member_name)
-
-				matched_csv_members = select_matching_members(
-					member_names=inner_member_names,
-					patterns=source.target_csv_globs,
-					source_name=source.logical_name,
-				)
-				schema_summaries = []
-				for matched_csv_member in matched_csv_members:
-					logging.info("Matched CSV member for %s: %s", source.logical_name, matched_csv_member)
-					with open_inner_csv_text_stream(inner_archive, matched_csv_member) as text_stream:
-						column_names = parse_csv_header_line(text_stream, matched_csv_member)
-					schema_summary = CsvSchemaSummary(
-						csv_member_name=matched_csv_member,
-						column_names=column_names,
-					)
-					validate_required_columns(column_names, required_columns, source.logical_name, matched_csv_member)
-					log_source_schema(source, schema_summary)
-					schema_summaries.append(schema_summary)
-				validate_consistent_member_schema(schema_summaries, source.logical_name)
-
-		if cfg.deferred_sources:
-			logging.info("------------------------------------------------------------")
-			logging.info("Deferred sources for later slices: %d", len(cfg.deferred_sources))
-			for source in cfg.deferred_sources:
-				logging.info(
-					"Deferred source: %s | year=%s | configured CSV patterns=%s",
-					source.logical_name,
-					source.target_biennial_year,
-					list(source.target_csv_globs),
-				)
-
-
-def main(argv=None) -> int:
-	logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-	try:
-		cfg = get_config(argv)
-		initialize_runtime_dependencies(cfg)
-
-		logging.info("Config file: %s", CONFIG_FILE_PATH)
-		logging.info("Storage mode: %s", cfg.storage_mode)
-		logging.info("Active root path: %s", get_active_root_path(cfg))
-		logging.info("Downloads relative path: %s", cfg.downloads_relative_path)
-		logging.info("HD outer archive filename: %s", cfg.outer_archive_filename)
-		logging.info("HD outer archive path: %s", get_outer_archive_path(cfg))
-		logging.info("Provisional output path: %s", get_provisional_output_path(cfg))
-		logging.info("Canonical output path: %s", get_canonical_output_path(cfg))
-
-		inventory_configured_sources(cfg)
-		provisional_rows, extraction_summary = extract_hd_reporting_sites(
-			cfg,
-			provisional_output_path=get_provisional_output_path(cfg),
+		inner_zip_member_name = require_member_present(
+			member_names=outer_member_names,
+			expected_member_name=source.inner_zip_member_filename,
+			archive_label=f"archive {source_outer_archive_path}",
 		)
-		finalization_summary = finalize_hd_reporting_sites(
-			provisional_rows=provisional_rows,
-			canonical_output_path=get_canonical_output_path(cfg),
-		)
-	except Exception as exc:
-		logging.error("Hazardous waste preprocessing proof slice failed: %s", exc)
-		return 1
+		logging.info("Configured inner ZIP member: %s", inner_zip_member_name)
 
+		with open_inner_zip_archive(outer_archive, inner_zip_member_name) as inner_archive:
+			inner_member_names = list_archive_members(inner_archive)
+			logging.info("Inner archive member count for %s: %d", source.logical_name, len(inner_member_names))
+			for inner_member_name in inner_member_names:
+				logging.info("Inner archive member for %s: %s", source.logical_name, inner_member_name)
+
+			matched_csv_members = select_matching_members(
+				member_names=inner_member_names,
+				patterns=source.target_csv_globs,
+				source_name=source.logical_name,
+			)
+			schema_summaries = []
+			for matched_csv_member in matched_csv_members:
+				logging.info("Matched CSV member for %s: %s", source.logical_name, matched_csv_member)
+				with open_inner_csv_text_stream(inner_archive, matched_csv_member) as text_stream:
+					column_names = parse_csv_header_line(text_stream, matched_csv_member)
+				schema_summary = CsvSchemaSummary(
+					csv_member_name=matched_csv_member,
+					column_names=column_names,
+				)
+				validate_required_columns(column_names, source.required_columns, source.logical_name, matched_csv_member)
+				log_source_schema(source, schema_summary)
+				schema_summaries.append(schema_summary)
+			validate_consistent_member_schema(schema_summaries, source.logical_name)
+
+
+def run_current_hd_reporting_pipeline(cfg: Config) -> CurrentSliceResult:
+	inventory_current_source_layout(cfg)
+	provisional_rows, extraction_summary = extract_hd_reporting_sites(
+		cfg,
+		provisional_output_path=get_provisional_output_path(cfg),
+	)
+	finalization_summary = finalize_hd_reporting_sites(
+		provisional_rows=provisional_rows,
+		canonical_output_path=get_canonical_output_path(cfg),
+	)
+	return CurrentSliceResult(
+		extraction_summary=extraction_summary,
+		finalization_summary=finalization_summary,
+	)
+
+
+def log_current_hd_reporting_result(result: CurrentSliceResult) -> None:
+	extraction_summary = result.extraction_summary
+	finalization_summary = result.finalization_summary
 	logging.info(
 		"HD_REPORTING site extraction summary: total=%d operating_tsdf=%d federal_lqg=%d state_lqg=%d significant_facility=%d active_mask=%d qualifying=%d rejected=%d validation_failures=%d provisional_rows=%d unique_handlers=%d",
 		extraction_summary.total_rows,
@@ -909,6 +896,21 @@ def main(argv=None) -> int:
 		logging.info("HD_REPORTING validation rejects [%s]: %d", validation_reason, reason_count)
 	logging.info("Provisional rows removed by HANDLER ID dedup: %d", finalization_summary.handler_dedup_removed_count)
 	logging.info("Canonical site rows written: %d", finalization_summary.canonical_row_count)
+
+
+def main(argv=None) -> int:
+	logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+	try:
+		cfg = get_config(argv)
+		initialize_runtime_dependencies(cfg)
+		log_runtime_context(cfg)
+		inventory_planned_source_layout(cfg)
+		current_slice_result = run_current_hd_reporting_pipeline(cfg)
+	except Exception as exc:
+		logging.error("Hazardous waste preprocessing proof slice failed: %s", exc)
+		return 1
+
+	log_current_hd_reporting_result(current_slice_result)
 	logging.info("Hazardous waste preprocessing proof slice completed successfully")
 	return 0
 

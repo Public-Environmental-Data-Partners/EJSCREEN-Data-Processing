@@ -1,35 +1,105 @@
 {
   "local_root_path": "./pipeline/test_data/",
   "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/hazardous_waste/pipeline/",
-  "downloads_relative_path": "downloads",
-  "default_outer_archive_filename": "HD.zip",
   "provisional_output_relative_path": "outputs/hazardous_waste_filtered_pre_dedup.csv",
   "canonical_output_relative_path": "outputs/hazardous_waste_filtered.csv",
-  "active_nested_sources": [
-    {
+  "planned_sources": {
+    "master_rcra_source": {
+      "source_key": "rcra_facilities",
+      "logical_name": "RCRA_FACILITIES",
+      "description": "Master handler table for TSDF status, LQG classification, site attributes, and final emitted rows.",
+      "relative_path": "downloads/RCRA_FACILITIES.csv",
+      "inner_zip_member_filename": null,
+      "target_csv_globs": [],
+      "target_biennial_year": null,
+      "required_columns": [
+        "ID_NUMBER",
+        "FACILITY_NAME",
+        "OPERATING_TSDF",
+        "ACTIVE_SITE",
+        "HREPORT_UNIVERSE_RECORD",
+        "CITY_NAME",
+        "STATE_CODE",
+        "ZIP_CODE",
+        "LATITUDE83",
+        "LONGITUDE83"
+      ],
+      "key_columns": [
+        "ID_NUMBER",
+        "FACILITY_NAME",
+        "OPERATING_TSDF",
+        "ACTIVE_SITE",
+        "HREPORT_UNIVERSE_RECORD",
+        "CITY_NAME",
+        "STATE_CODE",
+        "ZIP_CODE",
+        "LATITUDE83",
+        "LONGITUDE83"
+      ],
+      "handler_id_column": "ID_NUMBER",
+      "id_normalization": "strip_upper"
+    },
+    "br_reporting_source": {
+      "source_key": "br_reporting",
+      "logical_name": "BR_REPORTING_2021",
+      "description": "Biennial reporting source used to identify handlers that actually reported in the target 2021 cycle.",
+      "relative_path": "downloads/BR_REPORTING_2021.zip",
+      "inner_zip_member_filename": null,
+      "target_csv_globs": [
+        "BR_REPORTING_2021_*.csv"
+      ],
+      "target_biennial_year": 2021,
+      "required_columns": [
+        "HANDLER ID"
+      ],
+      "key_columns": [
+        "HANDLER ID"
+      ],
+      "handler_id_column": "HANDLER ID",
+      "id_normalization": "strip_upper"
+    }
+  },
+  "current_slice": {
+    "hd_reporting_source": {
       "source_key": "hd_reporting",
       "logical_name": "HD_REPORTING",
-      "inventory_phase": "active",
-      "description": "Primary working source containing identifiers, coordinates, generator status, and TSDF status.",
-      "outer_archive_filename": null,
+      "description": "Transitional current-slice source retained only until the RCRA_FACILITIES plus BR_REPORTING rewrite replaces it.",
+      "relative_path": "downloads/HD.zip",
       "inner_zip_member_filename": "HD_REPORTING.zip",
       "target_csv_globs": [
         "HD_REPORTING_*.csv"
       ],
-      "target_biennial_year": null
-    },
-    {
-      "source_key": "br_reporting",
-      "logical_name": "BR_REPORTING",
-      "inventory_phase": "active",
-      "description": "Optional narrowing source containing recent biennial reporting rows.",
-      "outer_archive_filename": "BR_REPORTING_2023.zip",
-      "inner_zip_member_filename": null,
-      "target_csv_globs": [
-        "BR_REPORTING_2023_*.csv"
+      "target_biennial_year": null,
+      "required_columns": [
+        "HANDLER ID",
+        "HANDLER NAME",
+        "LOCATION CITY",
+        "LOCATION STATE",
+        "LOCATION ZIP",
+        "OPERATING TSDF",
+        "FED WASTE GENERATOR",
+        "STATE WASTE GENERATOR",
+        "IN A UNIVERSE",
+        "ACTIVE SITE",
+        "LOCATION LATITUDE",
+        "LOCATION LONGITUDE"
       ],
-      "target_biennial_year": 2023
+      "key_columns": [
+        "HANDLER ID",
+        "HANDLER NAME",
+        "LOCATION CITY",
+        "LOCATION STATE",
+        "LOCATION ZIP",
+        "OPERATING TSDF",
+        "FED WASTE GENERATOR",
+        "STATE WASTE GENERATOR",
+        "IN A UNIVERSE",
+        "ACTIVE SITE",
+        "LOCATION LATITUDE",
+        "LOCATION LONGITUDE"
+      ],
+      "handler_id_column": "HANDLER ID",
+      "id_normalization": "strip_upper"
     }
-  ],
-  "deferred_sources": []
+  }
 }

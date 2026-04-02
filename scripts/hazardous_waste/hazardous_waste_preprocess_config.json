@@ -3,6 +3,9 @@
   "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/hazardous_waste/pipeline/",
   "provisional_output_relative_path": "outputs/hazardous_waste_filtered_pre_dedup.csv",
   "canonical_output_relative_path": "outputs/hazardous_waste_filtered.csv",
+  "parse_audit_relative_path": "outputs/hazardous_waste_parse_audit.csv",
+  "validation_audit_relative_path": "outputs/hazardous_waste_validation_audit.csv",
+  "dedup_audit_relative_path": "outputs/hazardous_waste_dedup_audit.csv",
   "planned_sources": {
     "master_rcra_source": {
       "source_key": "rcra_facilities",
@@ -18,6 +21,7 @@
         "OPERATING_TSDF",
         "ACTIVE_SITE",
         "HREPORT_UNIVERSE_RECORD",
+        "FED_WASTE_GENERATOR",
         "CITY_NAME",
         "STATE_CODE",
         "ZIP_CODE",
@@ -30,6 +34,7 @@
         "OPERATING_TSDF",
         "ACTIVE_SITE",
         "HREPORT_UNIVERSE_RECORD",
+        "FED_WASTE_GENERATOR",
         "CITY_NAME",
         "STATE_CODE",
         "ZIP_CODE",
@@ -50,10 +55,12 @@
       ],
       "target_biennial_year": 2021,
       "required_columns": [
-        "HANDLER ID"
+        "HANDLER ID",
+        "REPORT CYCLE"
       ],
       "key_columns": [
-        "HANDLER ID"
+        "HANDLER ID",
+        "REPORT CYCLE"
       ],
       "handler_id_column": "HANDLER ID",
       "id_normalization": "strip_upper"

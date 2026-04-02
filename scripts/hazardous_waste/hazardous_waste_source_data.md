@@ -1,123 +1,181 @@
 # Design Decision Record: Hazardous Waste Proximity Source Data and Filtering
 
-**Date:** 2026-03-30
+**Date:** 2026-04-02
 **Indicator:** Hazardous Waste Proximity (TSDF & LQG)
-**Target Version:** EJScreen 2.3 Compatibility
+**Target Version:** EJScreen compatibility rebuild
 
 ---
 
 ### 1. Problem Statement
 
-The "Hazardous Waste Proximity" indicator requires a focused national list of hazardous-waste sites with usable coordinates. There are two general classes of site we care about:
-- **LQG (Large Quantity Generator) sites, the sources**: facilities that generate hazardous waste at the large-quantity level.
-- **TSDF (Treatment, Storage, Disposal Facility) sites, the sinks**: facilities that receive, treat, store, or dispose of hazardous waste.
+The hazardous-waste proximity indicator needs a national site list that is both geographically usable and narrower than the full RCRAInfo universe. The population we care about has two components:
+- **TSDF sites**: handlers with operating treatment, storage, or disposal activity.
+- **LQG sites**: large quantity generators, but only where current source files support a defensible tie to actual biennial-report participation.
 
-The full federal RCRAInfo download is much broader than the subset needed for EJ-style proximity scoring. The preprocessing objective is therefore to identify a defensible national site universe that is both geographically usable and reasonably aligned to the original EJScreen/EJAM concept, even if some drift remains because the source files have changed over time.
+The current preprocessing goal is to build one deduplicated national handler list with stable downstream fields for proximity scoring while using the best currently available source files and explicit fail-fast schema validation.
 
 ---
 
 ### 2. Current Source Decision
 
-Based on inspection of the local files currently in hand, the working design is now **HD_REPORTING-first**.
+The current implementation is now **RCRA_FACILITIES-first**, with **BR_REPORTING_2021** as a required secondary filter for the LQG branch.
 
-`HD_REPORTING` currently appears to provide all of the core fields needed for an initial rebuild:
+#### 2.1 Master source: `RCRA_FACILITIES.csv`
+
+`RCRA_FACILITIES.csv` is the authoritative master table for:
+- handler identity
+- handler name
+- city, state, ZIP
+- latitude and longitude
+- TSDF status
+- generator status
+- active-site status
+- final emitted row content
+
+The current required columns are:
+- `ID_NUMBER`
+- `FACILITY_NAME`
+- `OPERATING_TSDF`
+- `ACTIVE_SITE`
+- `HREPORT_UNIVERSE_RECORD`
+- `FED_WASTE_GENERATOR`
+- `CITY_NAME`
+- `STATE_CODE`
+- `ZIP_CODE`
+- `LATITUDE83`
+- `LONGITUDE83`
+
+#### 2.2 Secondary source: `BR_REPORTING_2021.zip`
+
+`BR_REPORTING_2021.zip` is the authoritative source for identifying which handlers actually reported in the 2021 biennial cycle.
+
+The current implementation treats the BR ZIP as one reporting universe assembled from the matching CSV members inside the archive. The BR source is used primarily as a handler-ID filter, not as the source of final output attributes.
+
+The current required BR columns are:
 - `HANDLER ID`
-- `HANDLER NAME`
-- `LOCATION CITY`
-- `LOCATION STATE`
-- `LOCATION ZIP`
-- `LOCATION LATITUDE`
-- `LOCATION LONGITUDE`
-- `OPERATING TSDF`
-- `FED WASTE GENERATOR`
-- `STATE WASTE GENERATOR`
-- `IN A UNIVERSE`
-- `ACTIVE SITE`
+- `REPORT CYCLE`
 
-That means the first implementation path does **not** depend on a separate coordinate join. Instead, the pipeline can attempt to derive both the site universe logic and the site locations from `HD_REPORTING` alone.
-
-`BR_REPORTING_2023` remains relevant, but it is now treated as a **possible narrowing filter** rather than a mandatory source. If testing shows that `HD_REPORTING` alone yields too many sites, includes too many stale records, or otherwise appears broader than the intended indicator universe, then `BR_REPORTING` can be layered in as a secondary constraint to prefer recent reporting activity.
 
 ---
 
-### 3. Working Filter Logic
+### 3. Current Population Logic
 
-The current working assumption is that a site should be included if it satisfies either the TSDF condition or the federal LQG condition, and also passes the active/universe guardrail.
+The final population is the union of two subsets built from `RCRA_FACILITIES.csv`:
 
-**The provisional filter formula:**
+1. **Operating TSDF handlers** from the RCRA master file.
+2. **BR-reporting LQG handlers** that both:
+    - appear in the 2021 BR reporting universe, and
+    - are classified as LQG in the RCRA master file.
 
-1. **Operating TSDF**
-    Use `OPERATING TSDF` as the TSDF indicator.
-
-    The field does not behave like a simple `Y/N` flag. Values such as `L--S--`, `---S--`, and similar coded strings represent positive TSDF classifications, while `------` represents absence of TSDF status.
-
-    The current working interpretation is therefore:
-    - include as TSDF when `OPERATING TSDF` is present and not equal to `------`
-    - exclude as TSDF when `OPERATING TSDF` is blank or equal to `------`
-
-2. **Federal Large Quantity Generator**
-    Use `FED WASTE GENERATOR` as the LQG indicator.
-
-    The current working interpretation is:
-    - include as LQG when `FED WASTE GENERATOR == '1'`
-    - do not use `STATE WASTE GENERATOR` to qualify rows for output
-
-3. **State generator count is informational only**
-    `STATE WASTE GENERATOR == '1'` is still counted and logged during preprocessing, but it is not part of the current selection mask.
-
-4. **Active/universe guardrail**
-    Even if a row matches the TSDF or federal-LQG condition, it must also satisfy the active-site guardrail.
-
-    The current working interpretation is:
-    - include only when `ACTIVE SITE == 'H'` or `IN A UNIVERSE == 'Y'`
-    - exclude rows that fail both of those tests
-
-5. **Coordinate guardrail**
-    The current implementation rejects rows with unusable coordinates.
-
-    The current working interpretation is:
-    - include only when both `LOCATION LATITUDE` and `LOCATION LONGITUDE` parse as numbers
-    - exclude rows where either coordinate is blank, non-numeric, or exactly `0.0`
-
-6. **Optional BR tightening pass**
-    If testing suggests that `HD_REPORTING` alone is too broad or includes too many records that are not sufficiently current, then `BR_REPORTING_2023` may be used as an additional narrowing step.
-
-    In that case, the working rule would be:
-    - start from the `HD_REPORTING`-derived TSDF/federal-LQG universe
-    - optionally require presence in `BR_REPORTING_2023` for categories where current activity matters
-    - evaluate the effect empirically before making that tightening rule permanent
+This means:
+- TSDF handlers are included whether or not they appear in BR reporting.
+- LQG handlers are included only when they also appear in the 2021 BR reporting set.
 
 ---
 
-### 4. Data Assembly Workflow
+### 4. Current Classification Rules
 
-The current workflow is intentionally simpler than the prior three-source design.
+The current code uses the following source-specific rules.
 
-1. **Read and validate `HD_REPORTING`**
-    Confirm that the file contains the expected identifier, status, and coordinate fields.
+#### 4.1 Active-site rule in `RCRA_FACILITIES`
 
-2. **Build the provisional site universe**
-    Keep rows where either:
-    - `FED WASTE GENERATOR == '1'`, or
-    - `OPERATING TSDF != '------'`
+Use `ACTIVE_SITE` as a coded field.
 
-    Then apply the guardrail:
-    - `ACTIVE SITE == 'H'` or `IN A UNIVERSE == 'Y'`
+Current interpretation:
+- a row is treated as active when `ACTIVE_SITE` contains alphabetic code content
+- blank or non-coded values do not qualify as active
 
-3. **Retain coordinates directly from `HD_REPORTING`**
-    Use `LOCATION CITY`, `LOCATION STATE`, `LOCATION ZIP`, `LOCATION LATITUDE`, and `LOCATION LONGITUDE` from the same filtered rows.
+#### 4.2 Operating TSDF rule in `RCRA_FACILITIES`
 
-4. **Deduplicate by `HANDLER_ID`**
-    Ensure one retained record per handler so the final site file does not inflate downstream scores. The current implementation sorts candidate rows by site class and simple provenance tie-breaks, then keeps one row per `HANDLER ID`.
+Use `OPERATING_TSDF` as a coded field.
 
-5. **Optionally test `BR_REPORTING_2023` as a narrowing filter**
-    If the provisional `HD_REPORTING` universe looks too broad, compare results with a version that requires recent reporting activity or otherwise uses `BR_REPORTING_2023` to tighten the site set.
+Current interpretation:
+- a row is treated as TSDF when `OPERATING_TSDF` contains alphabetic code content
+- blank or placeholder-only values do not qualify
+
+In practice this is a coded-field interpretation, not a simple `Y/N` flag.
+
+#### 4.3 LQG rule in `RCRA_FACILITIES`
+
+Use `HREPORT_UNIVERSE_RECORD` as the LQG indicator.
+
+Current interpretation:
+- split the field on commas
+- normalize pieces to uppercase trimmed status tokens
+- treat a row as LQG when one of the tokens is `LQG`
+
+This allows values such as combined statuses to qualify when they explicitly include `LQG`.
+
+#### 4.4 BR reporting rule
+
+Use `BR_REPORTING_2021.zip` only to build the reporter universe.
+
+Current interpretation:
+- read all configured `BR_REPORTING_2021_*.csv` members
+- normalize `HANDLER ID`
+- keep only rows where `REPORT CYCLE == '2021'`
+- union retained handler IDs into one distinct BR reporter set
+
+Rows in the target BR year with blank handler IDs are excluded from the reporter set and written to validation audit output.
+
+#### 4.5 Coordinate rule
+
+The final site list requires usable coordinates.
+
+Current interpretation:
+- use `LATITUDE83` and `LONGITUDE83` from `RCRA_FACILITIES`
+- coordinates must parse as numeric values
+- coordinates must not be `0.0`
+
+Rows that otherwise qualify for the TSDF or BR-reporting-LQG populations but fail coordinate checks are rejected from the emitted site universe and written to validation audit output.
 
 ---
 
-### 5. Current Output Contract
+### 5. Current Data Assembly Workflow
 
-The current preprocess output is a canonical site CSV with one row per retained `HANDLER ID` and the following key columns:
+The active workflow is now:
+
+1. **Inventory and validate source schemas**
+    Confirm that `RCRA_FACILITIES.csv` and `BR_REPORTING_2021.zip` exist and expose the required columns. The code fails fast on missing files, missing members, or missing column names.
+
+2. **Build the BR reporter set**
+    Read the BR ZIP members, keep only `REPORT CYCLE == 2021`, normalize handler IDs, and union them into one distinct reporter set.
+
+3. **Build the TSDF subset from `RCRA_FACILITIES`**
+    Keep rows that satisfy both:
+    - active-site rule
+    - operating-TSDF rule
+
+4. **Build the BR-reporting LQG subset from `RCRA_FACILITIES`**
+    Keep rows that satisfy both:
+    - handler ID appears in the BR reporter set
+    - `HREPORT_UNIVERSE_RECORD` includes `LQG`
+
+5. **Validate retained rows at site level**
+    Reject rows with missing normalized handler IDs or unusable coordinates.
+
+6. **Deduplicate within each subset for audit clarity**
+    If multiple qualifying RCRA rows survive for the same `HANDLER ID` within the TSDF path or the BR-reporting-LQG path, the code keeps the strongest row and writes the duplicate group to dedup audit output.
+
+7. **Union the two subsets**
+    Merge TSDF rows and BR-reporting-LQG rows on `HANDLER ID`.
+
+8. **Annotate overlap and finalize row flags**
+    Rows are marked as:
+    - `tsdf`
+    - `lqg`
+    - `both`
+
+9. **Emit outputs**
+    The script now writes the planned RCRA+BR population to both:
+    - provisional pre-dedup output path
+    - canonical output path
+
+---
+
+### 6. Current Output Contract
+
+The downstream output contract remains a handler-level CSV with stable field names. The emitted site rows currently include:
 - `HANDLER ID`
 - `HANDLER NAME`
 - `LOCATION CITY`
@@ -132,12 +190,48 @@ The current preprocess output is a canonical site CSV with one row per retained 
 - `is_lqg_site`
 - `is_tsdf_site`
 - `site_class`
+- `source_dataset`
+- `source_member_filename`
+- `source_member_row_number`
 
-The current logs also report:
-- rows matching the TSDF condition
-- rows matching the federal LQG condition
-- rows matching the state generator condition
-- rows passing the active/universe guardrail
-- total qualifying rows before coordinate validation
-- validation rejects for missing handler IDs or unusable coordinates
-- rows removed by `HANDLER ID` deduplication
+Current source/provenance behavior:
+- `source_dataset` is normalized to the master-source logical name after final validation
+- `source_member_filename` and `source_member_row_number` preserve traceability back to the contributing RCRA master row
+
+The proximity phase should treat the canonical output as the single authoritative site input and should not need to reconstruct source filtering logic.
+
+---
+
+### 7. Current Audit Outputs
+
+The active implementation now writes three source-aware audit artifacts alongside the main outputs:
+
+1. **Parse audit**
+    Present for contract stability, but currently expected to be empty because the active RCRA+BR path uses fail-fast CSV readers rather than a raw-record parse-recovery stage.
+
+2. **Validation audit**
+    Captures rows rejected from the active pipeline, including:
+    - BR 2021 rows with missing normalized handler IDs
+    - qualifying RCRA TSDF rows with missing handler IDs or unusable coordinates
+    - qualifying RCRA BR-reporting-LQG rows with missing handler IDs or unusable coordinates
+
+3. **Dedup audit**
+    Captures duplicate qualifying rows within the TSDF path or the BR-reporting-LQG path when multiple master rows compete for the same `HANDLER ID`.
+
+These audits are now described in terms of the two-source RCRA+BR pipeline rather than the obsolete HD-centered flow.
+
+---
+
+### 8. Logging and Reconciliation
+
+The current logs report source-aware counts for:
+- BR reporting extraction
+- RCRA classification summary
+- TSDF subset counts
+- BR-reporting LQG subset counts
+- union summary, including overlap counts
+- combined-population validation summary
+- audit row counts and audit file paths
+- final provisional and canonical output row counts
+
+This is the current best-available reconstruction using the best code and input datasets presently in hand.

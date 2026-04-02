@@ -112,6 +112,28 @@ class CurrentSliceResult:
 	finalization_summary: FinalizationSummary
 
 
+@dataclass(frozen=True, slots=True)
+class BrReportingSummary:
+	total_rows: int
+	matched_year_rows: int
+	wrong_year_rows: int
+	missing_handler_id_rows: int
+	unique_handler_ids: int
+	member_row_counts: tuple[tuple[str, int], ...]
+	member_unique_handler_counts: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RcraClassificationSummary:
+	total_rows: int
+	active_rows: int
+	operating_tsdf_rows: int
+	lqg_rows: int
+	active_operating_tsdf_rows: int
+	active_lqg_rows: int
+	unique_handler_ids: int
+
+
 def build_source_descriptor(raw_descriptor: dict) -> SourceDescriptor:
 	return SourceDescriptor(
 		source_key=raw_descriptor["source_key"],
@@ -314,6 +336,33 @@ def normalize_cell_text(value: str | None) -> str:
 
 def normalize_handler_id(value: str | None) -> str:
 	return normalize_cell_text(value).upper()
+
+
+def normalize_report_cycle(value: str | None) -> str:
+	return normalize_cell_text(value)
+
+
+def has_alpha_code(value: str | None) -> bool:
+	normalized_value = normalize_cell_text(value)
+	if not normalized_value:
+		return False
+	return any(character.isalpha() for character in normalized_value)
+
+
+def rcra_row_is_active(row: dict[str, str]) -> bool:
+	return has_alpha_code(row.get("ACTIVE_SITE"))
+
+
+def rcra_row_has_operating_tsdf(row: dict[str, str]) -> bool:
+	return has_alpha_code(row.get("OPERATING_TSDF"))
+
+
+def rcra_row_is_lqg(row: dict[str, str]) -> bool:
+	status_text = normalize_cell_text(row.get("HREPORT_UNIVERSE_RECORD")).upper()
+	if not status_text:
+		return False
+	status_parts = [part.strip() for part in status_text.split(",")]
+	return "LQG" in status_parts
 
 
 def parse_float_or_none(value: str | None) -> float | None:
@@ -759,6 +808,148 @@ def inventory_planned_source_layout(cfg: Config) -> None:
 	inventory_outer_zip_csv_source(cfg, cfg.planned_br_reporting_source)
 
 
+def extract_br_reporting_handler_ids(cfg: Config) -> tuple[set[str], BrReportingSummary]:
+	source = cfg.planned_br_reporting_source
+	if source.target_biennial_year is None:
+		raise RuntimeError(f"BR reporting source is missing target_biennial_year: {source.logical_name}")
+
+	target_report_cycle = str(source.target_biennial_year)
+	source_path = get_source_path(cfg, source)
+	unique_handler_ids: set[str] = set()
+	total_rows = 0
+	matched_year_rows = 0
+	wrong_year_rows = 0
+	missing_handler_id_rows = 0
+	member_row_counts: list[tuple[str, int]] = []
+	member_unique_handler_counts: list[tuple[str, int]] = []
+
+	with open_outer_zip_archive(source_path) as outer_archive:
+		outer_member_names = list_archive_members(outer_archive)
+		matched_csv_members = select_matching_members(
+			member_names=outer_member_names,
+			patterns=source.target_csv_globs,
+			source_name=source.logical_name,
+		)
+
+		for matched_csv_member in matched_csv_members:
+			member_row_count = 0
+			member_handler_ids: set[str] = set()
+			logging.info("Extracting BR-reporting handler IDs from %s", matched_csv_member)
+			with open_outer_csv_text_stream(outer_archive, matched_csv_member) as text_stream:
+				reader = csv.DictReader(text_stream)
+				if reader.fieldnames is None:
+					raise RuntimeError(f"CSV member is missing a header row: {matched_csv_member}")
+				validate_required_columns(tuple(reader.fieldnames), source.required_columns, source.logical_name, matched_csv_member)
+
+				for row in reader:
+					total_rows += 1
+					member_row_count += 1
+					report_cycle = normalize_report_cycle(row.get("REPORT CYCLE"))
+					if report_cycle != target_report_cycle:
+						wrong_year_rows += 1
+						continue
+
+					matched_year_rows += 1
+					handler_id = normalize_handler_id(row.get(source.handler_id_column))
+					if not handler_id:
+						missing_handler_id_rows += 1
+						continue
+
+					member_handler_ids.add(handler_id)
+					unique_handler_ids.add(handler_id)
+
+			member_row_counts.append((matched_csv_member, member_row_count))
+			member_unique_handler_counts.append((matched_csv_member, len(member_handler_ids)))
+
+	return unique_handler_ids, BrReportingSummary(
+		total_rows=total_rows,
+		matched_year_rows=matched_year_rows,
+		wrong_year_rows=wrong_year_rows,
+		missing_handler_id_rows=missing_handler_id_rows,
+		unique_handler_ids=len(unique_handler_ids),
+		member_row_counts=tuple(member_row_counts),
+		member_unique_handler_counts=tuple(member_unique_handler_counts),
+	)
+
+
+def log_br_reporting_summary(summary: BrReportingSummary, target_biennial_year: int) -> None:
+	logging.info(
+		"BR reporting summary for %s: total_rows=%d matched_year_rows=%d wrong_year_rows=%d missing_handler_id_rows=%d unique_handler_ids=%d",
+		target_biennial_year,
+		summary.total_rows,
+		summary.matched_year_rows,
+		summary.wrong_year_rows,
+		summary.missing_handler_id_rows,
+		summary.unique_handler_ids,
+	)
+	for member_name, member_row_count in summary.member_row_counts:
+		logging.info("BR member rows [%s]: %d", member_name, member_row_count)
+	for member_name, unique_handler_count in summary.member_unique_handler_counts:
+		logging.info("BR unique handler IDs [%s]: %d", member_name, unique_handler_count)
+
+
+def summarize_rcra_classification(cfg: Config) -> RcraClassificationSummary:
+	source = cfg.planned_master_rcra_source
+	source_path = get_source_path(cfg, source)
+	total_rows = 0
+	active_rows = 0
+	operating_tsdf_rows = 0
+	lqg_rows = 0
+	active_operating_tsdf_rows = 0
+	active_lqg_rows = 0
+	unique_handler_ids: set[str] = set()
+
+	with open_text_input_stream(source_path) as text_stream:
+		reader = csv.DictReader(text_stream)
+		if reader.fieldnames is None:
+			raise RuntimeError(f"CSV file is missing a header row: {source_path}")
+		validate_required_columns(tuple(reader.fieldnames), source.required_columns, source.logical_name, Path(source.relative_path).name)
+
+		for row in reader:
+			total_rows += 1
+			handler_id = normalize_handler_id(row.get(source.handler_id_column))
+			if handler_id:
+				unique_handler_ids.add(handler_id)
+
+			is_active = rcra_row_is_active(row)
+			has_operating_tsdf = rcra_row_has_operating_tsdf(row)
+			is_lqg = rcra_row_is_lqg(row)
+
+			if is_active:
+				active_rows += 1
+			if has_operating_tsdf:
+				operating_tsdf_rows += 1
+			if is_lqg:
+				lqg_rows += 1
+			if is_active and has_operating_tsdf:
+				active_operating_tsdf_rows += 1
+			if is_active and is_lqg:
+				active_lqg_rows += 1
+
+	return RcraClassificationSummary(
+		total_rows=total_rows,
+		active_rows=active_rows,
+		operating_tsdf_rows=operating_tsdf_rows,
+		lqg_rows=lqg_rows,
+		active_operating_tsdf_rows=active_operating_tsdf_rows,
+		active_lqg_rows=active_lqg_rows,
+		unique_handler_ids=len(unique_handler_ids),
+	)
+
+
+def log_rcra_classification_summary(summary: RcraClassificationSummary) -> None:
+	logging.info(
+		"RCRA classification summary: total_rows=%d unique_handler_ids=%d active_rows=%d operating_tsdf_rows=%d lqg_rows=%d active_operating_tsdf_rows=%d active_lqg_rows=%d",
+		summary.total_rows,
+		summary.unique_handler_ids,
+		summary.active_rows,
+		summary.operating_tsdf_rows,
+		summary.lqg_rows,
+		summary.active_operating_tsdf_rows,
+		summary.active_lqg_rows,
+	)
+
+
 def summarize_hd_reporting_member(inner_archive: zipfile.ZipFile, csv_member_name: str) -> HdReportingUniverseSummary:
 	total_rows = 0
 	operating_tsdf_rows = 0
@@ -905,11 +1096,15 @@ def main(argv=None) -> int:
 		initialize_runtime_dependencies(cfg)
 		log_runtime_context(cfg)
 		inventory_planned_source_layout(cfg)
+		_, br_reporting_summary = extract_br_reporting_handler_ids(cfg)
+		rcra_classification_summary = summarize_rcra_classification(cfg)
 		current_slice_result = run_current_hd_reporting_pipeline(cfg)
 	except Exception as exc:
 		logging.error("Hazardous waste preprocessing proof slice failed: %s", exc)
 		return 1
 
+	log_br_reporting_summary(br_reporting_summary, cfg.planned_br_reporting_source.target_biennial_year or -1)
+	log_rcra_classification_summary(rcra_classification_summary)
 	log_current_hd_reporting_result(current_slice_result)
 	logging.info("Hazardous waste preprocessing proof slice completed successfully")
 	return 0

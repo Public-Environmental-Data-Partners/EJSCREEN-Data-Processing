@@ -12,7 +12,6 @@
       "logical_name": "RCRA_FACILITIES",
       "description": "Master handler table for TSDF status, LQG classification, site attributes, and final emitted rows.",
       "relative_path": "downloads/RCRA_FACILITIES.csv",
-      "inner_zip_member_filename": null,
       "target_csv_globs": [],
       "target_biennial_year": null,
       "required_columns": [
@@ -41,15 +40,13 @@
         "LATITUDE83",
         "LONGITUDE83"
       ],
-      "handler_id_column": "ID_NUMBER",
-      "id_normalization": "strip_upper"
+      "handler_id_column": "ID_NUMBER"
     },
     "br_reporting_source": {
       "source_key": "br_reporting",
       "logical_name": "BR_REPORTING_2021",
       "description": "Biennial reporting source used to identify handlers that actually reported in the target 2021 cycle.",
       "relative_path": "downloads/BR_REPORTING_2021.zip",
-      "inner_zip_member_filename": null,
       "target_csv_globs": [
         "BR_REPORTING_2021_*.csv"
       ],
@@ -62,51 +59,7 @@
         "HANDLER ID",
         "REPORT CYCLE"
       ],
-      "handler_id_column": "HANDLER ID",
-      "id_normalization": "strip_upper"
-    }
-  },
-  "current_slice": {
-    "hd_reporting_source": {
-      "source_key": "hd_reporting",
-      "logical_name": "HD_REPORTING",
-      "description": "Transitional current-slice source retained only until the RCRA_FACILITIES plus BR_REPORTING rewrite replaces it.",
-      "relative_path": "downloads/HD.zip",
-      "inner_zip_member_filename": "HD_REPORTING.zip",
-      "target_csv_globs": [
-        "HD_REPORTING_*.csv"
-      ],
-      "target_biennial_year": null,
-      "required_columns": [
-        "HANDLER ID",
-        "HANDLER NAME",
-        "LOCATION CITY",
-        "LOCATION STATE",
-        "LOCATION ZIP",
-        "OPERATING TSDF",
-        "FED WASTE GENERATOR",
-        "STATE WASTE GENERATOR",
-        "IN A UNIVERSE",
-        "ACTIVE SITE",
-        "LOCATION LATITUDE",
-        "LOCATION LONGITUDE"
-      ],
-      "key_columns": [
-        "HANDLER ID",
-        "HANDLER NAME",
-        "LOCATION CITY",
-        "LOCATION STATE",
-        "LOCATION ZIP",
-        "OPERATING TSDF",
-        "FED WASTE GENERATOR",
-        "STATE WASTE GENERATOR",
-        "IN A UNIVERSE",
-        "ACTIVE SITE",
-        "LOCATION LATITUDE",
-        "LOCATION LONGITUDE"
-      ],
-      "handler_id_column": "HANDLER ID",
-      "id_normalization": "strip_upper"
+      "handler_id_column": "HANDLER ID"
     }
   }
 }

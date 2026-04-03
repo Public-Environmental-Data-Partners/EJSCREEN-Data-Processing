@@ -2,9 +2,11 @@
 # Pulled from this issue: https://github.com/edgi-govdata-archiving/EJAM-API/issues/26#issuecomment-4163529789
 # 
 # This set of code makes it easier to pull data for larger states, such as CA 
-# and TX.Adding it here for referece, but needs documentation! 
+# and TX.Adding it here for referece, but needs documentation!
+#
+# Author: Eric w/ minor edits from EmmaLi 
 ##############################################################################
-
+# Imports
 import requests
 import pandas as pd
 import time
@@ -64,7 +66,7 @@ def get_all_ca_records(base_url):
     return df
 
 # Target Service URL
-service_url = "https://services.arcgis.com/EXyRv0dqed53BmG2/ArcGIS/rest/services/EJScreen/FeatureServer/0"
+service_url = "https://services2.arcgis.com/w4yiQqB14ZaAGzJq/ArcGIS/rest/services/EJScreen_US_Percentiles_Block_Group_gdb_V_2.32_(Parent)_view/FeatureServer/0 "
 
 # Execute
 df_ca = get_all_ca_records(service_url)
@@ -79,3 +81,4 @@ else:
 # Save: 
 results_df = pd.DataFrame(df_ca)
 results_df.to_csv("./outputs/traffic/ca_ejam.csv", index = False)
+

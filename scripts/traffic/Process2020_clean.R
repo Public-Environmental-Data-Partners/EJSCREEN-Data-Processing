@@ -1,4 +1,4 @@
-###############################################################################
+##### PROCESS TRAFFIC SEGMENTS #################################################
 # This code attempts to recreate the processing steps for the traffic proximity 
 # variable for EJScreen. Here, we are loading the JSON file from the 
 # pre-processing script and recreating the steps outlined in the documentation, 
@@ -26,7 +26,7 @@ sf_use_s2(T)
 
 # TODO - add this to a json file / use the one created for superfund! 
 # state: 
-state = "WY"
+state = "RI"
 # using Alberts for CONUS
 state_crs = 5070 
 # custom CRS for HI, based on this EPA resource: https://www.epa.gov/waterdata/spatial-data-waters
@@ -59,6 +59,7 @@ intersect_state_codes <- intersect_state_geoid[!grepl(state_code, intersect_stat
 
 ###############################################################################
 # loading in data 
+###############################################################################
 # load blocks 
 b_url <- paste0("https://www2.census.gov/geo/tiger/TIGER2022/TABBLOCK20/tl_2022_", 
                 state_code, "_tabblock20.zip")
@@ -101,6 +102,39 @@ prepro_2020 <- aws.s3::s3read_using(st_read,
 # quick plot to see what we're cookin' with: 
 # mapview(prepro_2020)
 
+
+#### SCRATCH SPACE FOR COMPARING PREPROCESSED DATA FROM ARCGIS #################
+#### AND THE RESULTS FROM THE NEW PYTHON SCRIPT  ###############################
+# prepro_2020 <- prepro_2020_arcgis
+# prepro_2020_python <- st_read("./scripts/traffic/test.json") %>%
+#   mutate(OBJECTID = ID + 1) %>%
+#   st_transform(., crs = st_crs(b))%>%
+#   mutate(unique_id = paste0(OBJECTID, "_", state_code))
+# 
+# test <- st_intersection(prepro_2020_arcgis, prepro_2020_python)
+# mapview(test)
+# 
+# merge_test <- merge(prepro_2020_arcgis, as.data.frame(prepro_2020_python), by = "OBJECTID")
+# 
+# missing <- prepro_2020_arcgis %>%
+#   filter(!(OBJECTID %in% merge_test$OBJECTID))
+# mapview(missing, color = "purple") + 
+#   mapview(prepro_2020_arcgis) + 
+#   mapview(prepro_2020_python, color = "red")
+#
+# NOTES from comparisons: 
+# the python method produces ~45 fewer records in comparison to ArcGIS. The 
+# objectIDs don't seem to have the same traffic scores (they are sometimes 
+# the same and sometimes not?), and the python method has objectIDs that stop at 
+# 2324 and the ArcGIS method goes to 2359. When I plot the output, the traffic 
+# line segments seem to completely overlap. I need to do some more testing, or 
+# even just try to recreate this code in python. 
+# 
+# I crunched some new comparisons with the data from the python method, and the 
+# absolute percent difference increased by 0.70145%. Results can be found
+# in the canva doc
+############# END SCRATCH CODE ##################################################
+
 # add data from neighboring states 
 prepro_others <- data.frame()
 for(i in 1:length(intersect_state_codes)) {
@@ -133,11 +167,12 @@ if (length(intersect_state_codes) == 0) {
 }
 
 # pulling in OG numbers from EJScreen: 
+# TODO - in the future, maybe we just query the API?
 # process - go to terminal and navigate to EJSCREEN-Data-Processing/scripts/utilities/validation
 # in terminal, run python ejam2csv.py --state AK
 # this will add ejam values as a csv file to s3 for this state
 
-# NOTE - for larger, more complex states, this involves using the ECHO_modeles
+# NOTE - for larger, more complex states, this involves using the ECHO_modules
 # package in python. Otherwise, the API will timeout. Here is the specific 
 # script in python: 
 
@@ -180,7 +215,6 @@ bg_10km_intersection <- st_join(bg, prepro_2020,
                                 dist = units::set_units(10000, "m"),
                                 left = T) 
 
-
 # The second step was to compute the distance between each block
 # centroid within each targeted block group from the first step and the traffic 
 # lines within the same block group (so it is a distance between point to polyline). 
@@ -212,7 +246,6 @@ b_weights <- b_no_zero_points %>%
 prepro_2020_simple <- prepro_2020 %>%
   as.data.frame() %>%
   select(unique_id, aadt)
-
 
 # looping through block groups: 
 bg_intersection_filt <- bg_10km_intersection %>% filter(!is.na(unique_id))
@@ -302,12 +335,19 @@ put_object(
   multipart = T
 )
 
+## read it back in: 
+final_wt <- aws.s3::s3read_using(read.csv,
+                     object = paste0("s3://pedp-data-preserved/ejscreen-data-processing/traffic/", 
+                                     state, "/processing/bg_summary.csv"))
 ###############################################################################
 # Start comparisons w/ EJScreen
 ###############################################################################
 ## summary stats & comparisons with EJScreen values 
 # mapping the output: 
 test_weight_all_sf <- final_wt %>%
+  # some of these states are missing leading zeroes (AK, AL, for example)
+  mutate(block_group_geoid = case_when(nchar(as.character(block_group_geoid)) == 11 ~ paste0("0", block_group_geoid), 
+                                       TRUE ~ as.character(block_group_geoid))) %>%
   merge(., bg %>% select(GEOID), by.x = "block_group_geoid", 
         by.y = "GEOID") %>%
   merge(., ptraf, by = "block_group_geoid") %>%
@@ -321,8 +361,8 @@ test_weight_all_sf <- final_wt %>%
 
 
 # adding to s3 for comparisons 
-st_write(test_weight_all_sf,  paste0("./outputs/traffic/processing/",
-                                     state, "_bg_summary_neighboring_states_alberts.geojson"))
+st_write(test_weight_all_sf, paste0("./outputs/traffic/processing/",
+                                    state, "_bg_summary_neighboring_states_alberts.geojson"))
 put_object(
   file = paste0("./outputs/traffic/processing/", 
                 state, "_bg_summary_neighboring_states_alberts.geojson"),
@@ -432,4 +472,3 @@ ggplot(small_diffs_distpairs, aes(x = distance_m_num)) +
   labs(x = "Distance (m)", 
        y = "Number of DistPairs") + 
   ggtitle(paste0("Block Groups w/ Small Absolute % Difference: < 10% ", state))
-

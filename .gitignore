@@ -34,4 +34,5 @@ scripts/utilities/agScratch/
 *.old
 *.old/
 
-
+# Dev-specific Copilot instructions
+copilot-instructions.md

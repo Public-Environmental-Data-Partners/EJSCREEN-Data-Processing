@@ -1,0 +1,65 @@
+{
+  "local_root_path": "./pipeline/test_data/",
+  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/hazardous_waste/pipeline/",
+  "provisional_output_relative_path": "outputs/hazardous_waste_filtered_pre_dedup.csv",
+  "canonical_output_relative_path": "outputs/hazardous_waste_filtered.csv",
+  "parse_audit_relative_path": "outputs/hazardous_waste_parse_audit.csv",
+  "validation_audit_relative_path": "outputs/hazardous_waste_validation_audit.csv",
+  "dedup_audit_relative_path": "outputs/hazardous_waste_dedup_audit.csv",
+  "planned_sources": {
+    "master_rcra_source": {
+      "source_key": "rcra_facilities",
+      "logical_name": "RCRA_FACILITIES",
+      "description": "Master handler table for TSDF status, LQG classification, site attributes, and final emitted rows.",
+      "relative_path": "downloads/RCRA_FACILITIES.csv",
+      "target_csv_globs": [],
+      "target_biennial_year": null,
+      "required_columns": [
+        "ID_NUMBER",
+        "FACILITY_NAME",
+        "OPERATING_TSDF",
+        "ACTIVE_SITE",
+        "HREPORT_UNIVERSE_RECORD",
+        "FED_WASTE_GENERATOR",
+        "CITY_NAME",
+        "STATE_CODE",
+        "ZIP_CODE",
+        "LATITUDE83",
+        "LONGITUDE83"
+      ],
+      "key_columns": [
+        "ID_NUMBER",
+        "FACILITY_NAME",
+        "OPERATING_TSDF",
+        "ACTIVE_SITE",
+        "HREPORT_UNIVERSE_RECORD",
+        "FED_WASTE_GENERATOR",
+        "CITY_NAME",
+        "STATE_CODE",
+        "ZIP_CODE",
+        "LATITUDE83",
+        "LONGITUDE83"
+      ],
+      "handler_id_column": "ID_NUMBER"
+    },
+    "br_reporting_source": {
+      "source_key": "br_reporting",
+      "logical_name": "BR_REPORTING_2021",
+      "description": "Biennial reporting source used to identify handlers that actually reported in the target 2021 cycle.",
+      "relative_path": "downloads/BR_REPORTING_2021.zip",
+      "target_csv_globs": [
+        "BR_REPORTING_2021_*.csv"
+      ],
+      "target_biennial_year": 2021,
+      "required_columns": [
+        "HANDLER ID",
+        "REPORT CYCLE"
+      ],
+      "key_columns": [
+        "HANDLER ID",
+        "REPORT CYCLE"
+      ],
+      "handler_id_column": "HANDLER ID"
+    }
+  }
+}

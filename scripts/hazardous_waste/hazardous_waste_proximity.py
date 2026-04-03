@@ -48,19 +48,19 @@ except Exception:
 	boto3 = None
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
-SUPERFUND_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'superfund' / 'state_config.py'
+SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
 
 
-def _load_superfund_state_config_symbols():
-	if not SUPERFUND_STATE_CONFIG_MODULE_PATH.exists():
-		raise ImportError(f'Superfund state_config.py not found: {SUPERFUND_STATE_CONFIG_MODULE_PATH}')
+def _load_shared_state_config_symbols():
+	if not SHARED_STATE_CONFIG_MODULE_PATH.exists():
+		raise ImportError(f'Shared state_config.py not found: {SHARED_STATE_CONFIG_MODULE_PATH}')
 
 	module_spec = importlib.util.spec_from_file_location(
-		'superfund_state_config_shared',
-		SUPERFUND_STATE_CONFIG_MODULE_PATH,
+		'shared_state_config',
+		SHARED_STATE_CONFIG_MODULE_PATH,
 	)
 	if module_spec is None or module_spec.loader is None:
-		raise ImportError(f'Unable to load module spec from {SUPERFUND_STATE_CONFIG_MODULE_PATH}')
+		raise ImportError(f'Unable to load module spec from {SHARED_STATE_CONFIG_MODULE_PATH}')
 
 	module = importlib.util.module_from_spec(module_spec)
 	sys.modules[module_spec.name] = module
@@ -68,12 +68,12 @@ def _load_superfund_state_config_symbols():
 	return module.StateConfig, module.get_state_config, module.validate_metric_target_crs
 
 try:
-	from ..superfund.state_config import StateConfig, get_state_config, validate_metric_target_crs
+	from ..shared.state_config import StateConfig, get_state_config, validate_metric_target_crs
 except ImportError:
 	try:
-		from superfund.state_config import StateConfig, get_state_config, validate_metric_target_crs
+		from shared.state_config import StateConfig, get_state_config, validate_metric_target_crs
 	except ImportError:
-		StateConfig, get_state_config, validate_metric_target_crs = _load_superfund_state_config_symbols()
+		StateConfig, get_state_config, validate_metric_target_crs = _load_shared_state_config_symbols()
 
 DEFAULT_LOCAL_PIPELINE_PATH = './pipeline/'
 DEFAULT_S3_PIPELINE_PATH = 's3://pedp-data-preserved/ejscreen-data-processing/hazardous_waste/pipeline/'

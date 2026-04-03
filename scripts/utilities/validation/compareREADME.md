@@ -21,16 +21,16 @@ Important runtime note
 ----------------------
 All three scripts now require a `--state` (or `--state-code`) parameter. This is a REQUIRED two-letter state short code (for example `RI`). The scripts will uppercase the value and read/write files inside a per-state subfolder under the configured `--path`, e.g. `{path}/RI/`.
 
-Quick start (local test files)
+Quick start (local output folder)
 -----------------------------
 ### 1) Convert pipeline GeoJSON to CSV (run on the pipeline developer's GeoJSON input)
-python geojson2csv.py --state RI -p ./test_files/ --dry-run
+python geojson2csv.py --state RI -p ./output/ --dry-run
 
 ### 2) Fetch EJAM API and produce EJAM CSV
-python ejam2csv.py --state RI -p ./test_files/ --dry-run
+python ejam2csv.py --state RI -p ./output/ --dry-run
 
 ### 3) Compare EJAM CSV and pipeline CSV
-python compareEJAM2pipeline.py --state RI -p ./test_files/ --dry-run
+python compareEJAM2pipeline.py --state RI -p ./output/ --dry-run
 
 Notes on options and defaults
 ----------------------------

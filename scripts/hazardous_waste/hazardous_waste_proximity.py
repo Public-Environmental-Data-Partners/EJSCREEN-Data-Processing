@@ -2,26 +2,29 @@
 hazardous_waste_proximity.py
 
 Purpose:
-  Run the hazardous-waste proximity pipeline for one state and emit three
-  CSV artifacts:
-	- targeted_block_groups.csv (intermediate output from Step 1)
-	- block_site_distances.csv (intermediate output from Step 2)
-	- final_bg_scores.csv (final output from Step 4)
+	Run the hazardous-waste proximity pipeline for one state using the canonical
+	hazardous-waste site CSV produced by hazardous_waste_preprocess.py and emit
+	three CSV artifacts:
+	- targeted_block_groups.csv
+	- block_site_distances.csv
+	- final_bg_scores.csv
 
 Sample commandline:
-  python scripts/hazardous_waste/hazardous_waste_proximity.py --state MT --input-path ./pipeline/test_data --output-path ./pipeline/test_data
+	python scripts/hazardous_waste/hazardous_waste_proximity.py --state MT --input-path ./pipeline/test_data --output-path ./pipeline/test_data
 
 Behavior summary:
-  - Uses externalized state metadata from state_config.json.
-  - Supports local paths or S3 URIs for inputs and outputs.
-  - Stages S3-hosted geospatial assets to a temporary local directory before
+	- Uses externalized state metadata shared with the Superfund pipeline.
+	- Supports local paths or S3 URIs for inputs and outputs.
+	- Defaults to the canonical hazardous-waste site file at
+	outputs/hazardous_waste_filtered.csv under the configured input root.
+	- Stages S3-hosted geospatial assets to a temporary local directory before
 	reading them with GeoPandas.
-  - Preserves the Superfund file structure as closely as practical while
-	adapting Step 0 and Step 1 to hazardous-waste point sites.
+	- Preserves the Superfund file structure where practical while adapting the
+	workflow to hazardous-waste point sites.
 
 Credits:
-  - Superfund proximity reference pipeline by Anne Gunn, Gemini, and GitHub Copilot.
-  - Hazardous-waste adaptation by GitHub Copilot, GPT-5.4, and Anne Gunn.
+	- Superfund proximity reference pipeline by Anne Gunn, Gemini, and GitHub Copilot.
+	- Hazardous-waste adaptation by GitHub Copilot, GPT-5.4, and Anne Gunn.
 """
 from __future__ import annotations
 
@@ -72,9 +75,9 @@ except ImportError:
 	except ImportError:
 		StateConfig, get_state_config, validate_metric_target_crs = _load_superfund_state_config_symbols()
 
-DEFAULT_LOCAL_PIPELINE_PATH = './pipeline/test_data/'
+DEFAULT_LOCAL_PIPELINE_PATH = './pipeline/'
 DEFAULT_S3_PIPELINE_PATH = 's3://pedp-data-preserved/ejscreen-data-processing/hazardous_waste/pipeline/'
-DEFAULT_SHARED_LOCAL_DOWNLOADS_PATH = '../superfund/pipeline/test_data/'
+DEFAULT_SHARED_LOCAL_DOWNLOADS_PATH = '../superfund/pipeline/'
 DEFAULT_HAZARDOUS_WASTE_SITES_FILENAME = 'outputs/hazardous_waste_filtered.csv'
 DEFAULT_BLOCK_GROUPS_FILENAME_TEMPLATE = 'downloads/tl_2020_{fips}_bg.zip'
 DEFAULT_CENSUS_BLOCKS_FILENAME_TEMPLATE = 'downloads/census_block_weights_2020/census_block_weights_2020_{postal}.csv'

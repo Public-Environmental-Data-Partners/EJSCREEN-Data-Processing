@@ -21,7 +21,8 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VALIDATION_DIR="$SCRIPT_DIR/../utilities/validation"
-PIPELINE_DIR="$SCRIPT_DIR/pipeline/test_data"
+VALIDATION_OUTPUT_DIR="$VALIDATION_DIR/output"
+PIPELINE_DIR="$SCRIPT_DIR/pipeline"
 
 if [[ "$PREPROCESS" == "Y" ]]; then
 	python3 "$SCRIPT_DIR/hazardous_waste_preprocess.py" local
@@ -34,7 +35,7 @@ python3 "$SCRIPT_DIR/hazardous_waste_proximity.py" \
 
 python3 "$VALIDATION_DIR/compareScores2Ejam.py" \
 	--state "$STATE_CODE" \
-	--file-ejam "$VALIDATION_DIR/test_files/$STATE_CODE/ejam_hazardous_waste_subset.csv" \
+	--file-ejam "$VALIDATION_OUTPUT_DIR/$STATE_CODE/ejam_hazardous_waste_subset.csv" \
 	--score-ejam proximity.tsdf \
 	--file-b "$PIPELINE_DIR/$STATE_CODE/final_bg_scores.csv" \
-	--out "$VALIDATION_DIR/test_files/$STATE_CODE/${STATE_CODE}_compare_ejam_HW_subset_to_weighted_scores.png"
+	--out "$VALIDATION_OUTPUT_DIR/$STATE_CODE/${STATE_CODE}_compare_ejam_HW_subset_to_weighted_scores.png"

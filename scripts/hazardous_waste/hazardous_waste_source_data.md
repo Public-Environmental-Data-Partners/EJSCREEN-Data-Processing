@@ -167,9 +167,7 @@ The active workflow is now:
     - `both`
 
 9. **Emit outputs**
-    The script now writes the planned RCRA+BR population to both:
-    - provisional pre-dedup output path
-    - canonical output path
+    The script writes the finalized RCRA+BR population to the canonical output path.
 
 ---
 
@@ -232,6 +230,6 @@ The current logs report source-aware counts for:
 - union summary, including overlap counts
 - combined-population validation summary
 - audit row counts and audit file paths
-- final provisional and canonical output row counts
+- final canonical output row count
 
 This is the current best-available reconstruction using the best code and input datasets presently in hand.

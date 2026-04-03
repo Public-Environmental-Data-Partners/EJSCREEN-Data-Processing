@@ -13,7 +13,7 @@ Features:
 
 Usage examples:
   # Required: specify state code
-  python ejam2csv.py --state RI -p ./scripts/utilities/validation/test_files/
+    python ejam2csv.py --state RI -p ./scripts/utilities/validation/output/
   python ejam2csv.py --state RI -p s3://my-bucket/prefix/ --dry-run
 
 Runtime parameters:
@@ -68,9 +68,9 @@ class Config:
     # number of rows to process; <=0 or None means process all rows
     number_rows: Optional[int] = 0
     dry_run: bool = False
-    # output filename (will be joined with `path`); default writes locally under ./test_files/
+    # output filename (will be joined with `path`); default local examples write under ./output/
     output_file: str = "ejam_traffic_subset.csv"
-    #path: str = "./test_files/"
+    #path: str = "./output/"
 
 
 def get_config(argv=None) -> Config:
@@ -84,7 +84,7 @@ def get_config(argv=None) -> Config:
     parser.add_argument('--state', '--state-code', dest='state_code', type=str, required=True,
                         help='State code (e.g. RI); will be upper-cased and used for API request and as output folder')
     parser.add_argument('-p', '--path', type=str, default=Config.path,
-                        help='S3 path prefix or local folder for output (default: ./test_files/)')
+                        help='S3 path prefix or local folder for output (default local example: ./output/)')
     parser.add_argument('-n', '--number_rows', type=int, default=Config.number_rows,
                         help='maximum number of rows to process (default: 10); <=0 means no limit')
     parser.add_argument('--dry-run', action='store_true', help='If set, do not write any files, just show what would be done')
@@ -138,9 +138,9 @@ def dumpRequestJson(obj, filename='ejam_response.json', path=None, state_code=No
 
     to_write = sample if sample is not None else obj
 
-    # If no path/state provided, default to local ./test_files/ folder
+    # If no path/state provided, default to local ./output/ folder
     if path is None:
-        dest_base = './test_files/'
+        dest_base = './output/'
         dest_key = f"{dest_base.rstrip('/')}/{filename}"
         is_s3 = False
     else:

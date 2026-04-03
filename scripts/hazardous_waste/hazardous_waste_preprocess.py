@@ -3,7 +3,7 @@ hazardous_waste_preprocess.py
 
 Purpose:
 	Build the hazardous-waste proximity site universe from RCRA_FACILITIES.csv
-	plus BR_REPORTING_2021.zip, emit provisional and canonical site outputs,
+	plus BR_REPORTING_2021.zip, emit the canonical site output,
 	and write source-aware audit artifacts.
 """
 
@@ -79,7 +79,6 @@ class Config:
 	storage_mode: str
 	local_root_path: str
 	remote_root_path: str
-	provisional_output_relative_path: str
 	canonical_output_relative_path: str
 	parse_audit_relative_path: str
 	validation_audit_relative_path: str
@@ -168,8 +167,7 @@ class AuditOutputSummary:
 
 
 @dataclass(frozen=True, slots=True)
-class PlannedOutputSummary:
-	provisional_row_count: int
+class CanonicalOutputSummary:
 	canonical_row_count: int
 
 
@@ -212,7 +210,6 @@ def get_config(argv=None) -> Config:
 		storage_mode=args.storage_mode,
 		local_root_path=config_payload["local_root_path"],
 		remote_root_path=config_payload["remote_root_path"],
-		provisional_output_relative_path=config_payload["provisional_output_relative_path"],
 		canonical_output_relative_path=config_payload["canonical_output_relative_path"],
 		parse_audit_relative_path=config_payload["parse_audit_relative_path"],
 		validation_audit_relative_path=config_payload["validation_audit_relative_path"],
@@ -261,10 +258,6 @@ def get_source_path(cfg: Config, source: SourceDescriptor) -> str:
 	return join_root_and_relative_path(get_active_root_path(cfg), source.relative_path)
 
 
-def get_provisional_output_path(cfg: Config) -> str:
-	return join_root_and_relative_path(get_active_root_path(cfg), cfg.provisional_output_relative_path)
-
-
 def get_canonical_output_path(cfg: Config) -> str:
 	return join_root_and_relative_path(get_active_root_path(cfg), cfg.canonical_output_relative_path)
 
@@ -287,7 +280,6 @@ def log_runtime_context(cfg: Config) -> None:
 	logging.info("Active root path: %s", get_active_root_path(cfg))
 	logging.info("Planned master RCRA source path: %s", get_source_path(cfg, cfg.planned_master_rcra_source))
 	logging.info("Planned BR reporting source path: %s", get_source_path(cfg, cfg.planned_br_reporting_source))
-	logging.info("Provisional output path: %s", get_provisional_output_path(cfg))
 	logging.info("Canonical output path: %s", get_canonical_output_path(cfg))
 	logging.info("Parse audit path: %s", get_parse_audit_path(cfg))
 	logging.info("Validation audit path: %s", get_validation_audit_path(cfg))
@@ -329,7 +321,7 @@ def write_csv_rows(path: str, fieldnames: tuple[str, ...] | list[str], rows: lis
 
 
 def write_population_output_rows(path: str, rows: list[dict[str, str]]) -> None:
-	write_csv_rows(path, get_provisional_output_fieldnames(), rows)
+	write_csv_rows(path, get_population_output_fieldnames(), rows)
 
 
 def list_archive_members(archive: zipfile.ZipFile) -> list[str]:
@@ -492,7 +484,7 @@ def build_rcra_lqg_site_row(
 	}
 
 
-def get_provisional_output_fieldnames() -> list[str]:
+def get_population_output_fieldnames() -> list[str]:
 	return [
 		"HANDLER ID",
 		"HANDLER NAME",
@@ -603,7 +595,7 @@ def build_site_dedup_audit_row(
 def get_audit_dedup_comparison_key(row: dict[str, str]) -> tuple[tuple[str, str], ...]:
 	comparison_fields = [
 		field_name
-		for field_name in get_provisional_output_fieldnames()
+		for field_name in get_population_output_fieldnames()
 		if field_name not in {"source_member_filename", "source_member_row_number"}
 	]
 	return tuple((field_name, normalize_cell_text(row.get(field_name))) for field_name in comparison_fields)
@@ -1239,7 +1231,7 @@ def apply_combined_population_provenance(row: dict[str, str], cfg: Config) -> di
 def validate_combined_population_row(row: dict[str, str]) -> None:
 	missing_fields = [
 		field_name
-		for field_name in get_provisional_output_fieldnames()
+		for field_name in get_population_output_fieldnames()
 		if field_name not in row
 	]
 	if missing_fields:
@@ -1340,22 +1332,16 @@ def log_planned_pipeline_audit_summary(cfg: Config, summary: AuditOutputSummary)
 def emit_planned_pipeline_outputs(
 	cfg: Config,
 	*,
-	provisional_rows: list[dict[str, str]],
 	canonical_rows: list[dict[str, str]],
-) -> PlannedOutputSummary:
-	sorted_provisional_rows = sorted(provisional_rows, key=lambda row: row["HANDLER ID"])
+	) -> CanonicalOutputSummary:
 	sorted_canonical_rows = sorted(canonical_rows, key=lambda row: row["HANDLER ID"])
-	write_population_output_rows(get_provisional_output_path(cfg), sorted_provisional_rows)
 	write_population_output_rows(get_canonical_output_path(cfg), sorted_canonical_rows)
-	return PlannedOutputSummary(
-		provisional_row_count=len(sorted_provisional_rows),
+	return CanonicalOutputSummary(
 		canonical_row_count=len(sorted_canonical_rows),
 	)
 
 
-def log_planned_output_summary(cfg: Config, summary: PlannedOutputSummary) -> None:
-	logging.info("Planned provisional rows written: %d", summary.provisional_row_count)
-	logging.info("Provisional output path: %s", get_provisional_output_path(cfg))
+def log_planned_output_summary(cfg: Config, summary: CanonicalOutputSummary) -> None:
 	logging.info("Planned canonical rows written: %d", summary.canonical_row_count)
 	logging.info("Canonical output path: %s", get_canonical_output_path(cfg))
 
@@ -1409,7 +1395,6 @@ def main(argv=None) -> int:
 		)
 		planned_output_summary = emit_planned_pipeline_outputs(
 			cfg,
-			provisional_rows=combined_population_rows,
 			canonical_rows=validated_population_rows,
 		)
 	except Exception as exc:

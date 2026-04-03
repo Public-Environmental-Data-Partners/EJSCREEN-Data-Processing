@@ -9,11 +9,11 @@ score columns. It writes a scatterplot (scoreA vs scoreB) with a 1:1 identity
 line to a PNG file and prints a short textual summary to stdout. A CSV of the
 matched rows is also written to the test output path used in examples.
 
-Defaults are set to sample files under `test_files/` for convenience; use the
+Defaults are set to sample files under `output/` for convenience; use the
 command-line arguments to point to your own CSVs and column names.
 
 ag specific commandline example:
-  python3 ./compareScores2Ejam.py --state MT --file-ejam ./test_files/MT/ejam_hazardous_waste_subset.csv --score-ejam proximity.tsdf --file-b ../../hazardous_waste/pipeline/test_data/MT/final_bg_scores.csv --out ./test_files/MT/compare_ejam_hazardous_waste_subset_vs_final_bg_scores.png
+    python3 ./compareScores2Ejam.py --state MT --file-ejam ./output/MT/ejam_hazardous_waste_subset.csv --score-ejam proximity.tsdf --file-b ../../hazardous_waste/pipeline/test_data/MT/final_bg_scores.csv --out ./output/MT/compare_ejam_hazardous_waste_subset_vs_final_bg_scores.png
 """
 from __future__ import annotations
 import argparse
@@ -123,8 +123,8 @@ def summarize_and_plot(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compare two CSVs of weighted scores and plot a scatter with 1:1 line")
-    parser.add_argument('--state', type=str, default='MT', help='Two-letter postal code used to build the default test file paths')
-    parser.add_argument('--file-ejam', type=str, default=None, help='Reference CSV (A). Default: ./test_files/{STATE}/ejam_superfund_subset.csv')
+    parser.add_argument('--state', type=str, default='MT', help='Two-letter postal code used to build the default output-folder paths')
+    parser.add_argument('--file-ejam', type=str, default=None, help='Reference CSV (A). Default: ./output/{STATE}/ejam_superfund_subset.csv')
     parser.add_argument('--id-ejam', type=str, default='ejam_uniq_id', help='ID column name in file A')
     parser.add_argument('--score-ejam', type=str, default='proximity.npl', help='Score column name in file A')
 
@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--id-b', type=str, default='block_group_geoid', help='ID column name in file B')
     parser.add_argument('--score-new', type=str, default='weighted_score', help='Score column name in file B')
 
-    parser.add_argument('--out', type=str, default=None, help='Output PNG path. Default: ./test_files/{STATE}/{state}_compare_ejam_SF_subset_to_weighted_scores.png')
+    parser.add_argument('--out', type=str, default=None, help='Output PNG path. Default: ./output/{STATE}/{state}_compare_ejam_SF_subset_to_weighted_scores.png')
     parser.add_argument('--min-matched', type=int, default=5, help='Minimum matched rows required (otherwise exit non-zero)')
 
     args = parser.parse_args(argv)
@@ -144,9 +144,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"Using state code: {state}")
 
-    path_ejam = Path(args.file_ejam or f'./test_files/{state}/ejam_superfund_subset.csv')
+    path_ejam = Path(args.file_ejam or f'./output/{state}/ejam_superfund_subset.csv')
     path_b = Path(args.file_b or f'../../superfund/pipeline/test_data/{state}/final_bg_scores.csv')
-    out_path = Path(args.out or f'./test_files/{state}/compare_ejam_superfund_subset_vs_final_bg_scores_{state}.png')
+    out_path = Path(args.out or f'./output/{state}/compare_ejam_superfund_subset_vs_final_bg_scores_{state}.png')
 
     # Read inputs
     try:

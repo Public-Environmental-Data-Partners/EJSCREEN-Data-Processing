@@ -19,8 +19,8 @@ Features:
 
 Usage examples:
   # REQUIRED: specify --state
-  python compareEJAM2pipeline.py --state RI -p ./scripts/utilities/validation/test_files/
-  python compareEJAM2pipeline.py --state RI -p s3://my-bucket/prefix/ --dry-run
+    python compareEJAM2pipeline.py --state RI -p ./scripts/utilities/validation/output/
+    python compareEJAM2pipeline.py --state RI -p s3://my-bucket/prefix/ --dry-run
 
 Runtime parameters:
   --state / --state-code  REQUIRED. Two-letter state short code (e.g. RI). The
@@ -355,4 +355,3 @@ def main(argv=None) -> None:
 
 if __name__ == '__main__':
     main()
-

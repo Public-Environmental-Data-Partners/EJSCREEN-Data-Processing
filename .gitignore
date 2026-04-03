@@ -28,6 +28,10 @@ test.out
 *.csv
 *.zip
 
-# Dev-specific experiments and temp tools
+# Dev-specific experiments, temp tools, and old
+# files kept for diffing
 scripts/utilities/agScratch/
+*.old
+*.old/
+
 

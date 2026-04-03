@@ -5,15 +5,21 @@ Purpose:
   Run the Superfund NPL proximity pipeline for one state and emit three
   CSV artifacts:
     - targeted_block_groups.csv (intermediate output from Step 1)
-    - block_site_distances.csv (intermediate output from Step 2)
+    - block_site_distances.csv (intermediate output from Step 3)
     - final_bg_scores.csv (final output from Step 4)
 
 Behavior summary:
-  - Uses externalized state metadata from state_config.json.
+  - Uses externalized state metadata from scripts/shared/state_config.json.
   - Supports local paths or S3 URIs for inputs and outputs.
   - Stages S3-hosted geospatial assets to a temporary local directory before
     reading them with Fiona or GeoPandas.
   - Preserves the five step (0-4) scoring logic from the working prototype
+
+Sample commands:
+    - Local output:
+        python ./superfund_npl_proximity.py --state MT --input-path ./pipeline --output-path ./pipeline
+    - S3 output:
+        python ./superfund_npl_proximity.py --state MT --input-path ./pipeline --output-path s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/
 
 Credits:
   - Prototype scoring logic by Anne Gunn, Gemini, and GitHub Copilot.
@@ -27,6 +33,7 @@ import argparse
 import importlib
 import io
 import logging
+import sys
 import tempfile
 
 import fiona
@@ -39,12 +46,47 @@ try:
 except Exception:
     boto3 = None
 
-try:
-    from .state_config import StateConfig, get_state_config, validate_metric_target_crs
-except ImportError:
-    from state_config import StateConfig, get_state_config, validate_metric_target_crs
 
-DEFAULT_LOCAL_PIPELINE_PATH = './pipeline/test_data/'
+def _resolve_scripts_dir() -> Path:
+    current_path = Path(__file__).resolve()
+    for parent in current_path.parents:
+        if parent.name == 'scripts':
+            return parent
+    raise RuntimeError(f'Unable to locate scripts directory from {current_path}')
+
+
+SCRIPTS_DIR = _resolve_scripts_dir()
+SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
+
+
+def _load_shared_state_config_symbols():
+    if not SHARED_STATE_CONFIG_MODULE_PATH.exists():
+        raise ImportError(f'Shared state_config.py not found: {SHARED_STATE_CONFIG_MODULE_PATH}')
+
+    module_spec = importlib.util.spec_from_file_location(
+        'shared_state_config',
+        SHARED_STATE_CONFIG_MODULE_PATH,
+    )
+    if module_spec is None or module_spec.loader is None:
+        raise ImportError(f'Unable to load module spec from {SHARED_STATE_CONFIG_MODULE_PATH}')
+
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[module_spec.name] = module
+    module_spec.loader.exec_module(module)
+    return module.StateConfig, module.get_state_config, module.validate_metric_target_crs
+
+try:
+    from ..shared.state_config import StateConfig, get_state_config, validate_metric_target_crs
+except ImportError:
+    try:
+        from ...shared.state_config import StateConfig, get_state_config, validate_metric_target_crs
+    except ImportError:
+        try:
+            from shared.state_config import StateConfig, get_state_config, validate_metric_target_crs
+        except ImportError:
+            StateConfig, get_state_config, validate_metric_target_crs = _load_shared_state_config_symbols()
+
+DEFAULT_LOCAL_PIPELINE_PATH = './pipeline/'
 DEFAULT_S3_PIPELINE_PATH = 's3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/'
 DEFAULT_NPL_BOUNDARIES_FILENAME = 'downloads/NPL_Boundaries_20260217/NPL_Boundaries.gdb'
 DEFAULT_BLOCK_GROUPS_FILENAME_TEMPLATE = 'downloads/tl_2020_{fips}_bg.zip'

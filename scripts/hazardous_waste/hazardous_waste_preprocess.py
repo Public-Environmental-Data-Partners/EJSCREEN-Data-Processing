@@ -616,6 +616,13 @@ def get_audit_dedup_comparison_key(row: dict[str, str]) -> tuple[tuple[str, str]
 	return tuple((field_name, normalize_cell_text(row.get(field_name))) for field_name in comparison_fields)
 
 
+def get_handler_coordinate_key(row: dict[str, str]) -> tuple[str, str]:
+	return (
+		normalize_cell_text(row.get("LOCATION LATITUDE")),
+		normalize_cell_text(row.get("LOCATION LONGITUDE")),
+	)
+
+
 def deduplicate_population_slice_for_audit(
 	population_rows: list[dict[str, str]],
 	*,
@@ -623,11 +630,31 @@ def deduplicate_population_slice_for_audit(
 	audit_note_prefix: str,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
 	if not population_rows:
+		logging.info("Handler dedup [%s]: no input rows", audit_stage)
 		return [], []
 
 	grouped_rows: dict[str, list[dict[str, str]]] = {}
 	for row in population_rows:
 		grouped_rows.setdefault(row["HANDLER ID"], []).append(row)
+
+	duplicate_group_sizes = [len(group_rows) for group_rows in grouped_rows.values() if len(group_rows) > 1]
+	handlers_with_distinct_coordinates = 0
+	for group_rows in grouped_rows.values():
+		if len(group_rows) <= 1:
+			continue
+		coordinate_keys = {get_handler_coordinate_key(row) for row in group_rows}
+		if len(coordinate_keys) > 1:
+			handlers_with_distinct_coordinates += 1
+	logging.info(
+		"Handler dedup [%s]: input_rows=%d unique_handlers=%d duplicate_handlers=%d duplicate_rows=%d handlers_with_distinct_coordinates=%d max_rows_per_handler=%d",
+		audit_stage,
+		len(population_rows),
+		len(grouped_rows),
+		len(duplicate_group_sizes),
+		sum(group_size - 1 for group_size in duplicate_group_sizes),
+		handlers_with_distinct_coordinates,
+		max(duplicate_group_sizes, default=1),
+	)
 
 	canonical_rows: list[dict[str, str]] = []
 	dedup_audit_rows: list[dict[str, str]] = []
@@ -703,9 +730,32 @@ def merge_population_rows(tsdf_row: dict[str, str] | None, lqg_row: dict[str, st
 
 def deduplicate_population_rows(population_rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
 	if not population_rows:
+		logging.info("Handler dedup [combined_population_rows]: no input rows")
 		return [], 0
 
 	sorted_rows = sorted(population_rows, key=get_canonical_sort_key, reverse=True)
+	grouped_rows: dict[str, list[dict[str, str]]] = {}
+	for row in sorted_rows:
+		grouped_rows.setdefault(row["HANDLER ID"], []).append(row)
+
+	duplicate_group_sizes = [len(group_rows) for group_rows in grouped_rows.values() if len(group_rows) > 1]
+	handlers_with_distinct_coordinates = 0
+	for group_rows in grouped_rows.values():
+		if len(group_rows) <= 1:
+			continue
+		coordinate_keys = {get_handler_coordinate_key(row) for row in group_rows}
+		if len(coordinate_keys) > 1:
+			handlers_with_distinct_coordinates += 1
+	logging.info(
+		"Handler dedup [combined_population_rows]: input_rows=%d unique_handlers=%d duplicate_handlers=%d duplicate_rows=%d handlers_with_distinct_coordinates=%d max_rows_per_handler=%d",
+		len(population_rows),
+		len(grouped_rows),
+		len(duplicate_group_sizes),
+		sum(group_size - 1 for group_size in duplicate_group_sizes),
+		handlers_with_distinct_coordinates,
+		max(duplicate_group_sizes, default=1),
+	)
+
 	seen_handler_ids: set[str] = set()
 	canonical_rows: list[dict[str, str]] = []
 	for row in sorted_rows:

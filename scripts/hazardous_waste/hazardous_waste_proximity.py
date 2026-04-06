@@ -595,6 +595,28 @@ def step1_buffer_and_targeted_bgs(
 			logging.info('No block groups found within buffer distance')
 			targeted = pd.DataFrame(columns=['GEOID_BG', HAZARDOUS_WASTE_HANDLER_ID_COLUMN])
 		else:
+			all_handler_ids = set(hazardous_waste_gdf[HAZARDOUS_WASTE_HANDLER_ID_COLUMN].astype(str).str.strip())
+			joined_handler_ids = set(joined[HAZARDOUS_WASTE_HANDLER_ID_COLUMN].astype(str).str.strip())
+			joined_bg_count = joined[BG_GEOID_COLUMN].astype(str).nunique()
+			handler_bg_counts = (
+				joined[[HAZARDOUS_WASTE_HANDLER_ID_COLUMN, BG_GEOID_COLUMN]]
+				.drop_duplicates()
+				.groupby(HAZARDOUS_WASTE_HANDLER_ID_COLUMN)
+				.size()
+				.sort_values(ascending=False)
+			)
+			logging.info(
+				'Step1 join summary: joined_rows=%d unique_block_groups=%d unique_handlers=%d handlers_with_zero_matches=%d final_pairs_pending_dedup=%d',
+				len(joined),
+				joined_bg_count,
+				len(joined_handler_ids),
+				len(all_handler_ids - joined_handler_ids),
+				len(joined[[BG_GEOID_COLUMN, HAZARDOUS_WASTE_HANDLER_ID_COLUMN]].drop_duplicates()),
+			)
+			logging.info(
+				'Step1 top handler match counts: %s',
+				handler_bg_counts.head(5).to_dict(),
+			)
 			targeted = joined[[BG_GEOID_COLUMN, HAZARDOUS_WASTE_HANDLER_ID_COLUMN]].drop_duplicates().copy()
 			targeted = targeted.rename(columns={BG_GEOID_COLUMN: 'GEOID_BG'})
 			targeted[HAZARDOUS_WASTE_HANDLER_ID_COLUMN] = (
@@ -642,6 +664,15 @@ def step2_block_site_distances(
 	targeted_df[HAZARDOUS_WASTE_HANDLER_ID_COLUMN] = (
 		targeted_df[HAZARDOUS_WASTE_HANDLER_ID_COLUMN].astype(str).str.strip()
 	)
+	targeted_pair_count = len(targeted_df)
+	unique_targeted_handlers = targeted_df[HAZARDOUS_WASTE_HANDLER_ID_COLUMN].astype(str).nunique()
+	unique_targeted_bgs = targeted_df['GEOID_BG'].astype(str).nunique()
+	logging.info(
+		'Step2 targeted input summary: targeted_pairs=%d unique_block_groups=%d unique_handlers=%d',
+		targeted_pair_count,
+		unique_targeted_bgs,
+		unique_targeted_handlers,
+	)
 	target_bgs = set(targeted_df['GEOID_BG'].astype(str).unique())
 	gdf_blocks_sub = blocks_gdf[blocks_gdf['block_group_geoid'].astype(str).isin(target_bgs)].copy()
 	logging.info('Blocks in targeted block groups: %d (of %d)', len(gdf_blocks_sub), len(blocks_gdf))
@@ -666,12 +697,14 @@ def step2_block_site_distances(
 	rows_processed = 0
 	ids_found = 0
 	ids_not_found = 0
+	pairs_missing_blocks = 0
 
 	for _, row in targeted_df.iterrows():
 		rows_processed += 1
 		bg = str(row['GEOID_BG'])
 		handler_id = str(row[HAZARDOUS_WASTE_HANDLER_ID_COLUMN])
 		if bg not in blocks_by_bg:
+			pairs_missing_blocks += 1
 			continue
 
 		blocks = blocks_by_bg[bg]
@@ -705,15 +738,24 @@ def step2_block_site_distances(
 			)
 
 	logging.info(
-		'Step2 summary: rows_processed=%d, ids_found=%d, ids_not_found=%d',
+		'Step2 summary: rows_processed=%d, ids_found=%d, ids_not_found=%d, pairs_missing_blocks=%d',
 		rows_processed,
 		ids_found,
 		ids_not_found,
+		pairs_missing_blocks,
 	)
 
 	distances_df = pd.DataFrame.from_records(
 		records,
 		columns=['GEOID_BLOCK', HAZARDOUS_WASTE_HANDLER_ID_COLUMN, 'distance_m'],
+	)
+	unique_block_handler_pairs = len(
+		distances_df[['GEOID_BLOCK', HAZARDOUS_WASTE_HANDLER_ID_COLUMN]].drop_duplicates()
+	)
+	logging.info(
+		'Step2 output summary: distance_records=%d unique_block_handler_pairs=%d',
+		len(distances_df),
+		unique_block_handler_pairs,
 	)
 	logging.info('Step2 produced %d distance records (distance in meters)', len(distances_df))
 	return distances_df

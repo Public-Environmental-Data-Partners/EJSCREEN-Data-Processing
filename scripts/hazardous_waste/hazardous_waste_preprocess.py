@@ -402,7 +402,7 @@ def rcra_row_matches_br_reporting_generator_filter(row: dict[str, str]) -> bool:
 	if not status_text:
 		return False
 	status_parts = [part.strip() for part in status_text.split(",")]
-	has_generator_status = "LQG" in status_parts or "SQG" in status_parts
+	has_generator_status = "LQG" in status_parts or "SQG" in status_parts or "VSQG" in status_parts
 	active_site_text = normalize_cell_text(row.get("ACTIVE_SITE")).upper()
 	return has_generator_status and active_site_text.startswith("H")
 

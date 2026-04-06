@@ -397,6 +397,16 @@ def rcra_row_is_lqg(row: dict[str, str]) -> bool:
 	return "LQG" in status_parts
 
 
+def rcra_row_matches_br_reporting_generator_filter(row: dict[str, str]) -> bool:
+	status_text = normalize_cell_text(row.get("HREPORT_UNIVERSE_RECORD")).upper()
+	if not status_text:
+		return False
+	status_parts = [part.strip() for part in status_text.split(",")]
+	has_generator_status = "LQG" in status_parts or "SQG" in status_parts
+	active_site_text = normalize_cell_text(row.get("ACTIVE_SITE")).upper()
+	return has_generator_status and active_site_text.startswith("H")
+
+
 def parse_float_or_none(value: str | None) -> float | None:
 	normalized_value = normalize_cell_text(value)
 	if not normalized_value:
@@ -470,7 +480,7 @@ def classify_rcra_lqg_validation_failure(row: dict[str, str], source: SourceDesc
 	if not validation_errors:
 		return None
 	validation_reason = ";".join(validation_errors)
-	return validation_reason, f"RCRA BR-reporting LQG row failed site-level validation: {validation_reason}"
+	return validation_reason, f"RCRA BR-reporting generator-candidate row failed site-level validation: {validation_reason}"
 
 
 def build_rcra_lqg_site_row(
@@ -1137,7 +1147,7 @@ def build_rcra_br_reporting_lqg_subset(
 	validation_audit_rows: list[dict[str, str]] = []
 	total_rows = 0
 	br_reporter_match_rows = 0
-	lqg_rows = 0
+	generator_candidate_rows = 0
 	qualifying_rows = 0
 	validation_failure_count = 0
 
@@ -1153,13 +1163,13 @@ def build_rcra_br_reporting_lqg_subset(
 			total_rows += 1
 			handler_id = normalize_handler_id(row.get(source.handler_id_column))
 			is_br_reporter = bool(handler_id) and handler_id in br_reporting_handler_ids
-			is_lqg = rcra_row_is_lqg(row)
+			matches_generator_filter = rcra_row_matches_br_reporting_generator_filter(row)
 
 			if is_br_reporter:
 				br_reporter_match_rows += 1
-			if is_lqg:
-				lqg_rows += 1
-			if not (is_br_reporter and is_lqg):
+			if matches_generator_filter:
+				generator_candidate_rows += 1
+			if not (is_br_reporter and matches_generator_filter):
 				continue
 
 			qualifying_rows += 1
@@ -1201,7 +1211,7 @@ def build_rcra_br_reporting_lqg_subset(
 	return provisional_rows, RcraBrLqgSubsetSummary(
 		total_rows=total_rows,
 		br_reporter_match_rows=br_reporter_match_rows,
-		lqg_rows=lqg_rows,
+		lqg_rows=generator_candidate_rows,
 		qualifying_rows=qualifying_rows,
 		rejected_rows=total_rows - qualifying_rows,
 		validation_failure_count=validation_failure_count,
@@ -1213,7 +1223,7 @@ def build_rcra_br_reporting_lqg_subset(
 
 def log_rcra_br_reporting_lqg_subset_summary(summary: RcraBrLqgSubsetSummary) -> None:
 	logging.info(
-		"RCRA BR-reporting LQG subset summary: total_rows=%d br_reporter_match_rows=%d lqg_rows=%d qualifying_rows=%d rejected_rows=%d validation_failures=%d provisional_rows=%d unique_handler_ids=%d",
+		"RCRA BR-reporting generator subset summary: total_rows=%d br_reporter_match_rows=%d generator_candidate_rows=%d qualifying_rows=%d rejected_rows=%d validation_failures=%d provisional_rows=%d unique_handler_ids=%d",
 		summary.total_rows,
 		summary.br_reporter_match_rows,
 		summary.lqg_rows,
@@ -1224,7 +1234,7 @@ def log_rcra_br_reporting_lqg_subset_summary(summary: RcraBrLqgSubsetSummary) ->
 		summary.unique_handler_ids,
 	)
 	for validation_reason, reason_count in summary.validation_reason_counts:
-		logging.info("RCRA BR-reporting LQG validation rejects [%s]: %d", validation_reason, reason_count)
+		logging.info("RCRA BR-reporting generator validation rejects [%s]: %d", validation_reason, reason_count)
 
 
 def combine_rcra_population_slices(

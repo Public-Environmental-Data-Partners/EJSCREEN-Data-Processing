@@ -26,6 +26,7 @@ from collections import Counter
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_FILE_PATH = SCRIPT_DIR / "hazardous_waste_preprocess_config.json"
 DEFAULT_LOG_FILENAME = "hwpre.log"
+BR_REPORTING_GENERATOR_NET_CHOICES = ("narrow", "medium", "broad")
 
 PARSE_AUDIT_FIELDNAMES = (
 	"audit_stage",
@@ -78,6 +79,7 @@ class SourceDescriptor:
 @dataclass(frozen=True, slots=True)
 class Config:
 	storage_mode: str
+	br_reporting_generator_net: str
 	local_root_path: str
 	remote_root_path: str
 	canonical_output_relative_path: str
@@ -129,9 +131,11 @@ class RcraTsdfSubsetSummary:
 
 @dataclass(frozen=True, slots=True)
 class RcraBrLqgSubsetSummary:
+	generator_net: str
+	generator_statuses: tuple[str, ...]
 	total_rows: int
 	br_reporter_match_rows: int
-	lqg_rows: int
+	generator_net_match_rows: int
 	qualifying_rows: int
 	rejected_rows: int
 	validation_failure_count: int
@@ -205,10 +209,17 @@ def get_config(argv=None) -> Config:
 		choices=("local", "remote"),
 		help="Select whether the script reads through the local root path or the remote S3 root path.",
 	)
+	parser.add_argument(
+		"--generator-net",
+		choices=BR_REPORTING_GENERATOR_NET_CHOICES,
+		default="narrow",
+		help="Select the BR-reporting generator filter net: narrow=LQG, medium=LQG+SQG, broad=LQG+SQG+VSQG.",
+	)
 	args = parser.parse_args(argv)
 
 	return Config(
 		storage_mode=args.storage_mode,
+		br_reporting_generator_net=args.generator_net,
 		local_root_path=config_payload["local_root_path"],
 		remote_root_path=config_payload["remote_root_path"],
 		canonical_output_relative_path=config_payload["canonical_output_relative_path"],
@@ -218,20 +229,6 @@ def get_config(argv=None) -> Config:
 		planned_master_rcra_source=build_source_descriptor(planned_sources_payload["master_rcra_source"]),
 		planned_br_reporting_source=build_source_descriptor(planned_sources_payload["br_reporting_source"]),
 	)
-
-
-def configure_logging() -> str:
-	log_path = Path.cwd() / DEFAULT_LOG_FILENAME
-	log_path.parent.mkdir(parents=True, exist_ok=True)
-	logging.basicConfig(
-		level=logging.INFO,
-		format="%(levelname)s: %(message)s",
-		handlers=[
-			logging.FileHandler(log_path, mode="w", encoding="utf-8"),
-		],
-		force=True,
-	)
-	return str(log_path)
 
 
 def initialize_runtime_dependencies(cfg: Config) -> None:
@@ -292,6 +289,11 @@ def get_dedup_audit_path(cfg: Config) -> str:
 def log_runtime_context(cfg: Config) -> None:
 	logging.info("Config file: %s", CONFIG_FILE_PATH)
 	logging.info("Storage mode: %s", cfg.storage_mode)
+	logging.info(
+		"BR-reporting generator net: %s (%s)",
+		cfg.br_reporting_generator_net,
+		", ".join(get_br_reporting_generator_statuses(cfg.br_reporting_generator_net)),
+	)
 	logging.info("Active root path: %s", get_active_root_path(cfg))
 	logging.info("Planned master RCRA source path: %s", get_source_path(cfg, cfg.planned_master_rcra_source))
 	logging.info("Planned BR reporting source path: %s", get_source_path(cfg, cfg.planned_br_reporting_source))
@@ -397,14 +399,22 @@ def rcra_row_is_lqg(row: dict[str, str]) -> bool:
 	return "LQG" in status_parts
 
 
-def rcra_row_matches_br_reporting_generator_filter(row: dict[str, str]) -> bool:
+def get_br_reporting_generator_statuses(generator_net: str) -> tuple[str, ...]:
+	if generator_net == "narrow":
+		return ("LQG",)
+	if generator_net == "medium":
+		return ("LQG", "SQG")
+	if generator_net == "broad":
+		return ("LQG", "SQG", "VSQG")
+	raise ValueError(f"Unsupported generator net: {generator_net}")
+
+
+def rcra_row_matches_br_reporting_generator_net(row: dict[str, str], generator_net: str) -> bool:
 	status_text = normalize_cell_text(row.get("HREPORT_UNIVERSE_RECORD")).upper()
 	if not status_text:
 		return False
-	status_parts = [part.strip() for part in status_text.split(",")]
-	has_generator_status = "LQG" in status_parts or "SQG" in status_parts or "VSQG" in status_parts
-	active_site_text = normalize_cell_text(row.get("ACTIVE_SITE")).upper()
-	return has_generator_status and active_site_text.startswith("H")
+	status_parts = {part.strip() for part in status_text.split(",") if part.strip()}
+	return any(status in status_parts for status in get_br_reporting_generator_statuses(generator_net))
 
 
 def parse_float_or_none(value: str | None) -> float | None:
@@ -480,7 +490,7 @@ def classify_rcra_lqg_validation_failure(row: dict[str, str], source: SourceDesc
 	if not validation_errors:
 		return None
 	validation_reason = ";".join(validation_errors)
-	return validation_reason, f"RCRA BR-reporting generator-candidate row failed site-level validation: {validation_reason}"
+	return validation_reason, f"RCRA BR-reporting generator-net row failed site-level validation: {validation_reason}"
 
 
 def build_rcra_lqg_site_row(
@@ -626,13 +636,6 @@ def get_audit_dedup_comparison_key(row: dict[str, str]) -> tuple[tuple[str, str]
 	return tuple((field_name, normalize_cell_text(row.get(field_name))) for field_name in comparison_fields)
 
 
-def get_handler_coordinate_key(row: dict[str, str]) -> tuple[str, str]:
-	return (
-		normalize_cell_text(row.get("LOCATION LATITUDE")),
-		normalize_cell_text(row.get("LOCATION LONGITUDE")),
-	)
-
-
 def deduplicate_population_slice_for_audit(
 	population_rows: list[dict[str, str]],
 	*,
@@ -640,31 +643,11 @@ def deduplicate_population_slice_for_audit(
 	audit_note_prefix: str,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
 	if not population_rows:
-		logging.info("Handler dedup [%s]: no input rows", audit_stage)
 		return [], []
 
 	grouped_rows: dict[str, list[dict[str, str]]] = {}
 	for row in population_rows:
 		grouped_rows.setdefault(row["HANDLER ID"], []).append(row)
-
-	duplicate_group_sizes = [len(group_rows) for group_rows in grouped_rows.values() if len(group_rows) > 1]
-	handlers_with_distinct_coordinates = 0
-	for group_rows in grouped_rows.values():
-		if len(group_rows) <= 1:
-			continue
-		coordinate_keys = {get_handler_coordinate_key(row) for row in group_rows}
-		if len(coordinate_keys) > 1:
-			handlers_with_distinct_coordinates += 1
-	logging.info(
-		"Handler dedup [%s]: input_rows=%d unique_handlers=%d duplicate_handlers=%d duplicate_rows=%d handlers_with_distinct_coordinates=%d max_rows_per_handler=%d",
-		audit_stage,
-		len(population_rows),
-		len(grouped_rows),
-		len(duplicate_group_sizes),
-		sum(group_size - 1 for group_size in duplicate_group_sizes),
-		handlers_with_distinct_coordinates,
-		max(duplicate_group_sizes, default=1),
-	)
 
 	canonical_rows: list[dict[str, str]] = []
 	dedup_audit_rows: list[dict[str, str]] = []
@@ -740,32 +723,9 @@ def merge_population_rows(tsdf_row: dict[str, str] | None, lqg_row: dict[str, st
 
 def deduplicate_population_rows(population_rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
 	if not population_rows:
-		logging.info("Handler dedup [combined_population_rows]: no input rows")
 		return [], 0
 
 	sorted_rows = sorted(population_rows, key=get_canonical_sort_key, reverse=True)
-	grouped_rows: dict[str, list[dict[str, str]]] = {}
-	for row in sorted_rows:
-		grouped_rows.setdefault(row["HANDLER ID"], []).append(row)
-
-	duplicate_group_sizes = [len(group_rows) for group_rows in grouped_rows.values() if len(group_rows) > 1]
-	handlers_with_distinct_coordinates = 0
-	for group_rows in grouped_rows.values():
-		if len(group_rows) <= 1:
-			continue
-		coordinate_keys = {get_handler_coordinate_key(row) for row in group_rows}
-		if len(coordinate_keys) > 1:
-			handlers_with_distinct_coordinates += 1
-	logging.info(
-		"Handler dedup [combined_population_rows]: input_rows=%d unique_handlers=%d duplicate_handlers=%d duplicate_rows=%d handlers_with_distinct_coordinates=%d max_rows_per_handler=%d",
-		len(population_rows),
-		len(grouped_rows),
-		len(duplicate_group_sizes),
-		sum(group_size - 1 for group_size in duplicate_group_sizes),
-		handlers_with_distinct_coordinates,
-		max(duplicate_group_sizes, default=1),
-	)
-
 	seen_handler_ids: set[str] = set()
 	canonical_rows: list[dict[str, str]] = []
 	for row in sorted_rows:
@@ -1142,12 +1102,13 @@ def build_rcra_br_reporting_lqg_subset(
 ) -> tuple[list[dict[str, str]], RcraBrLqgSubsetSummary, list[dict[str, str]]]:
 	source = cfg.planned_master_rcra_source
 	source_path = get_source_path(cfg, source)
+	generator_statuses = get_br_reporting_generator_statuses(cfg.br_reporting_generator_net)
 	provisional_rows: list[dict[str, str]] = []
 	validation_reason_counter: Counter[str] = Counter()
 	validation_audit_rows: list[dict[str, str]] = []
 	total_rows = 0
 	br_reporter_match_rows = 0
-	generator_candidate_rows = 0
+	generator_net_match_rows = 0
 	qualifying_rows = 0
 	validation_failure_count = 0
 
@@ -1163,13 +1124,13 @@ def build_rcra_br_reporting_lqg_subset(
 			total_rows += 1
 			handler_id = normalize_handler_id(row.get(source.handler_id_column))
 			is_br_reporter = bool(handler_id) and handler_id in br_reporting_handler_ids
-			matches_generator_filter = rcra_row_matches_br_reporting_generator_filter(row)
+			matches_generator_net = rcra_row_matches_br_reporting_generator_net(row, cfg.br_reporting_generator_net)
 
 			if is_br_reporter:
 				br_reporter_match_rows += 1
-			if matches_generator_filter:
-				generator_candidate_rows += 1
-			if not (is_br_reporter and matches_generator_filter):
+			if matches_generator_net:
+				generator_net_match_rows += 1
+			if not (is_br_reporter and matches_generator_net):
 				continue
 
 			qualifying_rows += 1
@@ -1209,9 +1170,11 @@ def build_rcra_br_reporting_lqg_subset(
 
 	unique_handler_ids = len({row["HANDLER ID"] for row in provisional_rows})
 	return provisional_rows, RcraBrLqgSubsetSummary(
+		generator_net=cfg.br_reporting_generator_net,
+		generator_statuses=generator_statuses,
 		total_rows=total_rows,
 		br_reporter_match_rows=br_reporter_match_rows,
-		lqg_rows=generator_candidate_rows,
+		generator_net_match_rows=generator_net_match_rows,
 		qualifying_rows=qualifying_rows,
 		rejected_rows=total_rows - qualifying_rows,
 		validation_failure_count=validation_failure_count,
@@ -1223,10 +1186,12 @@ def build_rcra_br_reporting_lqg_subset(
 
 def log_rcra_br_reporting_lqg_subset_summary(summary: RcraBrLqgSubsetSummary) -> None:
 	logging.info(
-		"RCRA BR-reporting generator subset summary: total_rows=%d br_reporter_match_rows=%d generator_candidate_rows=%d qualifying_rows=%d rejected_rows=%d validation_failures=%d provisional_rows=%d unique_handler_ids=%d",
+		"RCRA BR-reporting generator subset summary: generator_net=%s generator_statuses=%s total_rows=%d br_reporter_match_rows=%d generator_net_match_rows=%d qualifying_rows=%d rejected_rows=%d validation_failures=%d provisional_rows=%d unique_handler_ids=%d",
+		summary.generator_net,
+		list(summary.generator_statuses),
 		summary.total_rows,
 		summary.br_reporter_match_rows,
-		summary.lqg_rows,
+		summary.generator_net_match_rows,
 		summary.qualifying_rows,
 		summary.rejected_rows,
 		summary.validation_failure_count,
@@ -1421,8 +1386,22 @@ def log_planned_output_summary(cfg: Config, summary: CanonicalOutputSummary) -> 
 	logging.info("Canonical output path: %s", get_canonical_output_path(cfg))
 
 
+def configure_logging() -> str:
+	log_path = Path.cwd() / DEFAULT_LOG_FILENAME
+	log_path.parent.mkdir(parents=True, exist_ok=True)
+	logging.basicConfig(
+		level=logging.INFO,
+		format="%(levelname)s: %(message)s",
+		handlers=[
+			logging.FileHandler(log_path, mode="w", encoding="utf-8"),
+		],
+		force=True,
+	)
+	return str(log_path)
+
+
 def main(argv=None) -> int:
-	print("\n", "*"*20, "\nHazardous-waste preprocessing started")
+	print("\n", "*" * 20, "\nHazardous-waste preprocessing started")
 	try:
 		log_path = configure_logging()
 		logging.info("Logging to %s", log_path)
@@ -1456,7 +1435,7 @@ def main(argv=None) -> int:
 		rcra_br_reporting_lqg_rows, rcra_lqg_dedup_audit_rows = deduplicate_population_slice_for_audit(
 			rcra_br_reporting_lqg_rows,
 			audit_stage="rcra_br_reporting_lqg_dedup",
-			audit_note_prefix="Multiple qualifying BR-reporting LQG rows were found for the same HANDLER ID",
+			audit_note_prefix=f"Multiple qualifying BR-reporting {cfg.br_reporting_generator_net} generator-net rows were found for the same HANDLER ID",
 		)
 		dedup_audit_rows.extend(rcra_lqg_dedup_audit_rows)
 		print("Completed source extraction and filtering")

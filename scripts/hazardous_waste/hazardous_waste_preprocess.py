@@ -25,6 +25,7 @@ from collections import Counter
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_FILE_PATH = SCRIPT_DIR / "hazardous_waste_preprocess_config.json"
+DEFAULT_LOG_FILENAME = "hwpre.log"
 
 PARSE_AUDIT_FIELDNAMES = (
 	"audit_stage",
@@ -217,6 +218,20 @@ def get_config(argv=None) -> Config:
 		planned_master_rcra_source=build_source_descriptor(planned_sources_payload["master_rcra_source"]),
 		planned_br_reporting_source=build_source_descriptor(planned_sources_payload["br_reporting_source"]),
 	)
+
+
+def configure_logging() -> str:
+	log_path = Path.cwd() / DEFAULT_LOG_FILENAME
+	log_path.parent.mkdir(parents=True, exist_ok=True)
+	logging.basicConfig(
+		level=logging.INFO,
+		format="%(levelname)s: %(message)s",
+		handlers=[
+			logging.FileHandler(log_path, mode="w", encoding="utf-8"),
+		],
+		force=True,
+	)
+	return str(log_path)
 
 
 def initialize_runtime_dependencies(cfg: Config) -> None:
@@ -1347,12 +1362,17 @@ def log_planned_output_summary(cfg: Config, summary: CanonicalOutputSummary) -> 
 
 
 def main(argv=None) -> int:
-	logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+	print("\n", "*"*20, "\nHazardous-waste preprocessing started")
 	try:
+		log_path = configure_logging()
+		logging.info("Logging to %s", log_path)
+		print("Starting setup and source inventory")
 		cfg = get_config(argv)
 		initialize_runtime_dependencies(cfg)
 		log_runtime_context(cfg)
 		inventory_planned_source_layout(cfg)
+		print("Completed setup and source inventory")
+		print("Starting source extraction and filtering")
 		parse_audit_rows: list[dict[str, str]] = []
 		validation_audit_rows: list[dict[str, str]] = []
 		dedup_audit_rows: list[dict[str, str]] = []
@@ -1379,6 +1399,8 @@ def main(argv=None) -> int:
 			audit_note_prefix="Multiple qualifying BR-reporting LQG rows were found for the same HANDLER ID",
 		)
 		dedup_audit_rows.extend(rcra_lqg_dedup_audit_rows)
+		print("Completed source extraction and filtering")
+		print("Starting final validation and output writing")
 		combined_population_rows, combined_population_summary = combine_rcra_population_slices(
 			rcra_tsdf_rows,
 			rcra_br_reporting_lqg_rows,
@@ -1397,6 +1419,7 @@ def main(argv=None) -> int:
 			cfg,
 			canonical_rows=validated_population_rows,
 		)
+		print("Completed final validation and output writing")
 	except Exception as exc:
 		logging.error("Hazardous waste preprocessing failed: %s", exc)
 		return 1
@@ -1410,6 +1433,7 @@ def main(argv=None) -> int:
 	log_planned_pipeline_audit_summary(cfg, audit_output_summary)
 	log_planned_output_summary(cfg, planned_output_summary)
 	logging.info("Hazardous waste preprocessing completed successfully")
+	print("Hazardous-waste preprocessing completed successfully")
 	return 0
 
 

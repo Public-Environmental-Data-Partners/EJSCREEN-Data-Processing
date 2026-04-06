@@ -84,6 +84,7 @@ DEFAULT_CENSUS_BLOCKS_FILENAME_TEMPLATE = 'downloads/census_block_weights_2020/c
 DEFAULT_TARGETED_BLOCK_GROUPS_FILENAME = 'targeted_block_groups.csv'
 DEFAULT_BLOCK_SITE_DISTANCES_FILENAME = 'block_site_distances.csv'
 DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
+DEFAULT_LOG_FILENAME = 'hwprox.log'
 DEFAULT_BUFFER_METERS = 10000.0
 
 HAZARDOUS_WASTE_HANDLER_ID_COLUMN = 'HANDLER ID'
@@ -408,6 +409,20 @@ def apply_metric_projection(
 		return input_proj.to_crs(target_crs)
 	except Exception as exc:
 		raise RuntimeError(f'Failed to reproject {description} to {target_crs}: {exc}') from exc
+
+
+def configure_logging() -> str:
+	log_path = Path.cwd() / DEFAULT_LOG_FILENAME
+	log_path.parent.mkdir(parents=True, exist_ok=True)
+	logging.basicConfig(
+		level=logging.INFO,
+		format='%(levelname)s: %(message)s',
+		handlers=[
+			logging.FileHandler(log_path, mode='w', encoding='utf-8'),
+		],
+		force=True,
+	)
+	return str(log_path)
 
 
 def _read_block_groups_geodataframe(bg_path: Path) -> gpd.GeoDataFrame:
@@ -820,11 +835,16 @@ def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
 
 
 def main(argv=None) -> int:
+	print("\n", "*"*20, "\nHazardous-waste proximity pipeline processing started")
+	logging.info('Hazardous-waste proximity pipeline processing started')
+
 	logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 	try:
 		cfg = get_config(argv)
 		paths = resolve_pipeline_paths(cfg)
+		log_path = configure_logging()
+		logging.info('Logging to %s', log_path)
 		log_resolved_paths(paths, cfg)
 	except Exception as exc:
 		logging.error('Failed to resolve pipeline configuration: %s', exc)
@@ -833,32 +853,43 @@ def main(argv=None) -> int:
 	try:
 		with tempfile.TemporaryDirectory(prefix=f'hazardous_waste_{paths.state_config.postal.lower()}_') as temp_dir_name:
 			staging_root = Path(temp_dir_name)
+			print('Starting Step0: prepare inputs')
 			hazardous_waste_gdf, bg_gdf, blocks_gdf = step0_prepare_inputs(paths, staging_root)
+			print('Completed Step0: prepare inputs')
+			print('Starting Step1: target block groups')
 			targeted_df = step1_buffer_and_targeted_bgs(
 				hazardous_waste_gdf=hazardous_waste_gdf,
 				bg_gdf=bg_gdf,
 				buffer_meters=cfg.buffer_meters,
 				output_path=paths.targeted_block_groups_path,
 			)
+			print('Completed Step1: target block groups')
+			print('Starting Step2: compute block-site distances')
 			distances_df = step2_block_site_distances(
 				targeted_df=targeted_df,
 				blocks_gdf=blocks_gdf,
 				hazardous_waste_gdf=hazardous_waste_gdf,
 			)
+			print('Completed Step2: compute block-site distances')
+			print('Starting Step3: inverse distance scoring')
 			distances_with_scores_df = step3_inverse_distance_scoring(
 				distances_df,
 				output_path=paths.block_site_distances_path,
 			)
+			print('Completed Step3: inverse distance scoring')
+			print('Starting Step4: population weighting aggregation')
 			step4_population_weighting_aggregation(
 				distances_with_scores_df,
 				blocks_gdf=blocks_gdf,
 				output_path=paths.final_bg_scores_path,
 			)
+			print('Completed Step4: population weighting aggregation')
 	except Exception as exc:
 		logging.exception('Hazardous-waste proximity pipeline failed: %s', exc)
 		return 1
 
 	logging.info('Hazardous-waste proximity pipeline completed successfully')
+	print('Hazardous-waste proximity pipeline completed successfully')
 	return 0
 
 

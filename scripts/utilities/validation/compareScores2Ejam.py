@@ -17,13 +17,15 @@ ag specific commandline example:
 """
 from __future__ import annotations
 import argparse
+import importlib.util
 from pathlib import Path
 import sys
 import textwrap
+import geopandas as gpd
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Tuple
+from matplotlib.colors import TwoSlopeNorm
 
 
 def read_csv_coerce(path: Path, id_col: str, score_col: str) -> pd.DataFrame:
@@ -37,6 +39,135 @@ def read_csv_coerce(path: Path, id_col: str, score_col: str) -> pd.DataFrame:
     # Coerce score to numeric (allow decimals, NaN if invalid)
     df[score_col] = pd.to_numeric(df[score_col], errors='coerce')
     return df[[id_col, score_col]].copy()
+
+
+def _resolve_scripts_dir() -> Path:
+    current_path = Path(__file__).resolve()
+    for parent in current_path.parents:
+        if parent.name == 'scripts':
+            return parent
+    raise RuntimeError(f'Unable to locate scripts directory from {current_path}')
+
+
+SCRIPTS_DIR = _resolve_scripts_dir()
+SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
+DEFAULT_TIGER_BG_FILENAME_TEMPLATE = 'superfund/pipeline/downloads/tl_2020_{fips}_bg.zip'
+BG_GEOID_COLUMN = 'GEOID'
+SCORE_DIFF_COLUMN = 'score_diff'
+
+
+def _load_shared_state_config_symbols():
+    if not SHARED_STATE_CONFIG_MODULE_PATH.exists():
+        raise ImportError(f'Shared state_config.py not found: {SHARED_STATE_CONFIG_MODULE_PATH}')
+
+    module_spec = importlib.util.spec_from_file_location(
+        'shared_state_config_compare_scores',
+        SHARED_STATE_CONFIG_MODULE_PATH,
+    )
+    if module_spec is None or module_spec.loader is None:
+        raise ImportError(f'Unable to load module spec from {SHARED_STATE_CONFIG_MODULE_PATH}')
+
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[module_spec.name] = module
+    module_spec.loader.exec_module(module)
+    return module.get_state_config
+
+
+try:
+    from ...shared.state_config import get_state_config
+except ImportError:
+    try:
+        from shared.state_config import get_state_config
+    except ImportError:
+        get_state_config = _load_shared_state_config_symbols()
+
+
+def _read_block_groups_geodataframe(bg_path: Path) -> gpd.GeoDataFrame:
+    candidates = [str(bg_path)]
+    if bg_path.suffix.lower() == '.zip':
+        candidates.append(f'zip://{bg_path.as_posix()}')
+
+    last_error = None
+    for candidate in dict.fromkeys(candidates):
+        try:
+            return gpd.read_file(candidate)
+        except Exception as exc:
+            last_error = exc
+
+    raise RuntimeError(f'Failed to read block-group data from {bg_path}: {last_error}')
+
+
+def plot_difference_map(
+    df_joined: pd.DataFrame,
+    state: str,
+    out_path: Path,
+    score_ejam: str,
+    score_new: str,
+) -> None:
+    state_config = get_state_config(state)
+    tiger_bg_path = SCRIPTS_DIR / DEFAULT_TIGER_BG_FILENAME_TEMPLATE.format(fips=state_config.fips)
+    if not tiger_bg_path.exists():
+        raise FileNotFoundError(f'TIGER block-group ZIP not found: {tiger_bg_path}')
+
+    bg_gdf = _read_block_groups_geodataframe(tiger_bg_path)
+    if BG_GEOID_COLUMN not in bg_gdf.columns:
+        raise RuntimeError(f"Expected '{BG_GEOID_COLUMN}' column in TIGER block-group data: {tiger_bg_path}")
+    if 'geometry' not in bg_gdf.columns:
+        raise RuntimeError(f"Expected 'geometry' column in TIGER block-group data: {tiger_bg_path}")
+
+    map_df = df_joined[['matched_id', score_ejam, score_new]].dropna(subset=[score_ejam, score_new]).copy()
+    map_df[SCORE_DIFF_COLUMN] = (map_df[score_ejam] - map_df[score_new]).astype(float)
+    map_df['matched_id'] = map_df['matched_id'].astype(str).str.strip()
+
+    duplicate_geoids = map_df['matched_id'][map_df['matched_id'].duplicated()].unique().tolist()
+    if duplicate_geoids:
+        raise RuntimeError(
+            'Cannot build map because matched rows contain duplicate block-group ids, '
+            f'for example: {duplicate_geoids[:5]}'
+        )
+
+    bg_plot = bg_gdf.copy()
+    bg_plot[BG_GEOID_COLUMN] = bg_plot[BG_GEOID_COLUMN].astype(str).str.strip()
+    bg_plot = bg_plot.merge(
+        map_df[['matched_id', SCORE_DIFF_COLUMN]],
+        left_on=BG_GEOID_COLUMN,
+        right_on='matched_id',
+        how='left',
+    )
+
+    matched_polygons = int(bg_plot[SCORE_DIFF_COLUMN].notna().sum())
+    missing_polygons = int(bg_plot[SCORE_DIFF_COLUMN].isna().sum())
+    max_abs = float(np.nanmax(np.abs(map_df[SCORE_DIFF_COLUMN]))) if len(map_df) > 0 else 0.0
+    scale_bound = max_abs if max_abs > 0 else 1.0
+    norm = TwoSlopeNorm(vmin=-scale_bound, vcenter=0.0, vmax=scale_bound)
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+    bg_plot.plot(
+        column=SCORE_DIFF_COLUMN,
+        cmap='RdBu',
+        norm=norm,
+        linewidth=0.05,
+        edgecolor='none',
+        legend=True,
+        missing_kwds={'color': '#7f7f7f', 'label': 'No matched score'},
+        ax=ax,
+    )
+    ax.set_title(
+        f'{state}: EJAM minus new score by block group\n'
+        'Blue: EJAM > new | Red: EJAM < new | Gray: missing score'
+    )
+    ax.set_axis_off()
+    if len(fig.axes) > 1:
+        fig.axes[1].set_ylabel('Score difference (EJAM - new)')
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f'Map matched block groups: {len(map_df)}')
+    print(f'Map polygons with matched score: {matched_polygons}; polygons without matched score: {missing_polygons}')
+    print(f'Map symmetric color scale: {-scale_bound:.6g} to {scale_bound:.6g}')
+    print(f'Map written to: {out_path}')
 
 
 def summarize_and_plot(
@@ -147,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
     path_ejam = Path(args.file_ejam or f'./output/{state}/ejam_superfund_subset.csv')
     path_b = Path(args.file_b or f'../../superfund/pipeline/test_data/{state}/final_bg_scores.csv')
     out_path = Path(args.out or f'./output/{state}/compare_ejam_superfund_subset_vs_final_bg_scores_{state}.png')
+    map_out_path = out_path.parent / f'{state}_map_ejam_minus_new.png'
 
     # Read inputs
     try:
@@ -190,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Prepare DataFrame columns for plotting
     df_joined = df_joined.rename(columns={'id': 'matched_id', 'score_ejam': args.score_ejam, 'score_new': args.score_new})
+    df_joined[SCORE_DIFF_COLUMN] = (df_joined[args.score_ejam] - df_joined[args.score_new]).astype(float)
 
     df_sorted = df_joined.sort_values(by=args.score_ejam, ascending=True)
 
@@ -205,6 +338,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Create plot and summary
     summarize_and_plot(df_joined, 'matched_id', args.score_ejam, args.score_new, out_path, title=f"{state}: Compare {args.score_ejam} vs {args.score_new}")
+    plot_difference_map(df_joined, state, map_out_path, args.score_ejam, args.score_new)
 
     if len(df_joined) < args.min_matched:
         print(f"Fewer than {args.min_matched} matched rows ({len(df_joined)}). Exiting with code 3.")

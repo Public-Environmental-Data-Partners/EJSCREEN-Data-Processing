@@ -102,6 +102,7 @@ s2["REPEAT_TEST"]
 agg = {"state_code": "first", "u": "first", "f": "first", "a": "mean"}
 #final = s2.groupby(by="REPEAT_TEST").agg(agg)
 final = s2.dissolve(by="REPEAT_TEST", aggfunc=agg)
+final.reset_index(inplace=True)
 
 # Add ID (long int, calculated from OBJECTID)
 final['ID'] = final.index
@@ -111,4 +112,4 @@ final['ID'] = final.index
 final.rename(columns = {'u': 'urban_code', 'f': 'f_system', 'a': 'aadt'}, inplace = True)
 # export to json
 gdf = geopandas.GeoDataFrame(final, crs="EPSG:4326")
-gdf.to_file("test.json", driver="GeoJSON")
+gdf.to_file("./outputs/traffic/preprocessing/HPMS2020_44_python.json", driver="GeoJSON")

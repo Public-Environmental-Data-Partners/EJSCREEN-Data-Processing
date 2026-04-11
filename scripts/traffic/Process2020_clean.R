@@ -105,30 +105,48 @@ prepro_2020 <- aws.s3::s3read_using(st_read,
 
 #### SCRATCH SPACE FOR COMPARING PREPROCESSED DATA FROM ARCGIS #################
 #### AND THE RESULTS FROM THE NEW PYTHON SCRIPT  ###############################
-# prepro_2020 <- prepro_2020_arcgis
-# prepro_2020_python <- st_read("./scripts/traffic/test.json") %>%
-#   mutate(OBJECTID = ID + 1) %>%
-#   st_transform(., crs = st_crs(b))%>%
-#   mutate(unique_id = paste0(OBJECTID, "_", state_code))
-# 
-# test <- st_intersection(prepro_2020_arcgis, prepro_2020_python)
-# mapview(test)
-# 
-# merge_test <- merge(prepro_2020_arcgis, as.data.frame(prepro_2020_python), by = "OBJECTID")
-# 
-# missing <- prepro_2020_arcgis %>%
-#   filter(!(OBJECTID %in% merge_test$OBJECTID))
-# mapview(missing, color = "purple") + 
-#   mapview(prepro_2020_arcgis) + 
-#   mapview(prepro_2020_python, color = "red")
-#
+prepro_2020_arcgis <- prepro_2020
+prepro_2020_python <- st_read("./outputs/traffic/preprocessing/HPMS2020_44_python.json") %>%
+  # the object ID is offset for some reason
+  mutate(OBJECTID = ID + 1) %>%
+  st_transform(., crs = st_crs(b))%>%
+  mutate(unique_id = paste0(OBJECTID, "_", state_code), 
+         shape_length = units::set_units(st_length(.), "km")) 
+
+# the number of rows in arcgis: 2369; 16 of these have urban_code = 99999
+# the number of rows from python: 2324
+
+# they completely overlap
+mapview(prepro_2020_arcgis) +
+  mapview(prepro_2020_python, color = "red")
+
+
+# the objectIDs are offset between the two datasets
+merge_test <- merge(prepro_2020_arcgis, 
+                    as.data.frame(prepro_2020_python), by = c("OBJECTID"))%>%
+  as.data.frame()
+  
+merge_test_simple <- merge_test %>%
+  as.data.frame() %>%
+  rename(arcgis_aadt = aadt.x,
+         python_aadt = aadt.y) 
+ggplot(merge_test_simple, aes(x = arcgis_aadt, y = python_aadt)) + 
+  geom_point()
+
+# which ones are missing..?
+missing <- prepro_2020_arcgis %>%
+  filter(!(OBJECTID %in% merge_test$OBJECTID))
+mapview(missing, color = "purple", lwd = 5) +
+  mapview(prepro_2020_arcgis) +
+  mapview(prepro_2020_python, color = "red")
+
 # NOTES from comparisons: 
 # the python method produces ~45 fewer records in comparison to ArcGIS. The 
 # objectIDs don't seem to have the same traffic scores (they are sometimes 
 # the same and sometimes not?), and the python method has objectIDs that stop at 
 # 2324 and the ArcGIS method goes to 2359. When I plot the output, the traffic 
 # line segments seem to completely overlap. I need to do some more testing, or 
-# even just try to recreate this code in python. 
+# even just try to recreate this code in R. 
 # 
 # I crunched some new comparisons with the data from the python method, and the 
 # absolute percent difference increased by 0.70145%. Results can be found

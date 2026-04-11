@@ -509,7 +509,7 @@ def step0_prepare_inputs(
 			hazardous_waste_df['_site_longitude'],
 			hazardous_waste_df['_site_latitude'],
 		),
-		crs='EPSG:4326',
+		crs='EPSG:4269',
 	)
 	hazardous_waste_gdf = apply_metric_projection(
 		'hazardous-waste sites dataset',
@@ -550,7 +550,7 @@ def step0_prepare_inputs(
 	blocks_gdf = gpd.GeoDataFrame(
 		blocks_df,
 		geometry=gpd.points_from_xy(blocks_df['block_lon'], blocks_df['block_lat']),
-		crs='EPSG:4326',
+		crs='EPSG:4269',
 	)
 	blocks_gdf = apply_metric_projection('blocks dataset', blocks_gdf, state_config.metric_crs, state_config.fips)
 
@@ -877,10 +877,12 @@ def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
 
 
 def main(argv=None) -> int:
+	
+	logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+	
 	print("\n", "*"*20, "\nHazardous-waste proximity pipeline processing started")
 	logging.info('Hazardous-waste proximity pipeline processing started')
 
-	logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 	try:
 		cfg = get_config(argv)

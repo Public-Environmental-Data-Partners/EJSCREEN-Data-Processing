@@ -29,6 +29,73 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize, TwoSlopeNorm
 
 
+def _compute_score_summary(
+    df_joined: pd.DataFrame,
+    score_ejam: str,
+    score_new: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, int, float, float, float, float]:
+    before = len(df_joined)
+    dropped_rows = df_joined[df_joined[[score_ejam, score_new]].isna().any(axis=1)].copy()
+    df = df_joined.dropna(subset=[score_ejam, score_new]).copy()
+    dropped = before - len(df)
+
+    if dropped > 0:
+        dropped_rows['missing_score_ejam'] = dropped_rows[score_ejam].isna()
+        dropped_rows['missing_score_new'] = dropped_rows[score_new].isna()
+
+    diffs = (df[score_ejam] - df[score_new]).astype(float)
+    abs_diffs = diffs.abs()
+    mean_abs = float(abs_diffs.mean()) if len(abs_diffs) > 0 else float('nan')
+    median_abs = float(abs_diffs.median()) if len(abs_diffs) > 0 else float('nan')
+    rmse = float(np.sqrt(np.nanmean((df[score_ejam] - df[score_new]) ** 2))) if len(df) > 0 else float('nan')
+    try:
+        pearson = float(df[score_ejam].corr(df[score_new])) if len(df) > 1 else float('nan')
+    except Exception:
+        pearson = float('nan')
+
+    return df, dropped_rows, dropped, mean_abs, median_abs, rmse, pearson
+
+
+def _plot_scatter_panel(
+    ax: plt.Axes,
+    df_joined: pd.DataFrame,
+    score_ejam: str,
+    score_new: str,
+    title: str,
+    stats_fontsize: int = 9,
+) -> tuple[pd.DataFrame, pd.DataFrame, int, float, float, float, float]:
+    df, dropped_rows, dropped, mean_abs, median_abs, rmse, pearson = _compute_score_summary(
+        df_joined,
+        score_ejam,
+        score_new,
+    )
+
+    ax.scatter(df[score_ejam], df[score_new], alpha=0.6, s=20, edgecolors='none')
+    mins = np.nanmin([df[score_ejam].min(), df[score_new].min()]) if len(df) > 0 else 0
+    maxs = np.nanmax([df[score_ejam].max(), df[score_new].max()]) if len(df) > 0 else 1
+    pad = (maxs - mins) * 0.02 if maxs != mins else 0.5
+    ax.plot([mins - pad, maxs + pad], [mins - pad, maxs + pad], color='red', linestyle='--', linewidth=1)
+
+    ax.set_xlabel(score_ejam)
+    ax.set_ylabel(score_new)
+    ax.set_title(title)
+    ax.set_aspect('equal', adjustable='box')
+
+    stats_txt = textwrap.dedent(f"""
+        Matched rows: {len(df_joined)}\n
+        Rows used: {len(df)}\n
+        Dropped: {dropped}\n
+        Mean abs diff: {mean_abs:.6g}\n
+        Median abs diff: {median_abs:.6g}\n
+        RMSE: {rmse:.6g}\n
+        Pearson r: {pearson:.6g}
+    """)
+    props = dict(boxstyle='round', facecolor='white', alpha=0.8)
+    ax.text(0.02, 0.98, stats_txt, transform=ax.transAxes, fontsize=stats_fontsize, va='top', ha='left', bbox=props)
+
+    return df, dropped_rows, dropped, mean_abs, median_abs, rmse, pearson
+
+
 def read_csv_coerce(path: Path, id_col: str, score_col: str) -> pd.DataFrame:
     df = pd.read_csv(path, dtype=str)
     # Coerce id to string and strip
@@ -188,11 +255,15 @@ def plot_score_maps(
     score_norm = Normalize(vmin=0.0, vmax=score_scale_bound)
     diff_norm = TwoSlopeNorm(vmin=-diff_scale_bound, vcenter=0.0, vmax=diff_scale_bound)
 
-    fig = plt.figure(figsize=(14, 16))
-    grid = fig.add_gridspec(2, 2, height_ratios=[1, 1.1], hspace=0.12, wspace=0.04)
-    ax_ejam = fig.add_subplot(grid[0, 0])
-    ax_new = fig.add_subplot(grid[0, 1])
-    ax_diff = fig.add_subplot(grid[1, :])
+    fig = plt.figure(figsize=(15, 16), constrained_layout=True)
+    outer_grid = fig.add_gridspec(2, 1, height_ratios=[1, 1.12])
+    top_grid = outer_grid[0].subgridspec(1, 2, wspace=0.04)
+    bottom_grid = outer_grid[1].subgridspec(1, 3, width_ratios=[1, 1, 0.9], wspace=0.18)
+
+    ax_ejam = fig.add_subplot(top_grid[0, 0])
+    ax_new = fig.add_subplot(top_grid[0, 1])
+    ax_diff = fig.add_subplot(bottom_grid[0, :2])
+    ax_scatter = fig.add_subplot(bottom_grid[0, 2])
 
     _plot_map_panel(state_outline, bg_plot, score_ejam, 'Reds', score_norm, ax_ejam, f'EJAM score\nShared range: 0 to {score_scale_bound:.6g}')
     _plot_map_panel(state_outline, bg_plot, score_new, 'Reds', score_norm, ax_new, f'New score\nShared range: 0 to {score_scale_bound:.6g}')
@@ -200,10 +271,19 @@ def plot_score_maps(
         state_outline,
         bg_plot,
         SCORE_DIFF_COLUMN,
-        'RdBu_r',
+        'RdBu',
         diff_norm,
         ax_diff,
-        'Difference score (EJAM - new)\nRed: EJAM > new | Blue: EJAM < new | White: near zero',
+        'Difference score (EJAM - new)\nRed: new > EJAM | Blue: new < EJAM | White: near zero',
+    )
+
+    _plot_scatter_panel(
+        ax_scatter,
+        df_joined,
+        score_ejam,
+        score_new,
+        f'{score_ejam} vs {score_new}',
+        stats_fontsize=8,
     )
 
     score_colorbar = fig.colorbar(
@@ -215,7 +295,7 @@ def plot_score_maps(
     score_colorbar.set_label('Score value')
 
     diff_colorbar = fig.colorbar(
-        ScalarMappable(norm=diff_norm, cmap='RdBu_r'),
+        ScalarMappable(norm=diff_norm, cmap='RdBu'),
         ax=ax_diff,
         fraction=0.03,
         pad=0.02,
@@ -228,7 +308,6 @@ def plot_score_maps(
         fontsize=15,
         y=0.98,
     )
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
@@ -248,55 +327,14 @@ def summarize_and_plot(
     out_path: Path,
     title: str = None,
 ) -> None:
-    # Drop rows with NaN scores
-    before = len(df_joined)
-    dropped_rows = df_joined[df_joined[[score_ejam, score_new]].isna().any(axis=1)].copy()
-    df = df_joined.dropna(subset=[score_ejam, score_new]).copy()
-    after = len(df)
-    dropped = before - after
-
-    if dropped > 0:
-        dropped_rows['missing_score_ejam'] = dropped_rows[score_ejam].isna()
-        dropped_rows['missing_score_new'] = dropped_rows[score_new].isna()
-
-    diffs = (df[score_ejam] - df[score_new]).astype(float)
-    abs_diffs = diffs.abs()
-    mean_abs = float(abs_diffs.mean()) if len(abs_diffs) > 0 else float('nan')
-    median_abs = float(abs_diffs.median()) if len(abs_diffs) > 0 else float('nan')
-    rmse = float(np.sqrt(np.nanmean((df[score_ejam] - df[score_new]) ** 2))) if len(df) > 0 else float('nan')
-    # Pearson correlation
-    try:
-        if len(df) > 1:
-            pearson = float(df[score_ejam].corr(df[score_new]))
-        else:
-            pearson = float('nan')
-    except Exception:
-        pearson = float('nan')
-
-    # Create scatter plot
     fig, ax = plt.subplots(figsize=(7, 7))
-    ax.scatter(df[score_ejam], df[score_new], alpha=0.6, s=20, edgecolors='none')
-    # identity line
-    mins = np.nanmin([df[score_ejam].min(), df[score_new].min()]) if len(df) > 0 else 0
-    maxs = np.nanmax([df[score_ejam].max(), df[score_new].max()]) if len(df) > 0 else 1
-    pad = (maxs - mins) * 0.02 if maxs != mins else 0.5
-    ax.plot([mins - pad, maxs + pad], [mins - pad, maxs + pad], color='red', linestyle='--', linewidth=1)
-
-    ax.set_xlabel(score_ejam)
-    ax.set_ylabel(score_new)
-    ax.set_title(title or f"{score_ejam} vs {score_new}")
-    # Text box with stats
-    stats_txt = textwrap.dedent(f"""
-        Matched rows: {len(df_joined)}\n
-        Rows used (non-NaN both scores): {len(df)}\n
-        Dropped (NaN score): {dropped}\n
-        Mean abs diff: {mean_abs:.6g}\n
-        Median abs diff: {median_abs:.6g}\n
-        RMSE: {rmse:.6g}\n
-        Pearson r: {pearson:.6g}
-    """)
-    props = dict(boxstyle='round', facecolor='white', alpha=0.8)
-    ax.text(0.02, 0.98, stats_txt, transform=ax.transAxes, fontsize=9, va='top', ha='left', bbox=props)
+    df, dropped_rows, dropped, mean_abs, median_abs, rmse, pearson = _plot_scatter_panel(
+        ax,
+        df_joined,
+        score_ejam,
+        score_new,
+        title or f"{score_ejam} vs {score_new}",
+    )
 
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)

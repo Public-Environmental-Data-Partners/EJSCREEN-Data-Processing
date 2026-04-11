@@ -25,7 +25,8 @@ import geopandas as gpd
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import TwoSlopeNorm
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize, TwoSlopeNorm
 
 
 def read_csv_coerce(path: Path, id_col: str, score_col: str) -> pd.DataFrame:
@@ -97,13 +98,12 @@ def _read_block_groups_geodataframe(bg_path: Path) -> gpd.GeoDataFrame:
     raise RuntimeError(f'Failed to read block-group data from {bg_path}: {last_error}')
 
 
-def plot_difference_map(
+def _prepare_map_geodataframe(
     df_joined: pd.DataFrame,
     state: str,
-    out_path: Path,
     score_ejam: str,
     score_new: str,
-) -> None:
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, int, int, float, float]:
     state_config = get_state_config(state)
     tiger_bg_path = SCRIPTS_DIR / DEFAULT_TIGER_BG_FILENAME_TEMPLATE.format(fips=state_config.fips)
     if not tiger_bg_path.exists():
@@ -115,8 +115,7 @@ def plot_difference_map(
     if 'geometry' not in bg_gdf.columns:
         raise RuntimeError(f"Expected 'geometry' column in TIGER block-group data: {tiger_bg_path}")
 
-    map_df = df_joined[['matched_id', score_ejam, score_new]].dropna(subset=[score_ejam, score_new]).copy()
-    map_df[SCORE_DIFF_COLUMN] = (map_df[score_ejam] - map_df[score_new]).astype(float)
+    map_df = df_joined[['matched_id', score_ejam, score_new, SCORE_DIFF_COLUMN]].copy()
     map_df['matched_id'] = map_df['matched_id'].astype(str).str.strip()
 
     duplicate_geoids = map_df['matched_id'][map_df['matched_id'].duplicated()].unique().tolist()
@@ -129,44 +128,115 @@ def plot_difference_map(
     bg_plot = bg_gdf.copy()
     bg_plot[BG_GEOID_COLUMN] = bg_plot[BG_GEOID_COLUMN].astype(str).str.strip()
     bg_plot = bg_plot.merge(
-        map_df[['matched_id', SCORE_DIFF_COLUMN]],
+        map_df[['matched_id', score_ejam, score_new, SCORE_DIFF_COLUMN]],
         left_on=BG_GEOID_COLUMN,
         right_on='matched_id',
         how='left',
     )
+    state_outline = bg_gdf.dissolve()
 
-    matched_polygons = int(bg_plot[SCORE_DIFF_COLUMN].notna().sum())
+    matched_polygons = int(bg_plot[[score_ejam, score_new]].notna().any(axis=1).sum())
     missing_polygons = int(bg_plot[SCORE_DIFF_COLUMN].isna().sum())
-    max_abs = float(np.nanmax(np.abs(map_df[SCORE_DIFF_COLUMN]))) if len(map_df) > 0 else 0.0
-    scale_bound = max_abs if max_abs > 0 else 1.0
-    norm = TwoSlopeNorm(vmin=-scale_bound, vcenter=0.0, vmax=scale_bound)
+    score_values = pd.concat([map_df[score_ejam], map_df[score_new]], ignore_index=True).dropna()
+    diff_values = map_df[SCORE_DIFF_COLUMN].dropna()
+    score_scale_max = float(score_values.max()) if not score_values.empty else 0.0
+    diff_max_abs = float(diff_values.abs().max()) if not diff_values.empty else 0.0
 
-    fig, ax = plt.subplots(figsize=(10, 10))
+    return state_outline, bg_plot, matched_polygons, missing_polygons, score_scale_max, diff_max_abs
+
+
+def _plot_map_panel(
+    state_outline: gpd.GeoDataFrame,
+    bg_plot: gpd.GeoDataFrame,
+    column_name: str,
+    cmap: str,
+    norm: Normalize | TwoSlopeNorm,
+    ax: plt.Axes,
+    title: str,
+) -> None:
     bg_plot.plot(
-        column=SCORE_DIFF_COLUMN,
-        cmap='RdBu',
+        column=column_name,
+        cmap=cmap,
         norm=norm,
         linewidth=0.05,
-        edgecolor='none',
-        legend=True,
-        missing_kwds={'color': '#7f7f7f', 'label': 'No matched score'},
+        edgecolor='#b8b8b8',
+        legend=False,
+        missing_kwds={'color': '#b3b3b3'},
         ax=ax,
     )
-    ax.set_title(
-        f'{state}: EJAM minus new score by block group\n'
-        'Blue: EJAM > new | Red: EJAM < new | Gray: missing score'
-    )
+    state_outline.boundary.plot(ax=ax, color='#4a4a4a', linewidth=0.5)
+    ax.set_title(title)
     ax.set_axis_off()
-    if len(fig.axes) > 1:
-        fig.axes[1].set_ylabel('Score difference (EJAM - new)')
-    fig.tight_layout()
+
+
+def plot_score_maps(
+    df_joined: pd.DataFrame,
+    state: str,
+    out_path: Path,
+    score_ejam: str,
+    score_new: str,
+) -> None:
+    state_outline, bg_plot, matched_polygons, missing_polygons, score_scale_max, diff_max_abs = _prepare_map_geodataframe(
+        df_joined,
+        state,
+        score_ejam,
+        score_new,
+    )
+
+    score_scale_bound = score_scale_max if score_scale_max > 0 else 1.0
+    diff_scale_bound = diff_max_abs if diff_max_abs > 0 else 1.0
+    score_norm = Normalize(vmin=0.0, vmax=score_scale_bound)
+    diff_norm = TwoSlopeNorm(vmin=-diff_scale_bound, vcenter=0.0, vmax=diff_scale_bound)
+
+    fig = plt.figure(figsize=(14, 16))
+    grid = fig.add_gridspec(2, 2, height_ratios=[1, 1.1], hspace=0.12, wspace=0.04)
+    ax_ejam = fig.add_subplot(grid[0, 0])
+    ax_new = fig.add_subplot(grid[0, 1])
+    ax_diff = fig.add_subplot(grid[1, :])
+
+    _plot_map_panel(state_outline, bg_plot, score_ejam, 'Reds', score_norm, ax_ejam, f'EJAM score\nShared range: 0 to {score_scale_bound:.6g}')
+    _plot_map_panel(state_outline, bg_plot, score_new, 'Reds', score_norm, ax_new, f'New score\nShared range: 0 to {score_scale_bound:.6g}')
+    _plot_map_panel(
+        state_outline,
+        bg_plot,
+        SCORE_DIFF_COLUMN,
+        'RdBu_r',
+        diff_norm,
+        ax_diff,
+        'Difference score (EJAM - new)\nRed: EJAM > new | Blue: EJAM < new | White: near zero',
+    )
+
+    score_colorbar = fig.colorbar(
+        ScalarMappable(norm=score_norm, cmap='Reds'),
+        ax=[ax_ejam, ax_new],
+        fraction=0.03,
+        pad=0.02,
+    )
+    score_colorbar.set_label('Score value')
+
+    diff_colorbar = fig.colorbar(
+        ScalarMappable(norm=diff_norm, cmap='RdBu_r'),
+        ax=ax_diff,
+        fraction=0.03,
+        pad=0.02,
+    )
+    diff_colorbar.set_label('Score difference (EJAM - new)')
+
+    fig.suptitle(
+        f'{state}: Block-group score comparison\n'
+        'Gray indicates missing score data',
+        fontsize=15,
+        y=0.98,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
 
-    print(f'Map matched block groups: {len(map_df)}')
+    print(f'Map matched block groups: {len(df_joined)}')
     print(f'Map polygons with matched score: {matched_polygons}; polygons without matched score: {missing_polygons}')
-    print(f'Map symmetric color scale: {-scale_bound:.6g} to {scale_bound:.6g}')
+    print(f'Shared EJAM/new color scale: 0 to {score_scale_bound:.6g}')
+    print(f'Difference color scale: {-diff_scale_bound:.6g} to {diff_scale_bound:.6g}')
     print(f'Map written to: {out_path}')
 
 
@@ -278,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
     path_ejam = Path(args.file_ejam or f'./output/{state}/ejam_superfund_subset.csv')
     path_b = Path(args.file_b or f'../../superfund/pipeline/test_data/{state}/final_bg_scores.csv')
     out_path = Path(args.out or f'./output/{state}/compare_ejam_superfund_subset_vs_final_bg_scores_{state}.png')
-    map_out_path = out_path.parent / f'{state}_map_ejam_minus_new.png'
+    map_out_path = out_path.parent / f'{state}_map_ejam_new_diff.png'
 
     # Read inputs
     try:
@@ -338,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Create plot and summary
     summarize_and_plot(df_joined, 'matched_id', args.score_ejam, args.score_new, out_path, title=f"{state}: Compare {args.score_ejam} vs {args.score_new}")
-    plot_difference_map(df_joined, state, map_out_path, args.score_ejam, args.score_new)
+    plot_score_maps(df_joined, state, map_out_path, args.score_ejam, args.score_new)
 
     if len(df_joined) < args.min_matched:
         print(f"Fewer than {args.min_matched} matched rows ({len(df_joined)}). Exiting with code 3.")

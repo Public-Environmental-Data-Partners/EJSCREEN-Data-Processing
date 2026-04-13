@@ -78,9 +78,10 @@ except ImportError:
 
 DEFAULT_LOCAL_PIPELINE_PATH = './pipeline/'
 DEFAULT_S3_PIPELINE_PATH = 's3://pedp-data-preserved/ejscreen-data-processing/hazardous_waste/pipeline/'
-DEFAULT_SHARED_LOCAL_DOWNLOADS_PATH = '../superfund/pipeline/'
+DEFAULT_SHARED_LOCAL_PIPELINE_PATH = '../shared/pipeline/'
+DEFAULT_SHARED_S3_PIPELINE_PATH = 's3://pedp-data-preserved/ejscreen-data-processing/shared/pipeline/'
 DEFAULT_HAZARDOUS_WASTE_SITES_FILENAME = 'outputs/hazardous_waste_filtered.csv'
-DEFAULT_BLOCK_GROUPS_FILENAME_TEMPLATE = 'downloads/tl_2020_{fips}_bg.zip'
+DEFAULT_BLOCK_GROUPS_FILENAME_TEMPLATE = 'downloads/tiger_lines/2020/bg/tl_2020_{fips}_bg.zip'
 DEFAULT_CENSUS_BLOCKS_FILENAME_TEMPLATE = 'downloads/census_block_weights_2020/census_block_weights_2020_{postal}.csv'
 DEFAULT_TARGETED_BLOCK_GROUPS_FILENAME = 'targeted_block_groups.csv'
 DEFAULT_BLOCK_SITE_DISTANCES_FILENAME = 'block_site_distances.csv'
@@ -347,7 +348,7 @@ def resolve_pipeline_paths(cfg: Config) -> ResolvedPaths:
 		DEFAULT_HAZARDOUS_WASTE_SITES_FILENAME,
 	)
 	shared_downloads_input_path = (
-		cfg.input_path if is_s3_uri(cfg.input_path) else DEFAULT_SHARED_LOCAL_DOWNLOADS_PATH
+		DEFAULT_SHARED_S3_PIPELINE_PATH if is_s3_uri(cfg.input_path) else DEFAULT_SHARED_LOCAL_PIPELINE_PATH
 	)
 	block_groups_path = cfg.block_groups_path or join_path_and_file(
 		shared_downloads_input_path,

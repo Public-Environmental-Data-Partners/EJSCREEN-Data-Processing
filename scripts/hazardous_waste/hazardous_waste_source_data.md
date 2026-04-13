@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-02
 **Indicator:** Hazardous Waste Proximity (TSDF & LQG)
-**Target Version:** EJScreen compatibility rebuild
+**Target Version:** EJScreen compatibility rebuild (post Straw version)
 
 ---
 

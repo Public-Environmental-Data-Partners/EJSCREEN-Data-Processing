@@ -20,6 +20,7 @@ STATE_CONFIG_PATH = SCRIPT_DIR / 'state_config.json'
 PROCESS_NAME = 'fetch_tiger_lines_bg'
 DEFAULT_LOG_FILENAME = 'fetch_tiger_lines_bg.log'
 DEFAULT_AUDIT_FILENAME = 'fetch_audit.csv'
+PROGRESS_PRINT_EVERY = 5
 AUDIT_FIELDNAMES = (
 	'process_name',
 	'run_id',
@@ -419,8 +420,9 @@ def main(argv=None) -> int:
 	total_downloaded_bytes = 0
 	skipped_file_count = 0
 	completed_download_count = 0
+	total_target_count = len(state_targets)
 	with requests.Session() as session:
-		for state_target in state_targets:
+		for index, state_target in enumerate(state_targets, start=1):
 			dl_started_at = datetime.now().astimezone().isoformat(timespec='seconds')
 			source_url, destination_path, filename = build_download_details(cfg, state_target)
 			try:
@@ -469,6 +471,11 @@ def main(argv=None) -> int:
 			else:
 				completed_download_count += 1
 			total_downloaded_bytes += result.bytes_downloaded
+			if index % PROGRESS_PRINT_EVERY == 0 or index == total_target_count:
+				print(
+					f'Proof of life: processed {index} of {total_target_count} files '
+					f'(uploaded={completed_download_count}, skipped={skipped_file_count})'
+				)
 
 	logging.info('Skipped %s files because they already existed.', skipped_file_count)
 	logging.info('Completed %s TIGER downloads (%s total bytes).', completed_download_count, total_downloaded_bytes)

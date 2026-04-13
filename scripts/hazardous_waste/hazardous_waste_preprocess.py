@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 import argparse
 import csv
@@ -1393,10 +1394,11 @@ def configure_logging() -> str:
 		level=logging.INFO,
 		format="%(levelname)s: %(message)s",
 		handlers=[
-			logging.FileHandler(log_path, mode="w", encoding="utf-8"),
+			logging.FileHandler(log_path, mode="a", encoding="utf-8"),
 		],
 		force=True,
 	)
+	logging.info("========== Log session started %s ==========", datetime.now().astimezone().isoformat(timespec='seconds'))
 	return str(log_path)
 
 

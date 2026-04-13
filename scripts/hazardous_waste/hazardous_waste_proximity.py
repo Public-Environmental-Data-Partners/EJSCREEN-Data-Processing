@@ -29,6 +29,7 @@ Credits:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 import argparse
 import importlib
@@ -384,6 +385,33 @@ def _require_columns(df: pd.DataFrame, required_columns: tuple[str, ...], descri
 		raise RuntimeError(f'{description} is missing required columns: {", ".join(missing_columns)}')
 
 
+def _prepare_block_population_columns(blocks_df: pd.DataFrame) -> pd.DataFrame:
+	prepared = blocks_df.copy()
+	prepared['block_group_geoid'] = prepared['block_group_geoid'].astype('string').str.strip()
+	prepared['block_geoid'] = prepared['block_geoid'].astype('string').str.strip()
+	prepared['block_group_pop'] = pd.to_numeric(prepared['block_group_pop'], errors='raise')
+	prepared['fraction_of_total'] = pd.to_numeric(prepared['fraction_of_total'], errors='raise')
+	return prepared
+
+
+def _build_block_group_population_table(blocks_df: pd.DataFrame) -> pd.DataFrame:
+	group_population = blocks_df[['block_group_geoid', 'block_group_pop']].copy()
+	group_population = group_population[
+		group_population['block_group_geoid'].notna() & group_population['block_group_geoid'].ne('')
+	]
+
+	population_variants = group_population.groupby('block_group_geoid', dropna=True)['block_group_pop'].nunique()
+	inconsistent_groups = population_variants[population_variants > 1]
+	if not inconsistent_groups.empty:
+		sample_groups = ', '.join(inconsistent_groups.index.astype(str).tolist()[:5])
+		raise RuntimeError(
+			'Blocks GeoDataFrame has inconsistent block_group_pop values within block groups: '
+			f'{sample_groups}'
+		)
+
+	return group_population.drop_duplicates(subset=['block_group_geoid']).reset_index(drop=True)
+
+
 def apply_metric_projection(
 	description: str,
 	input_proj: gpd.GeoDataFrame,
@@ -418,10 +446,11 @@ def configure_logging() -> str:
 		level=logging.INFO,
 		format='%(levelname)s: %(message)s',
 		handlers=[
-			logging.FileHandler(log_path, mode='w', encoding='utf-8'),
+			logging.FileHandler(log_path, mode='a', encoding='utf-8'),
 		],
 		force=True,
 	)
+	logging.info('========== Log session started %s ==========', datetime.now().astimezone().isoformat(timespec='seconds'))
 	return str(log_path)
 
 
@@ -664,6 +693,33 @@ def step2_block_site_distances(
 	targeted_df[HAZARDOUS_WASTE_HANDLER_ID_COLUMN] = (
 		targeted_df[HAZARDOUS_WASTE_HANDLER_ID_COLUMN].astype(str).str.strip()
 	)
+	targeted_df['GEOID_BG'] = targeted_df['GEOID_BG'].astype(str).str.strip()
+	blocks_df = pd.DataFrame(blocks_gdf.drop(columns='geometry', errors='ignore')).copy()
+	_require_columns(
+		blocks_df,
+		('block_geoid', 'block_group_geoid', 'block_group_pop', 'fraction_of_total'),
+		'Blocks GeoDataFrame',
+	)
+	blocks_df = _prepare_block_population_columns(blocks_df)
+	block_group_population = _build_block_group_population_table(blocks_df)
+	zero_population_bgs = set(
+		block_group_population.loc[
+			block_group_population['block_group_pop'] <= 0,
+			'block_group_geoid',
+		].astype(str)
+	)
+	zero_population_pairs = int(targeted_df['GEOID_BG'].isin(zero_population_bgs).sum())
+	if zero_population_pairs:
+		logging.info(
+			'Step2 skipping %d targeted block-group/site pairs because block_group_pop is zero',
+			zero_population_pairs,
+		)
+		targeted_df = targeted_df[~targeted_df['GEOID_BG'].isin(zero_population_bgs)].copy()
+
+	if targeted_df.empty:
+		logging.info('All targeted block groups have zero population; Step 2 will return no distance records')
+		return pd.DataFrame(columns=['GEOID_BLOCK', HAZARDOUS_WASTE_HANDLER_ID_COLUMN, 'distance_m'])
+
 	targeted_pair_count = len(targeted_df)
 	unique_targeted_handlers = targeted_df[HAZARDOUS_WASTE_HANDLER_ID_COLUMN].astype(str).nunique()
 	unique_targeted_bgs = targeted_df['GEOID_BG'].astype(str).nunique()
@@ -810,7 +866,11 @@ def step4_population_weighting_aggregation(
 		raise RuntimeError("Expected 'proximity_score' column in distances DataFrame")
 
 	blocks_df = pd.DataFrame(blocks_gdf.drop(columns='geometry', errors='ignore')).copy()
-	_require_columns(blocks_df, ('block_geoid', 'block_group_geoid', 'fraction_of_total'), 'Blocks GeoDataFrame')
+	_require_columns(
+		blocks_df,
+		('block_geoid', 'block_group_geoid', 'block_group_pop', 'fraction_of_total'),
+		'Blocks GeoDataFrame',
+	)
 
 	distances_with_scores_df = distances_with_scores_df.copy()
 	distances_with_scores_df['proximity_score'] = pd.to_numeric(
@@ -818,15 +878,10 @@ def step4_population_weighting_aggregation(
 		errors='coerce',
 	)
 
-	blocks_df['fraction_of_total'] = pd.to_numeric(blocks_df['fraction_of_total'], errors='raise')
-	blocks_df['block_geoid'] = blocks_df['block_geoid'].astype('string').str.strip()
-	blocks_df['block_group_geoid'] = blocks_df['block_group_geoid'].astype('string').str.strip()
+	blocks_df = _prepare_block_population_columns(blocks_df)
+	block_group_population = _build_block_group_population_table(blocks_df)
 
-	all_block_groups = blocks_df[['block_group_geoid']].copy()
-	all_block_groups['block_group_geoid'] = all_block_groups['block_group_geoid'].astype('string').str.strip()
-	all_block_groups = all_block_groups[
-		all_block_groups['block_group_geoid'].notna() & all_block_groups['block_group_geoid'].ne('')
-	].drop_duplicates().reset_index(drop=True)
+	all_block_groups = block_group_population.copy()
 	logging.info('Prepared %d block groups from blocks source for final output universe', len(all_block_groups))
 
 	merged = distances_with_scores_df.merge(
@@ -843,7 +898,10 @@ def step4_population_weighting_aggregation(
 	agg_targeted['weighted_score'] = agg_targeted['weighted_score'].round(4)
 
 	agg = all_block_groups.merge(agg_targeted, on='block_group_geoid', how='left')
-	agg['weighted_score'] = agg['weighted_score'].fillna(0.0)
+	positive_population_mask = agg['block_group_pop'] > 0
+	agg.loc[positive_population_mask, 'weighted_score'] = (
+		agg.loc[positive_population_mask, 'weighted_score'].fillna(0.0)
+	)
 
 	if output_path:
 		logging.info(

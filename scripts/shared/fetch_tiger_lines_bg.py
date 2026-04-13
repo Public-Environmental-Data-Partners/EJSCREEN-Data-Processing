@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 import argparse
 import importlib
@@ -14,6 +15,7 @@ import requests
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_FILE_PATH = SCRIPT_DIR / 'fetch_tiger_lines_bg_config.json'
 STATE_CONFIG_PATH = SCRIPT_DIR / 'state_config.json'
+DEFAULT_LOG_FILENAME = 'fetch_tiger_lines_bg.log'
 # what data do we need from our state config file?
 REQUIRED_STATE_FIELDS = ('fips', 'postal', 'name')
 # what's a minimal set of files we expect in each ZIP (shapefile) archive?
@@ -97,6 +99,21 @@ def load_fsspec_module():
 	return importlib.import_module('fsspec')
 
 
+def configure_logging() -> str:
+	log_path = SCRIPT_DIR / DEFAULT_LOG_FILENAME
+	log_path.parent.mkdir(parents=True, exist_ok=True)
+	logging.basicConfig(
+		level=logging.INFO,
+		format='%(levelname)s: %(message)s',
+		handlers=[
+			logging.FileHandler(log_path, mode='a', encoding='utf-8'),
+		],
+		force=True,
+	)
+	logging.info('========== Log session started %s ==========', datetime.now().astimezone().isoformat(timespec='seconds'))
+	return str(log_path)
+
+
 def is_s3_uri(path: str) -> bool:
 	return isinstance(path, str) and path.lower().startswith('s3://')
 
@@ -110,6 +127,13 @@ def join_root_and_relative_path(root_path: str, relative_path: str) -> str:
 def ensure_local_parent_dir(path: str) -> None:
 	if not is_s3_uri(path):
 		Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+
+def path_exists(path: str) -> bool:
+	if is_s3_uri(path):
+		fsspec = load_fsspec_module()
+		return bool(fsspec.open(path).fs.exists(path))
+	return Path(path).exists()
 
 
 def open_binary_output_stream(path: str):
@@ -243,17 +267,21 @@ def download_state_tiger_zip(session: requests.Session, cfg: Config, state_targe
 	target_relative_path = build_target_relative_path(cfg, state_target)
 	destination_path = join_root_and_relative_path(get_active_root_path(cfg), target_relative_path)
 	filename = Path(target_relative_path).name
+	if path_exists(destination_path):
+		logging.info('Skipping download for %s because destination already exists: %s', filename, destination_path)
+		return destination_path, 0, True
 
 	logging.info('Downloading %s (%s) from %s', state_target.postal, state_target.fips, source_url)
 	temp_path, total_bytes = download_to_temp_file(session, source_url, cfg)
 	try:
 		validate_tiger_zip(temp_path, filename)
+		logging.info('Validation OK for %s', filename)
 		write_temp_file_to_destination(temp_path, destination_path, cfg)
 	finally:
 		temp_path.unlink(missing_ok=True)
 
 	logging.info('Wrote %s bytes to %s', total_bytes, destination_path)
-	return destination_path, total_bytes
+	return destination_path, total_bytes, False
 
 
 def log_runtime_context(cfg: Config, state_targets: list[StateDownloadTarget]) -> None:
@@ -269,19 +297,27 @@ def log_runtime_context(cfg: Config, state_targets: list[StateDownloadTarget]) -
 
 
 def main(argv=None) -> int:
-	logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+	log_path = configure_logging()
 	cfg = get_config(argv)
+	logging.info('Logging to %s', log_path)
 	initialize_runtime_dependencies(cfg)
 	state_targets = select_state_targets(cfg, load_state_targets())
 	log_runtime_context(cfg, state_targets)
 
 	total_downloaded_bytes = 0
+	skipped_file_count = 0
+	completed_download_count = 0
 	with requests.Session() as session:
 		for state_target in state_targets:
-			_, downloaded_bytes = download_state_tiger_zip(session, cfg, state_target)
+			_, downloaded_bytes, was_skipped = download_state_tiger_zip(session, cfg, state_target)
+			if was_skipped:
+				skipped_file_count += 1
+			else:
+				completed_download_count += 1
 			total_downloaded_bytes += downloaded_bytes
 
-	logging.info('Completed %s TIGER downloads (%s total bytes).', len(state_targets), total_downloaded_bytes)
+	logging.info('Skipped %s files because they already existed.', skipped_file_count)
+	logging.info('Completed %s TIGER downloads (%s total bytes).', completed_download_count, total_downloaded_bytes)
 	return 0
 
 

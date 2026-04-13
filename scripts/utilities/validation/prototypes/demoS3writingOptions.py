@@ -1,31 +1,20 @@
 #!/usr/bin/env python3
 """
-demoS3writingOptions.py
+Prototype script showing three ways to write a local file to S3.
 
-Purpose:
-  Small demonstrator script that validates AWS credentials and demonstrates three
-  ways to write a local file to S3:
-    1) copy the local file to S3 using boto3.upload_file (efficient direct transfer)
-    2) read the entire file into memory and write to S3 with put_object
-    3) stream the file to S3 line-by-line using upload_fileobj with a file-like
-       wrapper (memory-efficient)
+This script validates AWS credentials and then uploads one hard-coded local CSV
+to S3 three different ways: direct `upload_file`, in-memory `put_object`, and
+streaming `upload_fileobj` using a lightweight file-like wrapper.
 
-Usage:
-  Edit the hard-coded LOCAL_PATH and S3_PREFIX values near the top of the file
-  or create a small CSV named `testS3write.csv` in the repository root and run:
+Runtime arguments:
+    None. Edit the hard-coded `LOCAL_PATH` and `S3_PREFIX` values near the top of
+    the file before running it.
 
-    python demoS3writingOptions.py
-
-Dependencies:
-  - boto3
-  - botocore
-  - python-dotenv (optional, for loading .env)
-  - S3 authentication values available via environment variables or a .env file
-    AWS_ACCESS_KEY_ID=<your id>
-    AWS_SECRET_ACCESS_KEY=<your secret>
-
-Author / Credit:
-  Code written by GitHub Copilot (coding assistance) under the direction of Anne Gunn.
+Notes:
+    - Intended as an educational S3-writing example for validation work.
+    - Requires boto3/botocore and usable AWS credentials from the environment or
+        a `.env` file.
+    - Not intended as a reusable production utility.
 """
 
 from pathlib import Path
@@ -36,7 +25,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- configuration (edit as needed) ---------------------------------------
-LOCAL_PATH = './test_files/testS3write.csv'  # user-provided test data file
+LOCAL_PATH = './output/testS3write.csv'  # user-provided test data file
 S3_PREFIX = 's3://pedp-data-preserved/ejscreen-data-processing/traffic/test/'
 # We'll endup uploading/writing three objects:
 # testS3write1.csv, testS3write2.csv, testS3write3.csv

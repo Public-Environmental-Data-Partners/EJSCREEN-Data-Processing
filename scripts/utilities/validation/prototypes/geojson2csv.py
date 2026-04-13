@@ -1,48 +1,22 @@
 """
-geojson2csv.py
+Prototype utility to flatten a state-level GeoJSON FeatureCollection into CSV.
 
-Purpose:
-  Read a GeoJSON FeatureCollection for a single US state and extract feature
-  properties into a compact CSV (geometry is ignored). Supports local
-  filesystem and S3 I/O.
+This script reads a per-state `bg_summary.geojson`, extracts only feature
+properties, and writes a `bg_summary.csv` with geometry removed. It supports
+either local paths or S3 URIs and follows the validation folder convention of
+reading from and writing to `{path}/{STATE}/...`.
 
-Features:
-  - Load GeoJSON from local path or S3 URI (s3://bucket/prefix/).
-  - Extract only the feature 'properties' into a pandas DataFrame.
-  - Write the result as a CSV to local filesystem or upload to S3.
-  - Uses a per-state folder convention: read input from {path}/{STATE}/bg_summary.geojson
-    and write output to {path}/{STATE}/bg_summary.csv by default.
+Runtime arguments:
+    --state / --state-code  Required two-letter state code, used to select the
+                                                    state subfolder under `--path`.
+    -p / --path             Base local folder or S3 prefix.
+    -n / --number_rows      Optional output row limit; `<= 0` means no limit.
+    --dry-run               Print what would be done without writing output.
 
-Usage examples:
-  # REQUIRED: specify --state
-  python geojson2csv.py --state RI -p ./scripts/utilities/validation/test_files/
-  python geojson2csv.py --state RI -p s3://my-bucket/prefix/ --dry-run
-
-Runtime parameters:
-  --state / --state-code  REQUIRED. Two-letter state short code (e.g. RI). The
-                          value will be upper-cased and used to form the per-state
-                          folder under the configured `--path`.
-  -p / --path             S3 prefix or local folder. Files are read/written under
-                          `{path}/{STATE}/`.
-  -n / --number_rows      Optional limit on rows to write; <=0 means no limit.
-  --dry-run               If set, do not write files; print what would be done.
-
-Defaults (code-level):
-  - input:  {path}/{STATE}/bg_summary.geojson
-  - output: {path}/{STATE}/bg_summary.csv
-  - path default: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
-
-Outputs:
-  - CSV: bg_summary.csv (feature properties) written to {path}/{STATE}/
-
-Dependencies:
-  - Python 3.8+
-  - pandas
-  - boto3 (if reading/writing S3)
-  - python-dotenv (optional, for loading AWS creds from a .env file)
-
-Credits:
-  Code written by Anne Gunn with help from EmmaLi, GitHub Copilot, and Gemini.
+Notes:
+    - Default input is `{path}/{STATE}/bg_summary.geojson`.
+    - Default output is `{path}/{STATE}/bg_summary.csv`.
+    - This is prototype/validation code, not a production pipeline entry point.
 """
 
 import argparse
@@ -64,7 +38,7 @@ class Config:
     number_rows: int = 0  # <=0 means no limit
     dry_run: bool = False
     path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
-    #path: str = "./test_files/"
+    #path: str = "./output/"
 
 
 def get_config(argv=None) -> Config:

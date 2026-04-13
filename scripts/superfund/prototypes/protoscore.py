@@ -14,17 +14,43 @@ This file is intentionally minimal and hard-wired for rapid prototyping.
 """
 
 # Standard imports
+import importlib
 import logging
 from pathlib import Path
+import sys
 
 import fiona
 import geopandas as gpd
 import pandas as pd
 
+SCRIPTS_DIR = Path(__file__).resolve().parents[2]
+SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
+
+
+def _load_shared_state_config_symbols():
+    if not SHARED_STATE_CONFIG_MODULE_PATH.exists():
+        raise ImportError(f'Shared state_config.py not found: {SHARED_STATE_CONFIG_MODULE_PATH}')
+
+    module_spec = importlib.util.spec_from_file_location(
+        'shared_state_config',
+        SHARED_STATE_CONFIG_MODULE_PATH,
+    )
+    if module_spec is None or module_spec.loader is None:
+        raise ImportError(f'Unable to load module spec from {SHARED_STATE_CONFIG_MODULE_PATH}')
+
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[module_spec.name] = module
+    module_spec.loader.exec_module(module)
+    return module.get_state_config, module.validate_metric_target_crs
+
+
 try:
-    from .state_config import get_state_config, validate_metric_target_crs
+    from ...shared.state_config import get_state_config, validate_metric_target_crs
 except ImportError:
-    from state_config import get_state_config, validate_metric_target_crs
+    try:
+        from shared.state_config import get_state_config, validate_metric_target_crs
+    except ImportError:
+        get_state_config, validate_metric_target_crs = _load_shared_state_config_symbols()
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
@@ -42,7 +68,7 @@ BLOCKS_CSV_REQUIRED_COLUMNS = (
     'fraction_of_total',
 )
 
-CURRENT_STATE = 'VT'  # <-- set to the state you want to run the prototype on (must be in state_config.json)
+CURRENT_STATE = 'VT'  # <-- set to the state you want to run the prototype on (must be in shared/state_config.json)
 
 def _get_current_state_settings():
     state_config = get_state_config(CURRENT_STATE)

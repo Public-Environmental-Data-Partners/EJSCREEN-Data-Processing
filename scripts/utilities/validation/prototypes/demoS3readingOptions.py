@@ -1,32 +1,20 @@
 #!/usr/bin/env python3
 """
-demoS3readingOptions.py
+Prototype script showing three ways to inspect a file stored in S3.
 
-Purpose:
-  Small demonstrator script that validates AWS credentials and
-    - copies a GeoJSON file from S3 to a local path.
-    - reads the entire object into memory and prints the first/last lines
-    - streams the object line-by-line (memory-efficient) and prints first/last lines
+This script validates AWS credentials, downloads a hard-coded S3 object to a
+local file, previews the object by reading it fully into memory, and then
+previews it again by streaming line-by-line from S3.
 
-Usage:
-  Run the script directly. It expects AWS credentials available via environment
-  variables or a .env file in the working directory (the script calls load_dotenv()).
-
-Dependencies:
-  - boto3 (for S3/STS access)
-  - botocore
-  - python-dotenv (optional, for loading .env)
-  - S3 authentication values available via environment variables or a .env file
-    AWS_ACCESS_KEY_ID=<your id>
-    AWS_SECRET_ACCESS_KEY=<your secret>
-
-Author / Credit:
-  Code written by GitHub Copilot (coding assistance) under the direction of Anne Gunn.
+Runtime arguments:
+    None. Edit the hard-coded `S3_URI` and `DEST_PATH` values near the top of the
+    file before running it.
 
 Notes:
-  This file is intentionally minimal and educational. The S3 URI and local
-  destination are hard-coded near the top of the file for convenience; edit
-  them as needed.
+    - Intended as an educational S3-reading example for validation work.
+    - Requires boto3/botocore and usable AWS credentials from the environment or
+        a `.env` file.
+    - Not intended as a reusable production utility.
 """
 
 from pathlib import Path
@@ -40,7 +28,7 @@ load_dotenv()
 # --- configuration (hard-coded for simplicity) -----------------------------
 # S3 URI to download and local destination path. Edit these values as needed.
 S3_URI = 's3://pedp-data-preserved/ejscreen-data-processing/traffic/ri_bg_summary.geojson'
-DEST_PATH = './test_files/ri_bg_summary.geojson'
+DEST_PATH = './output/ri_bg_summary.geojson'
 
 
 try:

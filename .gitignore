@@ -27,6 +27,12 @@ scripts/superfund/pipeline
 test.out
 *.csv
 *.zip
+*.png
+*.log
+*.txt
+*.json
+*.geojson
+*.xlsx
 
 # Dev-specific experiments, temp tools, and old
 # files kept for diffing

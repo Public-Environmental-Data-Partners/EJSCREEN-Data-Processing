@@ -119,7 +119,7 @@ def _resolve_scripts_dir() -> Path:
 
 SCRIPTS_DIR = _resolve_scripts_dir()
 SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
-DEFAULT_TIGER_BG_FILENAME_TEMPLATE = 'superfund/pipeline/downloads/tl_2020_{fips}_bg.zip'
+DEFAULT_TIGER_BG_FILENAME_TEMPLATE = 'shared/pipeline/downloads/tiger_lines/2020/bg/tl_2020_{fips}_bg.zip'
 BG_GEOID_COLUMN = 'GEOID'
 SCORE_DIFF_COLUMN = 'score_diff'
 

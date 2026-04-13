@@ -89,7 +89,7 @@ except ImportError:
 DEFAULT_LOCAL_PIPELINE_PATH = './pipeline/'
 DEFAULT_S3_PIPELINE_PATH = 's3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/'
 DEFAULT_NPL_BOUNDARIES_FILENAME = 'downloads/NPL_Boundaries_20260217/NPL_Boundaries.gdb'
-DEFAULT_BLOCK_GROUPS_FILENAME_TEMPLATE = 'downloads/tl_2020_{fips}_bg.zip'
+DEFAULT_BLOCK_GROUPS_FILENAME_TEMPLATE = 'downloads/tiger_lines/2020/bg/tl_2020_{fips}_bg.zip'
 DEFAULT_CENSUS_BLOCKS_FILENAME_TEMPLATE = 'downloads/census_block_weights_2020/census_block_weights_2020_{postal}.csv'
 DEFAULT_TARGETED_BLOCK_GROUPS_FILENAME = 'targeted_block_groups.csv'
 DEFAULT_BLOCK_SITE_DISTANCES_FILENAME = 'block_site_distances.csv'

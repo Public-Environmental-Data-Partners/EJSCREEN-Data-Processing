@@ -1,3 +1,4 @@
+import csv
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -7,6 +8,7 @@ import json
 import logging
 import shutil
 import tempfile
+import uuid
 import zipfile
 
 import requests
@@ -15,7 +17,23 @@ import requests
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_FILE_PATH = SCRIPT_DIR / 'fetch_tiger_lines_bg_config.json'
 STATE_CONFIG_PATH = SCRIPT_DIR / 'state_config.json'
+PROCESS_NAME = 'fetch_tiger_lines_bg'
 DEFAULT_LOG_FILENAME = 'fetch_tiger_lines_bg.log'
+DEFAULT_AUDIT_FILENAME = 'fetch_audit.csv'
+AUDIT_FIELDNAMES = (
+	'process_name',
+	'run_id',
+	'dl_started_at',
+	'dl_ended_at',
+	'filename',
+	'state',
+	'destination_path',
+	'storage_mode',
+	'status',
+	'source_url',
+	'bytes_downloaded',
+	'message',
+)
 # what data do we need from our state config file?
 REQUIRED_STATE_FIELDS = ('fips', 'postal', 'name')
 # what's a minimal set of files we expect in each ZIP (shapefile) archive?
@@ -41,6 +59,18 @@ class StateDownloadTarget:
 	postal: str
 	fips: str
 	name: str
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadResult:
+	filename: str
+	state: str
+	destination_path: str
+	storage_mode: str
+	status: str
+	source_url: str
+	bytes_downloaded: int
+	message: str
 
 
 def load_config_payload() -> dict:
@@ -114,6 +144,14 @@ def configure_logging() -> str:
 	return str(log_path)
 
 
+def open_text_output_stream(path: str, mode: str):
+	ensure_local_parent_dir(path)
+	if is_s3_uri(path):
+		fsspec = load_fsspec_module()
+		return fsspec.open(path, mode, encoding='utf-8', newline='')
+	return open(path, mode, encoding='utf-8', newline='')
+
+
 def is_s3_uri(path: str) -> bool:
 	return isinstance(path, str) and path.lower().startswith('s3://')
 
@@ -136,6 +174,39 @@ def path_exists(path: str) -> bool:
 	return Path(path).exists()
 
 
+def build_audit_row(
+	*,
+	run_id: str,
+	dl_started_at: str,
+	dl_ended_at: str,
+	result: DownloadResult,
+) -> dict[str, str | int]:
+	return {
+		'process_name': PROCESS_NAME,
+		'run_id': run_id,
+		'dl_started_at': dl_started_at,
+		'dl_ended_at': dl_ended_at,
+		'filename': result.filename,
+		'state': result.state,
+		'destination_path': result.destination_path,
+		'storage_mode': result.storage_mode,
+		'status': result.status,
+		'source_url': result.source_url,
+		'bytes_downloaded': result.bytes_downloaded,
+		'message': result.message,
+	}
+
+
+def append_audit_row(path: str, row: dict[str, str | int]) -> None:
+	file_exists = path_exists(path)
+	mode = 'a' if file_exists else 'w'
+	with open_text_output_stream(path, mode) as output_stream:
+		writer = csv.DictWriter(output_stream, fieldnames=list(AUDIT_FIELDNAMES))
+		if not file_exists:
+			writer.writeheader()
+		writer.writerow(row)
+
+
 def open_binary_output_stream(path: str):
 	ensure_local_parent_dir(path)
 	if is_s3_uri(path):
@@ -150,6 +221,14 @@ def get_active_root_path(cfg: Config) -> str:
 	if cfg.storage_mode == 'remote':
 		return cfg.remote_root_path
 	raise ValueError(f'Unsupported storage mode: {cfg.storage_mode}')
+
+
+def get_audit_path(cfg: Config) -> str:
+	return join_root_and_relative_path(get_active_root_path(cfg), DEFAULT_AUDIT_FILENAME)
+
+
+def create_run_id() -> str:
+	return uuid.uuid4().hex
 
 
 def normalize_state_code(state_code: str) -> str:
@@ -262,14 +341,34 @@ def write_temp_file_to_destination(temp_path: Path, destination_path: str, cfg: 
 			shutil.copyfileobj(input_stream, output_stream, length=cfg.chunk_size_bytes)
 
 
-def download_state_tiger_zip(session: requests.Session, cfg: Config, state_target: StateDownloadTarget) -> tuple[str, int]:
+def build_download_details(cfg: Config, state_target: StateDownloadTarget) -> tuple[str, str, str]:
 	source_url = build_source_url(cfg, state_target)
 	target_relative_path = build_target_relative_path(cfg, state_target)
 	destination_path = join_root_and_relative_path(get_active_root_path(cfg), target_relative_path)
 	filename = Path(target_relative_path).name
+	return source_url, destination_path, filename
+
+
+def download_state_tiger_zip(
+	session: requests.Session,
+	cfg: Config,
+	state_target: StateDownloadTarget,
+	source_url: str,
+	destination_path: str,
+	filename: str,
+) -> DownloadResult:
 	if path_exists(destination_path):
 		logging.info('Skipping download for %s because destination already exists: %s', filename, destination_path)
-		return destination_path, 0, True
+		return DownloadResult(
+			filename=filename,
+			state=state_target.postal,
+			destination_path=destination_path,
+			storage_mode=cfg.storage_mode,
+			status='skipped',
+			source_url=source_url,
+			bytes_downloaded=0,
+			message='destination already existed',
+		)
 
 	logging.info('Downloading %s (%s) from %s', state_target.postal, state_target.fips, source_url)
 	temp_path, total_bytes = download_to_temp_file(session, source_url, cfg)
@@ -281,7 +380,16 @@ def download_state_tiger_zip(session: requests.Session, cfg: Config, state_targe
 		temp_path.unlink(missing_ok=True)
 
 	logging.info('Wrote %s bytes to %s', total_bytes, destination_path)
-	return destination_path, total_bytes, False
+	return DownloadResult(
+		filename=filename,
+		state=state_target.postal,
+		destination_path=destination_path,
+		storage_mode=cfg.storage_mode,
+		status='uploaded',
+		source_url=source_url,
+		bytes_downloaded=total_bytes,
+		message='validated and uploaded',
+	)
 
 
 def log_runtime_context(cfg: Config, state_targets: list[StateDownloadTarget]) -> None:
@@ -299,7 +407,11 @@ def log_runtime_context(cfg: Config, state_targets: list[StateDownloadTarget]) -
 def main(argv=None) -> int:
 	log_path = configure_logging()
 	cfg = get_config(argv)
+	run_id = create_run_id()
+	audit_path = get_audit_path(cfg)
 	logging.info('Logging to %s', log_path)
+	logging.info('Run ID: %s', run_id)
+	logging.info('Audit CSV path: %s', audit_path)
 	initialize_runtime_dependencies(cfg)
 	state_targets = select_state_targets(cfg, load_state_targets())
 	log_runtime_context(cfg, state_targets)
@@ -309,12 +421,54 @@ def main(argv=None) -> int:
 	completed_download_count = 0
 	with requests.Session() as session:
 		for state_target in state_targets:
-			_, downloaded_bytes, was_skipped = download_state_tiger_zip(session, cfg, state_target)
-			if was_skipped:
+			dl_started_at = datetime.now().astimezone().isoformat(timespec='seconds')
+			source_url, destination_path, filename = build_download_details(cfg, state_target)
+			try:
+				result = download_state_tiger_zip(
+					session,
+					cfg,
+					state_target,
+					source_url,
+					destination_path,
+					filename,
+				)
+			except Exception as exc:
+				dl_ended_at = datetime.now().astimezone().isoformat(timespec='seconds')
+				append_audit_row(
+					audit_path,
+					build_audit_row(
+						run_id=run_id,
+						dl_started_at=dl_started_at,
+						dl_ended_at=dl_ended_at,
+						result=DownloadResult(
+							filename=filename,
+							state=state_target.postal,
+							destination_path=destination_path,
+							storage_mode=cfg.storage_mode,
+							status='failed',
+							source_url=source_url,
+							bytes_downloaded=0,
+							message=str(exc),
+						),
+					),
+				)
+				raise
+
+			dl_ended_at = datetime.now().astimezone().isoformat(timespec='seconds')
+			append_audit_row(
+				audit_path,
+				build_audit_row(
+					run_id=run_id,
+					dl_started_at=dl_started_at,
+					dl_ended_at=dl_ended_at,
+					result=result,
+				),
+			)
+			if result.status == 'skipped':
 				skipped_file_count += 1
 			else:
 				completed_download_count += 1
-			total_downloaded_bytes += downloaded_bytes
+			total_downloaded_bytes += result.bytes_downloaded
 
 	logging.info('Skipped %s files because they already existed.', skipped_file_count)
 	logging.info('Completed %s TIGER downloads (%s total bytes).', completed_download_count, total_downloaded_bytes)

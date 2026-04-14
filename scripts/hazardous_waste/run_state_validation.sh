@@ -41,7 +41,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VALIDATION_DIR="$SCRIPT_DIR/../utilities/validation"
 VALIDATION_OUTPUT_DIR="$VALIDATION_DIR/output"
 PIPELINE_DIR="$SCRIPT_DIR/pipeline"
-REMOTE_PIPELINE_DIR="s3://pedp-data-preserved/ejscreen-data-processing/hazardous_waste/pipeline/"
 
 if [[ "$PREPROCESS" == "Y" ]]; then
 	echo "Starting hazardous-waste preprocess for $STATE_CODE in $STORAGE_MODE mode"
@@ -52,19 +51,11 @@ if [[ "$PREPROCESS" == "Y" ]]; then
 	echo "Completed hazardous-waste preprocess for $STATE_CODE"
 fi
 
-if [[ "$STORAGE_MODE" == "remote" ]]; then
-	INPUT_PATH="$REMOTE_PIPELINE_DIR"
-	OUTPUT_PATH="$REMOTE_PIPELINE_DIR"
-else
-	INPUT_PATH="$PIPELINE_DIR"
-	OUTPUT_PATH="$PIPELINE_DIR"
-fi
-
 echo "Starting hazardous-waste proximity for $STATE_CODE in $STORAGE_MODE mode"
 if ! python3 "$SCRIPT_DIR/hazardous_waste_proximity.py" \
+	"$STORAGE_MODE" \
 	--state "$STATE_CODE" \
-	--input-path "$INPUT_PATH" \
-	--output-path "$OUTPUT_PATH"; then
+	; then
 	echo "Hazardous-waste proximity failed for state $STATE_CODE in $STORAGE_MODE mode. See scripts/hazardous_waste/hwprox.log for details."
 	exit 1
 fi

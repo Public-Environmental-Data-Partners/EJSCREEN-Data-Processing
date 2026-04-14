@@ -10,7 +10,7 @@ Purpose:
 	- final_bg_scores.csv
 
 Sample commandline:
-	python scripts/hazardous_waste/hazardous_waste_proximity.py --state MT --input-path ./pipeline/test_data --output-path ./pipeline/test_data
+	python scripts/hazardous_waste/hazardous_waste_proximity.py local --state MT
 
 Behavior summary:
 	- Uses externalized state metadata shared with the Superfund pipeline.
@@ -49,8 +49,10 @@ except Exception:
 	boto3 = None
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+HAZARDOUS_WASTE_DIR = Path(__file__).resolve().parent
 SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
 SHARED_PATHS_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_paths_config.py'
+HAZARDOUS_WASTE_PATHS_CONFIG_MODULE_PATH = HAZARDOUS_WASTE_DIR / 'hazardous_waste_paths_config.py'
 
 
 def _load_shared_state_config_symbols():
@@ -86,6 +88,23 @@ def _load_shared_paths_config_symbols():
 	module_spec.loader.exec_module(module)
 	return module.get_shared_paths_config, module.resolve_local_shared_root_path
 
+
+def _load_hazardous_waste_paths_config_symbols():
+	if not HAZARDOUS_WASTE_PATHS_CONFIG_MODULE_PATH.exists():
+		raise ImportError(f'Hazardous-waste hazardous_waste_paths_config.py not found: {HAZARDOUS_WASTE_PATHS_CONFIG_MODULE_PATH}')
+
+	module_spec = importlib.util.spec_from_file_location(
+		'hazardous_waste_paths_config',
+		HAZARDOUS_WASTE_PATHS_CONFIG_MODULE_PATH,
+	)
+	if module_spec is None or module_spec.loader is None:
+		raise ImportError(f'Unable to load module spec from {HAZARDOUS_WASTE_PATHS_CONFIG_MODULE_PATH}')
+
+	module = importlib.util.module_from_spec(module_spec)
+	sys.modules[module_spec.name] = module
+	module_spec.loader.exec_module(module)
+	return module.get_hazardous_waste_paths_config, module.resolve_local_hazardous_waste_root_path
+
 try:
 	from ..shared.state_config import StateConfig, get_state_config, validate_metric_target_crs
 except ImportError:
@@ -102,15 +121,22 @@ except ImportError:
 	except ImportError:
 		get_shared_paths_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
 
-DEFAULT_LOCAL_PIPELINE_PATH = './pipeline/'
-DEFAULT_S3_PIPELINE_PATH = 's3://pedp-data-preserved/ejscreen-data-processing/hazardous_waste/pipeline/'
-DEFAULT_HAZARDOUS_WASTE_SITES_FILENAME = 'outputs/hazardous_waste_filtered.csv'
+try:
+	from .hazardous_waste_paths_config import get_hazardous_waste_paths_config, resolve_local_hazardous_waste_root_path
+except ImportError:
+	try:
+		from hazardous_waste_paths_config import get_hazardous_waste_paths_config, resolve_local_hazardous_waste_root_path
+	except ImportError:
+		get_hazardous_waste_paths_config, resolve_local_hazardous_waste_root_path = _load_hazardous_waste_paths_config_symbols()
+
 DEFAULT_TARGETED_BLOCK_GROUPS_FILENAME = 'targeted_block_groups.csv'
 DEFAULT_BLOCK_SITE_DISTANCES_FILENAME = 'block_site_distances.csv'
 DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
 DEFAULT_LOG_FILENAME = 'hwprox.log'
 DEFAULT_BUFFER_METERS = 10000.0
 DEFAULT_FINAL_SCORE_OUTPUT_COLUMN = 'hazardous_waste_score'
+
+HAZARDOUS_WASTE_STORAGE_MODES = ('local', 'remote')
 
 HAZARDOUS_WASTE_HANDLER_ID_COLUMN = 'HANDLER ID'
 HAZARDOUS_WASTE_STATE_COLUMN = 'LOCATION STATE'
@@ -128,11 +154,18 @@ BLOCKS_CSV_REQUIRED_COLUMNS = (
 )
 
 
+def get_active_hazardous_waste_root_path(storage_mode: str) -> str:
+	if storage_mode == 'local':
+		return resolve_local_hazardous_waste_root_path(HAZARDOUS_WASTE_DIR)
+	if storage_mode == 'remote':
+		return get_hazardous_waste_paths_config().remote_root_path
+	raise ValueError(f'Unsupported storage mode: {storage_mode}')
+
+
 @dataclass(slots=True)
 class Config:
+	storage_mode: str
 	state: str = 'VT'
-	input_path: str = DEFAULT_LOCAL_PIPELINE_PATH
-	output_path: str = DEFAULT_LOCAL_PIPELINE_PATH
 	hazardous_waste_sites_path: str | None = None
 	block_groups_path: str | None = None
 	census_blocks_path: str | None = None
@@ -158,31 +191,18 @@ class ResolvedPaths:
 def get_config(argv=None) -> Config:
 	load_dotenv()
 
-	defaults = Config()
+	defaults = Config(storage_mode='local')
 	parser = argparse.ArgumentParser(description='Run the hazardous-waste proximity pipeline for one state')
+	parser.add_argument(
+		'storage_mode',
+		choices=HAZARDOUS_WASTE_STORAGE_MODES,
+		help='Select whether the script reads and writes through the local root path or the remote S3 root path.',
+	)
 	parser.add_argument(
 		'--state',
 		dest='state',
 		default=defaults.state,
 		help=f'Two-letter state code to process (default: {defaults.state})',
-	)
-	parser.add_argument(
-		'--input-path',
-		dest='input_path',
-		default=defaults.input_path,
-		help=(
-			'Base input folder or S3 prefix. '
-			f'Default local: {defaults.input_path} | Example S3: {DEFAULT_S3_PIPELINE_PATH}'
-		),
-	)
-	parser.add_argument(
-		'--output-path',
-		dest='output_path',
-		default=defaults.output_path,
-		help=(
-			'Base output folder or S3 prefix. '
-			f'Default local: {defaults.output_path} | Example S3: {DEFAULT_S3_PIPELINE_PATH}'
-		),
 	)
 	parser.add_argument(
 		'--hazardous-waste-sites-path',
@@ -206,7 +226,7 @@ def get_config(argv=None) -> Config:
 		'--output-dir',
 		dest='output_dir',
 		default=defaults.output_dir,
-		help='Explicit local path or S3 URI for the state output directory; overrides output-path + state postal code',
+		help='Explicit local path or S3 URI for the state output directory; overrides the derived storage-mode output directory',
 	)
 	parser.add_argument(
 		'--targeted-block-groups-filename',
@@ -229,9 +249,8 @@ def get_config(argv=None) -> Config:
 
 	args = parser.parse_args(argv)
 	return Config(
+		storage_mode=args.storage_mode,
 		state=args.state,
-		input_path=args.input_path,
-		output_path=args.output_path,
 		hazardous_waste_sites_path=args.hazardous_waste_sites_path,
 		block_groups_path=args.block_groups_path,
 		census_blocks_path=args.census_blocks_path,
@@ -366,14 +385,16 @@ def stage_geospatial_input(source_path: str, staging_root: Path, path_name: str)
 def resolve_pipeline_paths(cfg: Config) -> ResolvedPaths:
 	state_config = get_state_config(cfg.state)
 	shared_paths_config = get_shared_paths_config()
+	hazardous_waste_paths_config = get_hazardous_waste_paths_config()
+	hazardous_waste_root_path = get_active_hazardous_waste_root_path(cfg.storage_mode)
 
 	hazardous_waste_sites_path = cfg.hazardous_waste_sites_path or join_path_and_file(
-		cfg.input_path,
-		DEFAULT_HAZARDOUS_WASTE_SITES_FILENAME,
+		hazardous_waste_root_path,
+		hazardous_waste_paths_config.canonical_output_relative_path,
 	)
 	shared_input_path = (
 		shared_paths_config.remote_root_path
-		if is_s3_uri(cfg.input_path)
+		if cfg.storage_mode == 'remote'
 		else resolve_local_shared_root_path(SCRIPTS_DIR)
 	)
 	block_groups_path = cfg.block_groups_path or join_path_and_file(
@@ -392,7 +413,7 @@ def resolve_pipeline_paths(cfg: Config) -> ResolvedPaths:
 			name=state_config.name,
 		),
 	)
-	output_dir = cfg.output_dir or join_path_and_file(cfg.output_path, state_config.postal)
+	output_dir = cfg.output_dir or join_path_and_file(hazardous_waste_root_path, state_config.postal)
 
 	return ResolvedPaths(
 		state_config=state_config,
@@ -954,8 +975,8 @@ def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
 		paths.state_config.fips,
 		paths.state_config.metric_crs,
 	)
-	logging.info('Input base path: %s', cfg.input_path)
-	logging.info('Output base path: %s', cfg.output_path)
+	logging.info('Storage mode: %s', cfg.storage_mode)
+	logging.info('Active hazardous-waste root path: %s', get_active_hazardous_waste_root_path(cfg.storage_mode))
 	logging.info('Resolved hazardous-waste sites path: %s', paths.hazardous_waste_sites_path)
 	logging.info('Resolved block-groups path: %s', paths.block_groups_path)
 	logging.info('Resolved census blocks path: %s', paths.census_blocks_path)

@@ -17,15 +17,18 @@ import argparse
 import csv
 import fnmatch
 import importlib
+import importlib.util
 import io
 import json
 import logging
+import sys
 import zipfile
 from collections import Counter
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_FILE_PATH = SCRIPT_DIR / "hazardous_waste_preprocess_config.json"
+HAZARDOUS_WASTE_PATHS_CONFIG_MODULE_PATH = SCRIPT_DIR / 'hazardous_waste_paths_config.py'
 DEFAULT_LOG_FILENAME = "hwpre.log"
 BR_REPORTING_GENERATOR_NET_CHOICES = ("narrow", "medium", "broad")
 
@@ -177,6 +180,34 @@ class CanonicalOutputSummary:
 	canonical_row_count: int
 
 
+def _load_hazardous_waste_paths_config_symbols():
+	if not HAZARDOUS_WASTE_PATHS_CONFIG_MODULE_PATH.exists():
+		raise ImportError(
+			f'Hazardous-waste hazardous_waste_paths_config.py not found: {HAZARDOUS_WASTE_PATHS_CONFIG_MODULE_PATH}'
+		)
+
+	module_spec = importlib.util.spec_from_file_location(
+		'hazardous_waste_paths_config',
+		HAZARDOUS_WASTE_PATHS_CONFIG_MODULE_PATH,
+	)
+	if module_spec is None or module_spec.loader is None:
+		raise ImportError(f'Unable to load module spec from {HAZARDOUS_WASTE_PATHS_CONFIG_MODULE_PATH}')
+
+	module = importlib.util.module_from_spec(module_spec)
+	sys.modules[module_spec.name] = module
+	module_spec.loader.exec_module(module)
+	return module.get_hazardous_waste_paths_config, module.resolve_local_hazardous_waste_root_path
+
+
+try:
+	from .hazardous_waste_paths_config import get_hazardous_waste_paths_config, resolve_local_hazardous_waste_root_path
+except ImportError:
+	try:
+		from hazardous_waste_paths_config import get_hazardous_waste_paths_config, resolve_local_hazardous_waste_root_path
+	except ImportError:
+		get_hazardous_waste_paths_config, resolve_local_hazardous_waste_root_path = _load_hazardous_waste_paths_config_symbols()
+
+
 def build_source_descriptor(raw_descriptor: dict) -> SourceDescriptor:
 	return SourceDescriptor(
 		source_key=raw_descriptor["source_key"],
@@ -201,6 +232,7 @@ def load_config_payload() -> dict:
 def get_config(argv=None) -> Config:
 	config_payload = load_config_payload()
 	planned_sources_payload = config_payload["planned_sources"]
+	paths_config = get_hazardous_waste_paths_config()
 
 	parser = argparse.ArgumentParser(
 		description="Run the hazardous-waste preprocessing pipeline."
@@ -221,12 +253,12 @@ def get_config(argv=None) -> Config:
 	return Config(
 		storage_mode=args.storage_mode,
 		br_reporting_generator_net=args.generator_net,
-		local_root_path=config_payload["local_root_path"],
-		remote_root_path=config_payload["remote_root_path"],
-		canonical_output_relative_path=config_payload["canonical_output_relative_path"],
-		parse_audit_relative_path=config_payload["parse_audit_relative_path"],
-		validation_audit_relative_path=config_payload["validation_audit_relative_path"],
-		dedup_audit_relative_path=config_payload["dedup_audit_relative_path"],
+		local_root_path=resolve_local_hazardous_waste_root_path(SCRIPT_DIR),
+		remote_root_path=paths_config.remote_root_path,
+		canonical_output_relative_path=paths_config.canonical_output_relative_path,
+		parse_audit_relative_path=paths_config.parse_audit_relative_path,
+		validation_audit_relative_path=paths_config.validation_audit_relative_path,
+		dedup_audit_relative_path=paths_config.dedup_audit_relative_path,
 		planned_master_rcra_source=build_source_descriptor(planned_sources_payload["master_rcra_source"]),
 		planned_br_reporting_source=build_source_descriptor(planned_sources_payload["br_reporting_source"]),
 	)

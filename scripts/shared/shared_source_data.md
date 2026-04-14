@@ -16,8 +16,10 @@ The shared downloads area is intended for source files or derived shared artifac
 
 Current intended local folder layout:
 
-- `scripts/shared/pipeline/downloads/`-- for most files (expected to be mostly zips)
+- `scripts/shared/pipeline/downloads/`-- for individual files (expected to be mostly zips)
 - `scripts/shared/pipeline/downloads/{type}/`-- for multiple files of the same type, such as tiger files and census block weights
+- `scripts/shared/pipeline/preprocessed_input/{type}`-- for the results of any preprocessing code (which, presumably, used something in the downloads folders as input)
+
 
 Current active consumer:
 

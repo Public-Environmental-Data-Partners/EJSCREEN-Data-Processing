@@ -48,11 +48,11 @@ import uuid
 import zipfile
 
 import requests
+from state_config import STATE_CONFIG_PATH, get_state_config
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_FILE_PATH = SCRIPT_DIR / 'fetch_tiger_lines_bg_config.json'
-STATE_CONFIG_PATH = SCRIPT_DIR / 'state_config.json'
 PROCESS_NAME = 'fetch_tiger_lines_bg'
 DEFAULT_LOG_FILENAME = 'fetch_tiger_lines_bg.log'
 DEFAULT_AUDIT_FILENAME = 'fetch_audit.csv'
@@ -71,8 +71,6 @@ AUDIT_FIELDNAMES = (
 	'bytes_downloaded',
 	'message',
 )
-# what data do we need from our state config file?
-REQUIRED_STATE_FIELDS = ('fips', 'postal', 'name')
 # what's a minimal set of files we expect in each ZIP (shapefile) archive?
 REQUIRED_ZIP_MEMBER_SUFFIXES = ('.dbf', '.prj', '.shp', '.shx')
 
@@ -154,12 +152,9 @@ def initialize_runtime_dependencies(cfg: Config) -> None:
 		return
 
 	dotenv = importlib.import_module('dotenv')
-	s3fs = importlib.import_module('s3fs')
-	load_fsspec_module()
-
+	importlib.import_module('s3fs')
+	importlib.import_module('fsspec')
 	dotenv.load_dotenv()
-	if s3fs is None:
-		raise RuntimeError('s3fs failed to import for remote mode')
 
 
 def load_fsspec_module():
@@ -286,25 +281,15 @@ def load_state_targets() -> list[StateDownloadTarget]:
 		raise RuntimeError(f'State config file must contain a JSON object: {STATE_CONFIG_PATH}')
 
 	targets: list[StateDownloadTarget] = []
-	for state_code, raw_state in sorted(payload.items()):
-		if not isinstance(raw_state, dict):
-			raise RuntimeError(f"State entry for '{state_code}' must be a JSON object")
-		missing_fields = [field_name for field_name in REQUIRED_STATE_FIELDS if field_name not in raw_state]
-		if missing_fields:
-			missing_fields_text = ', '.join(missing_fields)
-			raise RuntimeError(f"State entry for '{state_code}' is missing required fields: {missing_fields_text}")
-
-		postal = str(raw_state['postal']).strip().upper()
-		fips = str(raw_state['fips']).strip()
-		name = str(raw_state['name']).strip()
-		if postal != state_code:
-			raise RuntimeError(f"State entry for '{state_code}' must have postal value '{state_code}', got '{postal}'")
-		if len(fips) != 2 or not fips.isdigit():
-			raise RuntimeError(f"State entry for '{state_code}' must have a two-digit string fips value")
-		if not name:
-			raise RuntimeError(f"State entry for '{state_code}' must have a non-empty name")
-
-		targets.append(StateDownloadTarget(postal=postal, fips=fips, name=name))
+	for state_code in sorted(payload):
+		state_config = get_state_config(state_code)
+		targets.append(
+			StateDownloadTarget(
+				postal=state_config.postal,
+				fips=state_config.fips,
+				name=state_config.name,
+			)
+		)
 
 	return targets
 

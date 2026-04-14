@@ -4,7 +4,7 @@
 
 This document is intended to answer one operational question before any shared fetch automation is written:
 
-> For each file or file family expected under `scripts/shared/pipeline/downloads`, what is the authoritative upstream source, and how should we retrieve it?
+> For each file or file family expected under `scripts/shared/pipeline/downloads` or `scripts/shared/pipeline/preprocessed_input`, what is the authoritative upstream source, and how should we retrieve it?
 
 The goal is to document the correct native URL, landing page, API, or generation process first. Only after those details are verified should we write any shared fetch or refresh scripts.
 
@@ -78,7 +78,7 @@ Note that data for other years is available simply by using the folder name `TIG
 
 **Local target path pattern**
 
-- `scripts/shared/pipeline/downloads/census_block_weights_2020/census_block_weights_2020_{STATE}.csv`
+- `scripts/shared/pipeline/preprocessed_input/census_block_weights_2020/census_block_weights_2020_{STATE}.csv`
 
 **Used for**
 

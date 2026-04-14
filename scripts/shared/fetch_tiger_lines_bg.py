@@ -1,3 +1,39 @@
+"""
+fetch_tiger_lines_bg.py
+
+Purpose:
+	Download TIGER/Line Census block-group ZIP files for the states configured in
+	shared/state_config.json and write them to the configured local or remote
+	shared pipeline destination.
+
+Process summary:
+	- Load the external config from ./fetch_tiger_lines_bg_config.json.
+	- Read the state list and FIPS codes from ./state_config.json.
+	- For each state in the config file (or one if specified with --state)
+	-- Build the Census source URL and target destination path for each state.
+	-- Skip files that already exist at the destination and log the reason.
+	-- Download each missing ZIP with requests into a temporary local file.
+	-- Validate that the ZIP contains the expected core shapefile members.
+	-- Write the validated ZIP to the configured local path or remote S3 path.
+	-- Append one final per-file outcome row to fetch_audit.csv at the active
+	  destination root for the run.
+	- Write narrative logging to the local fetch_tiger_lines_bg.log file beside
+	  this script.
+
+Runtime arguments:
+	- storage_mode
+	  REQUIRED positional argument. Must be either 'local' or 'remote'.
+	  Selects whether downloaded files and the audit CSV are written to the
+	  configured local root path or remote S3 root path.
+	- --state
+	  Optional two-letter postal abbreviation. When provided, limits the run to a
+	  single configured state for testing.
+
+Credits:
+	Designed by Anne Gunn.
+	Coded by GitHub Copilot (GPT-5.4 Medium) and Anne Gunn.
+"""
+
 import csv
 from dataclasses import dataclass
 from datetime import datetime

@@ -110,6 +110,7 @@ DEFAULT_BLOCK_SITE_DISTANCES_FILENAME = 'block_site_distances.csv'
 DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
 DEFAULT_LOG_FILENAME = 'hwprox.log'
 DEFAULT_BUFFER_METERS = 10000.0
+DEFAULT_FINAL_SCORE_OUTPUT_COLUMN = 'hazardous_waste_score'
 
 HAZARDOUS_WASTE_HANDLER_ID_COLUMN = 'HANDLER ID'
 HAZARDOUS_WASTE_STATE_COLUMN = 'LOCATION STATE'
@@ -930,13 +931,17 @@ def step4_population_weighting_aggregation(
 	)
 
 	if output_path:
+		output_df = agg[['block_group_geoid', 'weighted_score']].rename(
+			columns={'weighted_score': DEFAULT_FINAL_SCORE_OUTPUT_COLUMN}
+		)
 		logging.info(
-			'Writing final block-group scores to %s (rows=%d, targeted_groups=%d)',
+			'Writing final block-group scores to %s with output column %s (rows=%d, targeted_groups=%d)',
 			output_path,
+			DEFAULT_FINAL_SCORE_OUTPUT_COLUMN,
 			len(agg),
 			len(agg_targeted),
 		)
-		write_df_s3_or_local(agg[['block_group_geoid', 'weighted_score']], output_path)
+		write_df_s3_or_local(output_df, output_path)
 
 	return agg
 

@@ -20,19 +20,28 @@ __pycache__/
 scripts/traffic/.Rhistory
 .Rhistory
 
+# Everything within the pipeline trees should be ignored 
+# except .md files we write to document contents for the 
+# GitHub repo.
+scripts/superfund/pipeline/
+!scripts/superfund/pipeline/**/*.md
+scripts/traffic/pipeline/
+!scripts/traffic/pipeline/**/*.md
+scripts/hazardous_waste/pipeline/
+!scripts/hazardous_waste/pipeline/**/*.md
+
 # Local files for testing input and output
 # I don't think we want to commit any of these to the repo
-scripts/utilities/validation/test_files/
-scripts/superfund/pipeline
+test_files/
+output/
 test.out
 *.csv
 *.zip
 *.png
 *.log
 *.txt
-*.json
-*.geojson
 *.xlsx
+
 
 # Dev-specific experiments, temp tools, and old
 # files kept for diffing

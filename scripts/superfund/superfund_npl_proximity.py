@@ -35,6 +35,7 @@ import io
 import logging
 import sys
 import tempfile
+from typing import Any
 
 import fiona
 import geopandas as gpd
@@ -57,6 +58,7 @@ def _resolve_scripts_dir() -> Path:
 
 SCRIPTS_DIR = _resolve_scripts_dir()
 SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
+SHARED_PATHS_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_paths_config.py'
 
 
 def _load_shared_state_config_symbols():
@@ -75,6 +77,23 @@ def _load_shared_state_config_symbols():
     module_spec.loader.exec_module(module)
     return module.StateConfig, module.get_state_config, module.validate_metric_target_crs
 
+
+def _load_shared_paths_config_symbols():
+    if not SHARED_PATHS_CONFIG_MODULE_PATH.exists():
+        raise ImportError(f'Shared shared_paths_config.py not found: {SHARED_PATHS_CONFIG_MODULE_PATH}')
+
+    module_spec = importlib.util.spec_from_file_location(
+        'shared_paths_config_superfund',
+        SHARED_PATHS_CONFIG_MODULE_PATH,
+    )
+    if module_spec is None or module_spec.loader is None:
+        raise ImportError(f'Unable to load module spec from {SHARED_PATHS_CONFIG_MODULE_PATH}')
+
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[module_spec.name] = module
+    module_spec.loader.exec_module(module)
+    return module.get_shared_paths_config, module.resolve_local_shared_root_path
+
 try:
     from ..shared.state_config import StateConfig, get_state_config, validate_metric_target_crs
 except ImportError:
@@ -86,11 +105,17 @@ except ImportError:
         except ImportError:
             StateConfig, get_state_config, validate_metric_target_crs = _load_shared_state_config_symbols()
 
+try:
+    from ..shared.shared_paths_config import get_shared_paths_config, resolve_local_shared_root_path
+except ImportError:
+    try:
+        from shared.shared_paths_config import get_shared_paths_config, resolve_local_shared_root_path
+    except ImportError:
+        get_shared_paths_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
+
 DEFAULT_LOCAL_PIPELINE_PATH = './pipeline/'
 DEFAULT_S3_PIPELINE_PATH = 's3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/'
 DEFAULT_NPL_BOUNDARIES_FILENAME = 'downloads/NPL_Boundaries_20260217/NPL_Boundaries.gdb'
-DEFAULT_BLOCK_GROUPS_FILENAME_TEMPLATE = 'downloads/tiger_lines/2020/bg/tl_2020_{fips}_bg.zip'
-DEFAULT_CENSUS_BLOCKS_FILENAME_TEMPLATE = 'downloads/census_block_weights_2020/census_block_weights_2020_{postal}.csv'
 DEFAULT_TARGETED_BLOCK_GROUPS_FILENAME = 'targeted_block_groups.csv'
 DEFAULT_BLOCK_SITE_DISTANCES_FILENAME = 'block_site_distances.csv'
 DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
@@ -129,7 +154,7 @@ class Config:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedPaths:
-    state_config: StateConfig
+    state_config: Any
     npl_boundaries_path: str
     block_groups_path: str
     census_blocks_path: str
@@ -355,22 +380,28 @@ def stage_geospatial_input(source_path: str, staging_root: Path, path_name: str)
 
 def resolve_pipeline_paths(cfg: Config) -> ResolvedPaths:
     state_config = get_state_config(cfg.state)
+    shared_paths_config = get_shared_paths_config()
 
     npl_boundaries_path = cfg.npl_boundaries_path or join_path_and_file(
         cfg.input_path,
         DEFAULT_NPL_BOUNDARIES_FILENAME,
     )
+    shared_input_path = (
+        shared_paths_config.remote_root_path
+        if is_s3_uri(cfg.input_path)
+        else resolve_local_shared_root_path(SCRIPTS_DIR)
+    )
     block_groups_path = cfg.block_groups_path or join_path_and_file(
-        cfg.input_path,
-        DEFAULT_BLOCK_GROUPS_FILENAME_TEMPLATE.format(
+        shared_input_path,
+        shared_paths_config.tiger_bg_relative_path_template.format(
             fips=state_config.fips,
             postal=state_config.postal,
             name=state_config.name,
         ),
     )
     census_blocks_path = cfg.census_blocks_path or join_path_and_file(
-        cfg.input_path,
-        DEFAULT_CENSUS_BLOCKS_FILENAME_TEMPLATE.format(
+        shared_input_path,
+        shared_paths_config.census_block_weights_relative_path_template.format(
             fips=state_config.fips,
             postal=state_config.postal,
             name=state_config.name,

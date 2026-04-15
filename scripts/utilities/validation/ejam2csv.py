@@ -3,17 +3,17 @@ ejam2csv.py
 
 Purpose:
   Request EJAM API data for a single US state and convert the JSON list-of-dicts
-  response into a compact CSV of selected fields (traffic fields by default).
+    response into a compact CSV of selected fields for a chosen indicator type.
 
 Features:
   - Send a POST request to the EJAM API and load the returned JSON into pandas.
-  - Select a known set of traffic-related columns and write them to CSV.
+    - Select a known set of indicator-specific columns and write them to CSV.
   - Supports writing output to local filesystem or to S3 (s3://bucket/prefix/).
-  - Writes output into a per-state subfolder: {path}/{STATE}/ejam_traffic_subset.csv.
+    - Writes output into a per-state subfolder: {path}/{STATE}/ejam_{data_type}_subset.csv.
 
 Usage examples:
   # Required: specify state code
-    python ejam2csv.py --state RI -p ./scripts/utilities/validation/output/
+        python ejam2csv.py --state RI --data-type superfund -p ./scripts/utilities/validation/output/
   python ejam2csv.py --state RI -p s3://my-bucket/prefix/ --dry-run
 
 Runtime parameters:
@@ -23,16 +23,19 @@ Runtime parameters:
   -p / --path             S3 prefix or local folder. Files are read/written under
                           `{path}/{STATE}/`. If the path starts with s3:// the
                           script will upload to S3 (boto3 required).
+    --data-type / --type    Optional indicator selector. One of `traffic`,
+                                                    `superfund`, or `hazardous_waste`.
   -n / --number_rows      Optional limit on rows to process; <=0 means no limit.
   --dry-run               If set, do not write files; print what would be done.
 
 Defaults (code-level):
-  - output file written as: {path}/{STATE}/ejam_traffic_subset.csv
+    - output file written as: {path}/{STATE}/ejam_{data_type}_subset.csv
   - JSON sample dump written as: {path}/{STATE}/ejam_response.json
   - path default: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
+    - data type default: traffic
 
 Outputs:
-  - CSV: ejam_traffic_subset.csv (selected EJAM fields) written to {path}/{STATE}/
+    - CSV: ejam_{data_type}_subset.csv (selected EJAM fields) written to {path}/{STATE}/
   - JSON: ejam_response.json (small sample of raw API response) in same folder
 
 Dependencies:
@@ -68,9 +71,7 @@ class Config:
     # number of rows to process; <=0 or None means process all rows
     number_rows: Optional[int] = 0
     dry_run: bool = False
-    # output filename (will be joined with `path`); default local examples write under ./output/
-    output_file: str = "ejam_traffic_subset.csv"
-    #path: str = "./output/"
+    data_type: str = "traffic"
 
 
 def get_config(argv=None) -> Config:
@@ -85,6 +86,9 @@ def get_config(argv=None) -> Config:
                         help='State code (e.g. RI); will be upper-cased and used for API request and as output folder')
     parser.add_argument('-p', '--path', type=str, default=Config.path,
                         help='S3 path prefix or local folder for output (default local example: ./output/)')
+    parser.add_argument('--data-type', '--type', dest='data_type', type=str, default=Config.data_type,
+                        choices=['superfund', 'traffic', 'hazardous_waste'],
+                        help='indicator to extract from the EJAM response (default: traffic)')
     parser.add_argument('-n', '--number_rows', type=int, default=Config.number_rows,
                         help='maximum number of rows to process (default: 10); <=0 means no limit')
     parser.add_argument('--dry-run', action='store_true', help='If set, do not write any files, just show what would be done')
@@ -298,7 +302,8 @@ def main(argv=None) -> None:
     print(f"Will be writing to path: {config.path}")
 
     # write into a state-specific folder and use a short filename
-    out_path = join_path_and_file(config.path, f"{config.state_code}/{config.output_file}")
+    output_file = f"ejam_{config.data_type}_subset.csv"
+    out_path = join_path_and_file(config.path, f"{config.state_code}/{output_file}")
     limit = config.number_rows
     dry_run = config.dry_run
 
@@ -331,18 +336,29 @@ def main(argv=None) -> None:
         df = df.head(limit)
         print(f"Processing is being limited to first {limit} rows")
 
-    # --- Simple exact-match selection of known traffic-related columns ---
-    # exact column names to include (in this order)
-    desired = [
-        "ejam_uniq_id","valid","invalid_msg","pop","ST","statename",
-        "ratio.to.avg.traffic.score","ratio.to.state.avg.traffic.score",
-        "traffic.score","pctile.traffic.score","state.pctile.traffic.score",
-        "avg.traffic.score","state.avg.traffic.score",
-        "pctile.EJ.DISPARITY.traffic.score.eo","pctile.EJ.DISPARITY.traffic.score.supp",
-        "state.pctile.EJ.DISPARITY.traffic.score.eo","state.pctile.EJ.DISPARITY.traffic.score.supp",
-        "EJ.DISPARITY.traffic.score.eo","state.EJ.DISPARITY.traffic.score.eo",
-        "EJ.DISPARITY.traffic.score.supp","EJAM Report"
+    # Build the output schema from shared base fields plus indicator-specific score columns.
+    base_required = [
+        "ejam_uniq_id", "valid", "invalid_msg", "pop", "ST", "statename"
     ]
+    base_last = ["EJAM Report"]
+    indicator_columns = {
+        "traffic": [
+            "ratio.to.avg.traffic.score", "ratio.to.state.avg.traffic.score",
+            "traffic.score", "pctile.traffic.score", "state.pctile.traffic.score",
+            "avg.traffic.score", "state.avg.traffic.score",
+            "pctile.EJ.DISPARITY.traffic.score.eo", "pctile.EJ.DISPARITY.traffic.score.supp",
+            "state.pctile.EJ.DISPARITY.traffic.score.eo", "state.pctile.EJ.DISPARITY.traffic.score.supp",
+            "EJ.DISPARITY.traffic.score.eo", "state.EJ.DISPARITY.traffic.score.eo",
+            "EJ.DISPARITY.traffic.score.supp"
+        ],
+        "superfund": [
+            "proximity.npl", "pctile.proximity.npl"
+        ],
+        "hazardous_waste": [
+            "proximity.tsdf", "pctile.proximity.tsdf"
+        ],
+    }
+    desired = base_required + indicator_columns[config.data_type] + base_last
 
     out_df = pandas.DataFrame(index=df.index)
     missing = []

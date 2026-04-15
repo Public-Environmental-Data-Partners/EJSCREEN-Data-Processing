@@ -27,7 +27,7 @@ Quick start (local output folder)
 python geojson2csv.py --state RI -p ./output/ --dry-run
 
 ### 2) Fetch EJAM API and produce EJAM CSV
-python ejam2csv.py --state RI -p ./output/ --dry-run
+python ejam2csv.py --state RI --data-type traffic -p ./output/ --dry-run
 
 ### 3) Compare EJAM CSV and pipeline CSV
 python prototypes/compare_csv_tables.py --state RI -p ./output/ --dry-run
@@ -36,7 +36,8 @@ Notes on options and defaults
 ----------------------------
 - All three scripts accept `-p/--path` (S3 prefix or local folder). If the path starts with `s3://` the scripts will read/write to S3 (boto3 + credentials required).
 - `geojson2csv.py` defaults: input `bg_summary.geojson`, output `bg_summary.csv`; both are expected under `{path}/{STATE}/` unless overridden.
-- `ejam2csv.py` defaults: output `ejam_traffic_subset.csv` and writes a small JSON sample `ejam_response.json` in the same `{path}/{STATE}/` folder for inspection.
+- `ejam2csv.py` accepts `--data-type/--type` with values `traffic`, `superfund`, or `hazardous_waste`.
+- `ejam2csv.py` defaults: `--data-type traffic`, output `ejam_{data_type}_subset.csv`, and writes a small JSON sample `ejam_response.json` in the same `{path}/{STATE}/` folder for inspection.
 - `prototypes/compare_csv_tables.py` defaults: EJAM input `ejam_traffic_subset.csv`, pipeline input `bg_summary.csv` (looked up under `{path}/{STATE}/`). Default join keys: `ejam_uniq_id` (EJAM) and `block_group_geoid` (pipeline). Default mapping (new_pipe -> ejam): `{"blk_grp_score":"traffic.score", "total_pop":"pop"}`.
 
 Outputs from `prototypes/compare_csv_tables.py`

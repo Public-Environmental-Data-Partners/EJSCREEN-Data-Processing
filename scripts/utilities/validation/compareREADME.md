@@ -7,15 +7,15 @@ This short README explains how to run the three validation scripts in sequence s
 
 1. `geojson2csv.py` (pipeline -> CSV)
 2. `ejam2csv.py` (EJAM API -> CSV)
-3. `compareEJAM2pipeline.py` (compare the two CSVs)
+3. `prototypes/compare_csv_tables.py` (compare the two CSVs)
 
 Why this order
 ---------------
 - `geojson2csv.py` requires a pipeline-produced GeoJSON input. Without that file, no comparison
-is possible. So it is highly recommended it be run first to convert the pipeline's GeoJSON export into a compact CSV that `compareEJAM2pipeline.py` 
+is possible. So it is highly recommended it be run first to convert the pipeline's GeoJSON export into a compact CSV that `prototypes/compare_csv_tables.py` 
 expects.
 - `ejam2csv.py` independently fetches and produces the EJAM reference CSV. 
-- `compareEJAM2pipeline.py` merges and analyzes the two CSVs.
+- `prototypes/compare_csv_tables.py` merges and analyzes the two CSVs.
 
 Important runtime note
 ----------------------
@@ -30,16 +30,16 @@ python geojson2csv.py --state RI -p ./output/ --dry-run
 python ejam2csv.py --state RI -p ./output/ --dry-run
 
 ### 3) Compare EJAM CSV and pipeline CSV
-python compareEJAM2pipeline.py --state RI -p ./output/ --dry-run
+python prototypes/compare_csv_tables.py --state RI -p ./output/ --dry-run
 
 Notes on options and defaults
 ----------------------------
 - All three scripts accept `-p/--path` (S3 prefix or local folder). If the path starts with `s3://` the scripts will read/write to S3 (boto3 + credentials required).
 - `geojson2csv.py` defaults: input `bg_summary.geojson`, output `bg_summary.csv`; both are expected under `{path}/{STATE}/` unless overridden.
 - `ejam2csv.py` defaults: output `ejam_traffic_subset.csv` and writes a small JSON sample `ejam_response.json` in the same `{path}/{STATE}/` folder for inspection.
-- `compareEJAM2pipeline.py` defaults: EJAM input `ejam_traffic_subset.csv`, pipeline input `bg_summary.csv` (looked up under `{path}/{STATE}/`). Default join keys: `ejam_uniq_id` (EJAM) and `block_group_geoid` (pipeline). Default mapping (new_pipe -> ejam): `{"blk_grp_score":"traffic.score", "total_pop":"pop"}`.
+- `prototypes/compare_csv_tables.py` defaults: EJAM input `ejam_traffic_subset.csv`, pipeline input `bg_summary.csv` (looked up under `{path}/{STATE}/`). Default join keys: `ejam_uniq_id` (EJAM) and `block_group_geoid` (pipeline). Default mapping (new_pipe -> ejam): `{"blk_grp_score":"traffic.score", "total_pop":"pop"}`.
 
-Outputs from `compareEJAM2pipeline.py`
+Outputs from `prototypes/compare_csv_tables.py`
 -------------------------------------
 When run (not dry-run) it writes under `{path}/{STATE}/{output_prefix}/` (default `comparison_results`):
 - `merged_reduced.csv` — reduced merged CSV containing the join key plus the compared columns.

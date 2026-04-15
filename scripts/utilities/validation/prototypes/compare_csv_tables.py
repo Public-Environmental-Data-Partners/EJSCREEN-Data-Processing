@@ -1,5 +1,5 @@
 """
-compareEJAM2pipeline.py
+compare_csv_tables.py
 
 Purpose:
   Compare an EJAM reference CSV and a pipeline CSV for a single US state to
@@ -19,8 +19,8 @@ Features:
 
 Usage examples:
   # REQUIRED: specify --state
-    python compareEJAM2pipeline.py --state RI -p ./scripts/utilities/validation/output/
-    python compareEJAM2pipeline.py --state RI -p s3://my-bucket/prefix/ --dry-run
+    python prototypes/compare_csv_tables.py --state RI -p ./scripts/utilities/validation/output/
+    python prototypes/compare_csv_tables.py --state RI -p s3://my-bucket/prefix/ --dry-run
 
 Runtime parameters:
   --state / --state-code  REQUIRED. Two-letter state short code (e.g. RI). The
@@ -258,7 +258,7 @@ def export_comparison_results(df_final: pd.DataFrame, summary_data: dict, out_pr
     # 2. Save Summary JSON
     _write_text_to_path(json.dumps(summary_data, indent=2), f"{base_path}/summary.json")
 
-# 3. Save Simple Text Report
+    # 3. Save Simple Text Report
     lines = ["SIMPLE COMPARISON REPORT", ""]
     for spec in report_specs:
         label = spec['label']

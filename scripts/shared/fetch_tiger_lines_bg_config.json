@@ -1,0 +1,10 @@
+{
+  "local_root_path": "./pipeline/",
+  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/shared/pipeline/",
+  "target_year": 2020,
+  "source_url_template": "https://www2.census.gov/geo/tiger/TIGER{year}/BG/tl_{year}_{fips}_bg.zip",
+  "target_relative_dir_template": "downloads/tiger_lines/{year}/bg",
+  "filename_template": "tl_{year}_{fips}_bg.zip",
+  "request_timeout_seconds": 120,
+  "chunk_size_bytes": 1048576
+}

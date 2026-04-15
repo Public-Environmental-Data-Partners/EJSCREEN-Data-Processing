@@ -1,0 +1,8 @@
+{
+  "local_root_path": "./pipeline/",
+  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/hazardous_waste/pipeline/",
+  "canonical_output_relative_path": "outputs/hazardous_waste_filtered.csv",
+  "parse_audit_relative_path": "outputs/hazardous_waste_parse_audit.csv",
+  "validation_audit_relative_path": "outputs/hazardous_waste_validation_audit.csv",
+  "dedup_audit_relative_path": "outputs/hazardous_waste_dedup_audit.csv"
+}

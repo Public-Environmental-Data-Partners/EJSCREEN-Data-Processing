@@ -1,0 +1,8 @@
+{
+  "local_root_path": "shared/pipeline/",
+  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/shared/pipeline/",
+  "downloads_subtree_name": "downloads",
+  "preprocessed_input_subtree_name": "preprocessed_input",
+  "tiger_bg_relative_path_template": "downloads/tiger_lines/2020/bg/tl_2020_{fips}_bg.zip",
+  "census_block_weights_relative_path_template": "preprocessed_input/census_block_weights_2020/census_block_weights_2020_{postal}.csv"
+}

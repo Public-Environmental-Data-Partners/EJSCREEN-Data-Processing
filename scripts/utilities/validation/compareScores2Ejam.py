@@ -410,6 +410,7 @@ def _infer_indicator_slug(path_ejam: Path, path_b: Path, score_ejam: str, score_
 
     new_score_slug_map = {
         'hazardous_waste_score': 'hazardous_waste',
+        'superfund_score': 'superfund',
     }
     if score_new in new_score_slug_map:
         return new_score_slug_map[score_new]

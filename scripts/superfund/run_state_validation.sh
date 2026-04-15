@@ -50,5 +50,6 @@ python3 "$VALIDATION_DIR/compareScores2Ejam.py" \
 	--file-ejam "$VALIDATION_OUTPUT_DIR/$STATE_CODE/ejam_superfund_subset.csv" \
 	--score-ejam proximity.npl \
 	--file-b "$PIPELINE_DIR/$STATE_CODE/final_bg_scores.csv" \
+	--score-new superfund_score \
 	--out "$VALIDATION_OUTPUT_DIR/$STATE_CODE/${STATE_CODE}_compare_ejam_superfund_subset_to_weighted_scores.png"
 echo "Completed compareScores2Ejam.py for $STATE_CODE"

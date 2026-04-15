@@ -143,6 +143,7 @@ DEFAULT_TARGETED_BLOCK_GROUPS_FILENAME = 'targeted_block_groups.csv'
 DEFAULT_BLOCK_SITE_DISTANCES_FILENAME = 'block_site_distances.csv'
 DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
 DEFAULT_BUFFER_METERS = 10000.0
+DEFAULT_FINAL_SCORE_OUTPUT_COLUMN = 'superfund_score'
 SUPERFUND_STORAGE_MODES = ('local', 'remote')
 
 NPL_LAYER_NAME = 'SITE_BOUNDARIES_SF'
@@ -788,13 +789,17 @@ def step4_population_weighting_aggregation(
     agg['weighted_score'] = agg['weighted_score'].fillna(0.0)
 
     if output_path:
+        output_df = agg[['block_group_geoid', 'weighted_score']].rename(
+            columns={'weighted_score': DEFAULT_FINAL_SCORE_OUTPUT_COLUMN}
+        )
         logging.info(
-            'Writing final block-group scores to %s (rows=%d, targeted_groups=%d)',
+            'Writing final block-group scores to %s with output column %s (rows=%d, targeted_groups=%d)',
             output_path,
+            DEFAULT_FINAL_SCORE_OUTPUT_COLUMN,
             len(agg),
             len(agg_targeted),
         )
-        write_df_s3_or_local(agg[['block_group_geoid', 'weighted_score']], output_path)
+        write_df_s3_or_local(output_df, output_path)
 
     return agg
 

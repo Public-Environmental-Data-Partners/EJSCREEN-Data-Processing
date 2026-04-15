@@ -1,3 +1,20 @@
+"""Load and validate path settings for the hazardous-waste processing pipeline.
+
+This module reads ``hazardous_waste_paths_config.json`` and exposes a typed,
+cached configuration object for the hazardous-waste scripts. It centralizes
+the filesystem and remote storage locations used by the pipeline, including
+the local pipeline root, the canonical output path, and the audit output
+paths. A major goal of this configuration object is to give client code a
+simple and consistent way to switch between local storage for testing and
+remote storage for production.
+
+The loader fails fast when required fields are missing, blank, or invalid.
+Relative-path fields are validated so downstream scripts can rely on consistent
+path semantics. ``resolve_local_hazardous_waste_root_path`` converts the
+configured local root into an absolute path anchored to the hazardous-waste
+script directory.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

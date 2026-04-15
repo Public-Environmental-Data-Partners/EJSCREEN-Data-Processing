@@ -5,15 +5,19 @@ Purpose:
   Run the Superfund NPL proximity pipeline for one state and emit three
   CSV artifacts:
     - targeted_block_groups.csv (intermediate output from Step 1)
-    - block_site_distances.csv (intermediate output from Step 3)
+        - block_site_distances.csv (distance and proximity-score output written in Step 3)
     - final_bg_scores.csv (final output from Step 4)
 
 Behavior summary:
-  - Uses externalized state metadata from scripts/shared/state_config.json.
-  - Supports local paths or S3 URIs for inputs and outputs.
+    - Uses externalized state metadata, shared path configuration, and
+        Superfund path configuration to resolve state-specific inputs and outputs.
+    - Supports local paths or S3 URIs for the NPL input, shared inputs, and
+        output directory.
   - Stages S3-hosted geospatial assets to a temporary local directory before
     reading them with Fiona or GeoPandas.
-  - Preserves the five step (0-4) scoring logic from the working prototype
+    - Computes targeted block groups, block-to-site distances, inverse-distance
+        proximity scores, and final population-weighted block-group scores for one
+        state at a time.
 
 Sample commands:
     - Local output:
@@ -23,7 +27,7 @@ Sample commands:
 
 Credits:
   - Prototype scoring logic by Anne Gunn, Gemini, and GitHub Copilot.
-  - Refactor into the formal pipeline shape by GitHub Copilot, GPT-5.4.
+  - Refactor into the formal pipeline shape by GitHub Copilot, GPT-5.4 and Anne Gunn.
 """
 from __future__ import annotations
 

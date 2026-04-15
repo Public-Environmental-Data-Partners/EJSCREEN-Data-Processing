@@ -13,14 +13,18 @@ Sample commandline:
 	python scripts/hazardous_waste/hazardous_waste_proximity.py local --state MT
 
 Behavior summary:
-	- Uses externalized state metadata shared with the Superfund pipeline.
-	- Supports local paths or S3 URIs for inputs and outputs.
+	- Uses externalized state metadata and shared path configuration to resolve
+	  state-specific inputs and outputs.
+	- Supports local paths or S3 URIs for the hazardous-waste input, shared
+	  inputs, and output directory.
 	- Defaults to the canonical hazardous-waste site file at
-	outputs/hazardous_waste_filtered.csv under the configured input root.
-	- Stages S3-hosted geospatial assets to a temporary local directory before
-	reading them with GeoPandas.
-	- Preserves the Superfund file structure where practical while adapting the
-	workflow to hazardous-waste point sites.
+	  outputs/hazardous_waste_filtered.csv under the active hazardous-waste
+	  pipeline root.
+	- Stages the block-group geospatial dataset locally when it is stored in S3
+	  so GeoPandas can read it reliably.
+	- Computes targeted block groups, block-to-site distances, inverse-distance
+	  proximity scores, and final population-weighted block-group scores for one
+	  state at a time.
 
 Credits:
 	- Superfund proximity reference pipeline by Anne Gunn, Gemini, and GitHub Copilot.

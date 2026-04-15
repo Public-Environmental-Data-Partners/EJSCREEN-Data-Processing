@@ -1,3 +1,19 @@
+"""Load and validate shared path settings used across processing pipelines.
+
+This module reads ``shared_paths_config.json`` and exposes a typed, cached
+configuration object for shared pipeline inputs. It centralizes the filesystem
+and remote storage locations used by multiple scripts, including the local
+shared root, the downloads and preprocessed-input subtrees, and the path
+templates for TIGER block groups and census block weights. A major goal of
+this configuration object is to give client code a simple and consistent way
+to switch between local storage for testing and remote storage for production.
+
+The loader fails fast when required fields are missing, blank, or invalid.
+Template paths are validated so downstream scripts can rely on consistent path
+semantics. ``resolve_local_shared_root_path`` converts the configured local
+root into an absolute path anchored to the scripts directory.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

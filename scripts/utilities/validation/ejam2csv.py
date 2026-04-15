@@ -1,52 +1,48 @@
-"""
-ejam2csv.py
+"""ejam2csv.py
 
 Purpose:
-  Request EJAM API data for a single US state and convert the JSON list-of-dicts
-    response into a compact CSV of selected fields for a chosen indicator type.
+        Request EJAM API data for a single state and convert the response into a
+        compact CSV of selected fields for one supported indicator type.
 
-Features:
-  - Send a POST request to the EJAM API and load the returned JSON into pandas.
-    - Select a known set of indicator-specific columns and write them to CSV.
-  - Supports writing output to local filesystem or to S3 (s3://bucket/prefix/).
-    - Writes output into a per-state subfolder: {path}/{STATE}/ejam_{data_type}_subset.csv.
+Process summary:
+        - Parse runtime arguments for state, destination path, indicator type, row
+            limit, and dry-run behavior.
+        - Send a POST request to the EJAM API for block-group-scale results for the
+            requested state.
+            NB: as of this update, the API call is known to FAIL for CA and TX,
+            probably due to timeout or memory issues on the server side.
+        - Load the returned list-of-dicts into pandas and optionally limit the
+            number of processed rows.
+        - Build an output table from shared base fields plus indicator-specific
+            score columns for traffic, superfund, or hazardous_waste.
+        - Clean selected fields for easier spreadsheet use, including extracting
+            report URLs from HTML anchors and forcing EJAM IDs to import as text.
+        - Write the selected-field CSV and a small sample JSON dump either to a
+            local folder or to an S3 destination.
 
-Usage examples:
-  # Required: specify state code
-        python ejam2csv.py --state RI --data-type superfund -p ./scripts/utilities/validation/output/
-  python ejam2csv.py --state RI -p s3://my-bucket/prefix/ --dry-run
-
-Runtime parameters:
-  --state / --state-code  REQUIRED. Two-letter state short code (e.g. RI). The
-                          value will be upper-cased and used to form the
-                          per-state folder under the configured `--path`.
-  -p / --path             S3 prefix or local folder. Files are read/written under
-                          `{path}/{STATE}/`. If the path starts with s3:// the
-                          script will upload to S3 (boto3 required).
-    --data-type / --type    Optional indicator selector. One of `traffic`,
-                                                    `superfund`, or `hazardous_waste`.
-  -n / --number_rows      Optional limit on rows to process; <=0 means no limit.
-  --dry-run               If set, do not write files; print what would be done.
-
-Defaults (code-level):
-    - output file written as: {path}/{STATE}/ejam_{data_type}_subset.csv
-  - JSON sample dump written as: {path}/{STATE}/ejam_response.json
-  - path default: s3://pedp-data-preserved/ejscreen-data-processing/traffic/
-    - data type default: traffic
+Runtime arguments:
+        - --state / --state-code
+            Required two-letter postal code used in the API request and output
+            subfolder name.
+        - -p / --path
+            Local folder or S3 prefix used as the output root.
+        - --data-type / --type
+            Indicator selector. Must be one of traffic, superfund, or
+            hazardous_waste.
+        - -n / --number_rows
+            Optional row limit; values less than or equal to zero mean no limit.
+        - --dry-run
+            Print what would be written without creating output files.
 
 Outputs:
-    - CSV: ejam_{data_type}_subset.csv (selected EJAM fields) written to {path}/{STATE}/
-  - JSON: ejam_response.json (small sample of raw API response) in same folder
-
-Dependencies:
-  - Python 3.8+
-  - pandas
-  - requests
-  - boto3 (if writing to S3)
-  - python-dotenv (optional; allows loading AWS creds from a .env file)
+        - ejam_{data_type}_subset.csv
+            Selected EJAM fields written under {path}/{STATE}/.
+        - ejam_response.json
+            Small sample of the raw EJAM API response written beside the CSV.
 
 Credits:
-    Code written by Anne Gunn with extensive help from Gemini and GitHub Copilot (GPT-5 mini).
+        Designed by Anne Gunn.
+        Coded by GitHub Copilot (GPT-5.4) and Anne Gunn.
 """
 
 # Inputs: none required (hardcoded API request), optional CLI `-n/--limit` to limit rows

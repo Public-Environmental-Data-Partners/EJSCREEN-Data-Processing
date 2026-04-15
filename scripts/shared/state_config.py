@@ -1,3 +1,16 @@
+"""Load and validate shared state metadata used across processing pipelines.
+
+This module reads ``state_config.json`` and exposes typed state configuration
+records keyed by two-letter postal code. It centralizes the canonical state
+identifiers used by client code, including FIPS code, postal abbreviation,
+display name, and the projected metric CRS to use for state-level processing.
+
+The loader fails fast when state codes are invalid, required fields are
+missing, or CRS definitions are not projected in meters. This gives downstream
+scripts a simple, consistent way to retrieve validated state metadata before
+performing distance calculations or writing state-specific outputs.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

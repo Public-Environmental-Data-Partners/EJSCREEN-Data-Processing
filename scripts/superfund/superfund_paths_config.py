@@ -1,3 +1,19 @@
+"""Load and validate path settings for the Superfund processing pipeline.
+
+This module reads ``superfund_paths_config.json`` and exposes a typed, cached
+configuration object for the Superfund scripts. It centralizes the filesystem
+and remote storage locations used by the pipeline, including the local pipeline
+root, the canonical NPL boundaries source path, and the per-state output path
+template. A major goal of this configuration object is to give client code a
+simple and consistent way to switch between local storage for testing and
+remote storage for production.
+
+The loader fails fast when required fields are missing, blank, or invalid.
+Relative-path fields are validated so downstream scripts can rely on consistent
+path semantics. ``resolve_local_superfund_root_path`` converts the configured
+local root into an absolute path anchored to the Superfund script directory.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

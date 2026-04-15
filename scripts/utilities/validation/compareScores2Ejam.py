@@ -1,19 +1,50 @@
 """compareScores2Ejam.py
 
-Compare two CSVs of block-group weighted scores and produce summary output.
+Purpose:
+        Compare EJAM-derived block-group scores to a second score file, summarize
+        agreement between the two series, and produce both scatterplot and map-based
+        validation outputs for one state.
 
-This script reads two CSV files, coerces the user-specified ID columns to
-strings, inner-joins the tables on that ID, and computes summary statistics
-(mean/median absolute difference, RMSE, Pearson correlation) for the paired
-score columns. It writes a scatterplot (scoreA vs scoreB) with a 1:1 identity
-line to a PNG file and prints a short textual summary to stdout. A CSV of the
-matched rows is also written to the test output path used in examples.
+Process summary:
+        - Read two CSV files, validate the requested ID and score columns, coerce
+            IDs to stripped strings, and coerce scores to numeric values.
+        - Inner-join the two tables on the chosen block-group identifier and compute
+            per-row score differences.
+        - Print comparison diagnostics, including unmatched-ID counts and summary
+            statistics for the matched rows.
+        - Write a scatterplot PNG with a 1:1 reference line and an annotated stats
+            panel.
+        - Write a matched-rows CSV beside the requested output plot path.
+        - Load the state's TIGER block-group geometry from the shared local pipeline
+            inputs and write a four-panel validation figure showing the EJAM scores,
+            the new scores, their differences, and a scatterplot of matched rows.
 
-Defaults are set to sample files under `output/` for convenience; use the
-command-line arguments to point to your own CSVs and column names.
+Runtime arguments:
+        - --state
+            Two-letter postal code used for default paths and for locating the shared
+            TIGER block-group geometry.
+        - --file-ejam, --id-ejam, --score-ejam
+            Path, ID column, and score column for the EJAM reference CSV.
+        - --file-b, --id-b, --score-new
+            Path, ID column, and score column for the comparison CSV.
+        - --out
+            Output path for the scatterplot PNG. The matched-rows CSV and four-panel
+            validation figure are written alongside this file.
+        - --min-matched
+            Minimum number of matched rows required for a zero exit code.
 
-ag specific commandline example:
-    python3 ./compareScores2Ejam.py --state MT --file-ejam ./output/MT/ejam_hazardous_waste_subset.csv --score-ejam proximity.tsdf --file-b ../../hazardous_waste/pipeline/test_data/MT/final_bg_scores.csv --out ./output/MT/compare_ejam_hazardous_waste_subset_vs_final_bg_scores.png
+Outputs:
+        - comparison scatterplot PNG
+            Scatterplot of EJAM versus new scores with summary statistics.
+        - matched_rows_<indicator>.csv
+            Matched comparison table exported beside the requested output PNG.
+        - <STATE>_map_<indicator>_ejam_new_diff.png
+            Four-panel validation figure with three block-group maps and one
+            scatterplot panel.
+
+Credits:
+        Designed by Anne Gunn.
+        Coded by GitHub Copilot (GPT-5.4) and Anne Gunn.
 """
 from __future__ import annotations
 import argparse

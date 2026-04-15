@@ -3,8 +3,54 @@ hazardous_waste_preprocess.py
 
 Purpose:
 	Build the hazardous-waste proximity site universe from RCRA_FACILITIES.csv
-	plus BR_REPORTING_2021.zip, emit the canonical site output,
-	and write source-aware audit artifacts.
+	and BR_REPORTING_2021.zip, then write the canonical site output and planned
+	audit artifacts to the configured local pipeline path or remote S3 root.
+
+Process summary:
+	- Load runtime settings from ./hazardous_waste_preprocess_config.json and
+	  path settings from ./hazardous_waste_paths_config.json.
+	- Inventory the planned source layout and validate required columns before
+	  row-level processing begins.
+	- Extract the set of BR-reporting handler IDs for the configured biennial
+	  cycle.
+	- Build a TSDF slice from active RCRA handlers with operating TSDF status,
+	  validating handler IDs and coordinates.
+	- Build an "LQG slice" from RCRA handlers that both appear in the BR-reporting
+	  reporter set and match the selected generator-net filter. But see the 
+	  genereator-net options below -- we're still trying to figure out exactly
+	  which generator sites should be included.
+	- Deduplicate each provisional slice by HANDLER ID, retaining the strongest
+	  canonical row and recording duplicate decisions in the dedup audit.
+	- Merge the TSDF and LQG slices, derive final site_class values, validate the
+	  combined rows, and emit the canonical hazardous-waste output.
+	- Write validation and dedup audit CSVs, plus the parse audit artifact, to
+	  the active output root for the run.
+
+Runtime arguments:
+	- storage_mode
+	  REQUIRED positional argument. Must be either 'local' or 'remote'.
+	  Selects whether sources are read from and outputs are written to the
+	  configured local pipeline path or remote S3 root.
+	- --generator-net
+	  Optional argument controlling the BR-reporting generator-status filter.
+	  'narrow' keeps LQG only, 'medium' keeps LQG and SQG, and 'broad' keeps
+	  LQG, SQG, and VSQG. Default is 'narrow'.
+
+Outputs:
+	- hazardous_waste_filtered.csv
+	  Canonical hazardous-waste site universe for downstream proximity work.
+	- hazardous_waste_parse_audit.csv
+	  Planned parse-audit artifact for source-level parsing issues.
+	- hazardous_waste_validation_audit.csv
+	  Validation rejects encountered during handler extraction and site filtering.
+	- hazardous_waste_dedup_audit.csv
+	  Duplicate-handler audit trail showing retained versus dropped rows.
+	- hwpre.log
+	  Narrative processing log written in the current working directory.
+
+Credits:
+	Designed by Anne Gunn.
+	Coded by GitHub Copilot (GPT-5.4) and Anne Gunn.
 """
 
 from __future__ import annotations

@@ -17,9 +17,9 @@ Behavior summary:
 
 Sample commands:
     - Local output:
-        python ./superfund_npl_proximity.py --state MT --input-path ./pipeline --output-path ./pipeline
+        python ./superfund_npl_proximity.py local --state MT
     - S3 output:
-        python ./superfund_npl_proximity.py --state MT --input-path ./pipeline --output-path s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/
+        python ./superfund_npl_proximity.py remote --state MT
 
 Credits:
   - Prototype scoring logic by Anne Gunn, Gemini, and GitHub Copilot.
@@ -57,8 +57,10 @@ def _resolve_scripts_dir() -> Path:
 
 
 SCRIPTS_DIR = _resolve_scripts_dir()
+SUPERFUND_DIR = Path(__file__).resolve().parent
 SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
 SHARED_PATHS_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_paths_config.py'
+SUPERFUND_PATHS_CONFIG_MODULE_PATH = SUPERFUND_DIR / 'superfund_paths_config.py'
 
 
 def _load_shared_state_config_symbols():
@@ -94,6 +96,23 @@ def _load_shared_paths_config_symbols():
     module_spec.loader.exec_module(module)
     return module.get_shared_paths_config, module.resolve_local_shared_root_path
 
+
+def _load_superfund_paths_config_symbols():
+    if not SUPERFUND_PATHS_CONFIG_MODULE_PATH.exists():
+        raise ImportError(f'Superfund superfund_paths_config.py not found: {SUPERFUND_PATHS_CONFIG_MODULE_PATH}')
+
+    module_spec = importlib.util.spec_from_file_location(
+        'superfund_paths_config',
+        SUPERFUND_PATHS_CONFIG_MODULE_PATH,
+    )
+    if module_spec is None or module_spec.loader is None:
+        raise ImportError(f'Unable to load module spec from {SUPERFUND_PATHS_CONFIG_MODULE_PATH}')
+
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[module_spec.name] = module
+    module_spec.loader.exec_module(module)
+    return module.get_superfund_paths_config, module.resolve_local_superfund_root_path
+
 try:
     from ..shared.state_config import StateConfig, get_state_config, validate_metric_target_crs
 except ImportError:
@@ -113,13 +132,18 @@ except ImportError:
     except ImportError:
         get_shared_paths_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
 
-DEFAULT_LOCAL_PIPELINE_PATH = './pipeline/'
-DEFAULT_S3_PIPELINE_PATH = 's3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/'
-DEFAULT_NPL_BOUNDARIES_FILENAME = 'downloads/NPL_Boundaries_20260217/NPL_Boundaries.gdb'
+try:
+    from .superfund_paths_config import get_superfund_paths_config, resolve_local_superfund_root_path
+except ImportError:
+    try:
+        from superfund_paths_config import get_superfund_paths_config, resolve_local_superfund_root_path
+    except ImportError:
+        get_superfund_paths_config, resolve_local_superfund_root_path = _load_superfund_paths_config_symbols()
 DEFAULT_TARGETED_BLOCK_GROUPS_FILENAME = 'targeted_block_groups.csv'
 DEFAULT_BLOCK_SITE_DISTANCES_FILENAME = 'block_site_distances.csv'
 DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
 DEFAULT_BUFFER_METERS = 10000.0
+SUPERFUND_STORAGE_MODES = ('local', 'remote')
 
 NPL_LAYER_NAME = 'SITE_BOUNDARIES_SF'
 NPL_STATUS_COLUMN = 'NPL_STATUS_CODE'
@@ -137,11 +161,18 @@ BLOCKS_CSV_REQUIRED_COLUMNS = (
 )
 
 
+def get_active_superfund_root_path(storage_mode: str) -> str:
+    if storage_mode == 'local':
+        return resolve_local_superfund_root_path(SUPERFUND_DIR)
+    if storage_mode == 'remote':
+        return get_superfund_paths_config().remote_root_path
+    raise ValueError(f'Unsupported storage mode: {storage_mode}')
+
+
 @dataclass(slots=True)
 class Config:
+    storage_mode: str
     state: str = 'VT'
-    input_path: str = DEFAULT_LOCAL_PIPELINE_PATH
-    output_path: str = DEFAULT_LOCAL_PIPELINE_PATH
     npl_boundaries_path: str | None = None
     block_groups_path: str | None = None
     census_blocks_path: str | None = None
@@ -155,6 +186,8 @@ class Config:
 @dataclass(frozen=True, slots=True)
 class ResolvedPaths:
     state_config: Any
+    input_root_path: str
+    output_root_path: str
     npl_boundaries_path: str
     block_groups_path: str
     census_blocks_path: str
@@ -167,31 +200,18 @@ class ResolvedPaths:
 def get_config(argv=None) -> Config:
     load_dotenv()
 
-    defaults = Config()
+    defaults = Config(storage_mode='local')
     parser = argparse.ArgumentParser(description='Run the Superfund NPL proximity pipeline for one state')
+    parser.add_argument(
+        'storage_mode',
+        choices=SUPERFUND_STORAGE_MODES,
+        help='Select whether the script reads and writes through the local root path or the remote S3 root path.',
+    )
     parser.add_argument(
         '--state',
         dest='state',
         default=defaults.state,
         help=f'Two-letter state code to process (default: {defaults.state})',
-    )
-    parser.add_argument(
-        '--input-path',
-        dest='input_path',
-        default=defaults.input_path,
-        help=(
-            'Base input folder or S3 prefix. '
-            f'Default local: {defaults.input_path} | Example S3: {DEFAULT_S3_PIPELINE_PATH}'
-        ),
-    )
-    parser.add_argument(
-        '--output-path',
-        dest='output_path',
-        default=defaults.output_path,
-        help=(
-            'Base output folder or S3 prefix. '
-            f'Default local: {defaults.output_path} | Example S3: {DEFAULT_S3_PIPELINE_PATH}'
-        ),
     )
     parser.add_argument(
         '--npl-boundaries-path',
@@ -238,9 +258,8 @@ def get_config(argv=None) -> Config:
 
     args = parser.parse_args(argv)
     return Config(
+        storage_mode=args.storage_mode,
         state=args.state,
-        input_path=args.input_path,
-        output_path=args.output_path,
         npl_boundaries_path=args.npl_boundaries_path,
         block_groups_path=args.block_groups_path,
         census_blocks_path=args.census_blocks_path,
@@ -381,14 +400,18 @@ def stage_geospatial_input(source_path: str, staging_root: Path, path_name: str)
 def resolve_pipeline_paths(cfg: Config) -> ResolvedPaths:
     state_config = get_state_config(cfg.state)
     shared_paths_config = get_shared_paths_config()
+    superfund_paths_config = get_superfund_paths_config()
+
+    input_root_path = get_active_superfund_root_path(cfg.storage_mode)
+    output_root_path = input_root_path
 
     npl_boundaries_path = cfg.npl_boundaries_path or join_path_and_file(
-        cfg.input_path,
-        DEFAULT_NPL_BOUNDARIES_FILENAME,
+        input_root_path,
+        superfund_paths_config.canonical_npl_boundaries_relative_path,
     )
     shared_input_path = (
         shared_paths_config.remote_root_path
-        if is_s3_uri(cfg.input_path)
+        if is_s3_uri(input_root_path)
         else resolve_local_shared_root_path(SCRIPTS_DIR)
     )
     block_groups_path = cfg.block_groups_path or join_path_and_file(
@@ -407,10 +430,19 @@ def resolve_pipeline_paths(cfg: Config) -> ResolvedPaths:
             name=state_config.name,
         ),
     )
-    output_dir = cfg.output_dir or join_path_and_file(cfg.output_path, state_config.postal)
+    output_dir = cfg.output_dir or join_path_and_file(
+        output_root_path,
+        superfund_paths_config.state_output_relative_path_template.format(
+            postal=state_config.postal,
+            fips=state_config.fips,
+            name=state_config.name,
+        ),
+    )
 
     return ResolvedPaths(
         state_config=state_config,
+        input_root_path=input_root_path,
+        output_root_path=output_root_path,
         npl_boundaries_path=npl_boundaries_path,
         block_groups_path=block_groups_path,
         census_blocks_path=census_blocks_path,
@@ -775,8 +807,9 @@ def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
         paths.state_config.fips,
         paths.state_config.metric_crs,
     )
-    logging.info('Input base path: %s', cfg.input_path)
-    logging.info('Output base path: %s', cfg.output_path)
+    logging.info('Storage mode: %s', cfg.storage_mode)
+    logging.info('Input root path: %s', paths.input_root_path)
+    logging.info('Output root path: %s', paths.output_root_path)
     logging.info('Resolved NPL boundaries path: %s', paths.npl_boundaries_path)
     logging.info('Resolved block-groups path: %s', paths.block_groups_path)
     logging.info('Resolved census blocks path: %s', paths.census_blocks_path)

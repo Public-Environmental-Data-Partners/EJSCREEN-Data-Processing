@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 from pathlib import Path
+import re
 import sys
 import textwrap
 import geopandas as gpd
@@ -390,6 +391,37 @@ def summarize_and_plot(
     print(f"Plot written to: {out_path}")
 
 
+def _sanitize_indicator_slug(raw_value: str) -> str:
+    cleaned = re.sub(r'[^a-z0-9]+', '_', raw_value.strip().lower()).strip('_')
+    return cleaned or 'comparison'
+
+
+def _infer_indicator_slug(path_ejam: Path, path_b: Path, score_ejam: str, score_new: str) -> str:
+    ejam_stem = path_ejam.stem.lower()
+    if ejam_stem.startswith('ejam_') and ejam_stem.endswith('_subset'):
+        return _sanitize_indicator_slug(ejam_stem[len('ejam_'):-len('_subset')])
+
+    score_slug_map = {
+        'proximity.tsdf': 'hazardous_waste',
+        'proximity.npl': 'superfund',
+    }
+    if score_ejam in score_slug_map:
+        return score_slug_map[score_ejam]
+
+    new_score_slug_map = {
+        'hazardous_waste_score': 'hazardous_waste',
+    }
+    if score_new in new_score_slug_map:
+        return new_score_slug_map[score_new]
+
+    path_parts = [part.lower() for part in path_b.parts]
+    for candidate in ('hazardous_waste', 'superfund', 'traffic'):
+        if candidate in path_parts:
+            return candidate
+
+    return _sanitize_indicator_slug(score_ejam.replace('.', '_'))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compare two CSVs of weighted scores and plot a scatter with 1:1 line")
     parser.add_argument('--state', type=str, default='MT', help='Two-letter postal code used to build the default output-folder paths')
@@ -416,7 +448,8 @@ def main(argv: list[str] | None = None) -> int:
     path_ejam = Path(args.file_ejam or f'./output/{state}/ejam_superfund_subset.csv')
     path_b = Path(args.file_b or f'../../superfund/pipeline/test_data/{state}/final_bg_scores.csv')
     out_path = Path(args.out or f'./output/{state}/compare_ejam_superfund_subset_vs_final_bg_scores_{state}.png')
-    map_out_path = out_path.parent / f'{state}_map_ejam_new_diff.png'
+    indicator_slug = _infer_indicator_slug(path_ejam, path_b, args.score_ejam, args.score_new)
+    map_out_path = out_path.parent / f'{state}_map_{indicator_slug}_ejam_new_diff.png'
 
     # Read inputs
     try:
@@ -469,7 +502,7 @@ def main(argv: list[str] | None = None) -> int:
 
     export_df = df_sorted.copy()
     export_df['matched_id'] = '\t' + export_df['matched_id'].astype(str)
-    matched_rows_path = out_path.with_name('matched_rows.csv')
+    matched_rows_path = out_path.with_name(f'matched_rows_{indicator_slug}.csv')
     matched_rows_path.parent.mkdir(parents=True, exist_ok=True)
     export_df.to_csv(matched_rows_path, index=False)
     print(f"Matched rows written to: {matched_rows_path}")

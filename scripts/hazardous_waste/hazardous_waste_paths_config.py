@@ -3,10 +3,10 @@
 This module reads ``hazardous_waste_paths_config.json`` and exposes a typed,
 cached configuration object for the hazardous-waste scripts. It centralizes
 the filesystem and remote storage locations used by the pipeline, including
-the local pipeline root, the canonical output path, and the audit output
-paths. A major goal of this configuration object is to give client code a
-simple and consistent way to switch between local storage for testing and
-remote storage for production.
+the local pipeline root, the canonical output path, the audit output paths,
+and the indicator-output path template. A major goal of this configuration
+object is to give client code a simple and consistent way to switch between
+local storage for testing and remote storage for production.
 
 The loader fails fast when required fields are missing, blank, or invalid.
 Relative-path fields are validated so downstream scripts can rely on consistent
@@ -30,6 +30,7 @@ REQUIRED_CONFIG_FIELDS = (
 	'parse_audit_relative_path',
 	'validation_audit_relative_path',
 	'dedup_audit_relative_path',
+	'indicator_output_relative_path_template'
 )
 
 
@@ -41,6 +42,7 @@ class HazardousWastePathsConfig:
 	parse_audit_relative_path: str
 	validation_audit_relative_path: str
 	dedup_audit_relative_path: str
+	indicator_output_relative_path_template: str
 
 
 def _require_string_field(raw_config: dict[str, object], field_name: str) -> str:
@@ -81,12 +83,14 @@ def get_hazardous_waste_paths_config() -> HazardousWastePathsConfig:
 		parse_audit_relative_path=_require_string_field(raw_config, 'parse_audit_relative_path'),
 		validation_audit_relative_path=_require_string_field(raw_config, 'validation_audit_relative_path'),
 		dedup_audit_relative_path=_require_string_field(raw_config, 'dedup_audit_relative_path'),
-	)
+		indicator_output_relative_path_template=_require_string_field(raw_config, 'indicator_output_relative_path_template')
+		)
 
 	_validate_relative_path('canonical_output_relative_path', config.canonical_output_relative_path)
 	_validate_relative_path('parse_audit_relative_path', config.parse_audit_relative_path)
 	_validate_relative_path('validation_audit_relative_path', config.validation_audit_relative_path)
 	_validate_relative_path('dedup_audit_relative_path', config.dedup_audit_relative_path)
+	_validate_relative_path('indicator_output_relative_path_template', config.indicator_output_relative_path_template)
 	return config
 
 

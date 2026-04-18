@@ -18,7 +18,7 @@ Behavior summary:
 	- Supports local paths or S3 URIs for the hazardous-waste input, shared
 	  inputs, and output directory.
 	- Defaults to the canonical hazardous-waste site file at
-	  outputs/hazardous_waste_filtered.csv under the active hazardous-waste
+	  preprocessed_input/hazardous_waste_filtered.csv under the active hazardous-waste
 	  pipeline root.
 	- Stages the block-group geospatial dataset locally when it is stored in S3
 	  so GeoPandas can read it reliably.
@@ -417,7 +417,12 @@ def resolve_pipeline_paths(cfg: Config) -> ResolvedPaths:
 			name=state_config.name,
 		),
 	)
-	output_dir = cfg.output_dir or join_path_and_file(hazardous_waste_root_path, state_config.postal)
+	indicator_output_relative_dir = hazardous_waste_paths_config.indicator_output_relative_path_template.format(
+		fips=state_config.fips,
+		postal=state_config.postal,
+		name=state_config.name,
+	)
+	output_dir = cfg.output_dir or join_path_and_file(hazardous_waste_root_path, indicator_output_relative_dir)
 
 	return ResolvedPaths(
 		state_config=state_config,

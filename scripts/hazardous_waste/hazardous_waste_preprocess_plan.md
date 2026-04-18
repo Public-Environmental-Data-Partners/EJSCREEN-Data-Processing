@@ -40,10 +40,10 @@ The code currently performs these stages:
 
 The active preprocess pipeline now writes all of the following under the configured output root:
 
-1. `outputs/hazardous_waste_filtered.csv`
-2. `outputs/hazardous_waste_parse_audit.csv`
-3. `outputs/hazardous_waste_validation_audit.csv`
-4. `outputs/hazardous_waste_dedup_audit.csv`
+1. `preprocessed_input/hazardous_waste_filtered.csv`
+2. `preprocessed_input/audit/hazardous_waste_parse_audit.csv`
+3. `preprocessed_input/audit/hazardous_waste_validation_audit.csv`
+4. `preprocessed_input/audit/hazardous_waste_dedup_audit.csv`
 
 The canonical output remains the file expected by downstream proximity processing.
 

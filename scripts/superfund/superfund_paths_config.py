@@ -3,7 +3,7 @@
 This module reads ``superfund_paths_config.json`` and exposes a typed, cached
 configuration object for the Superfund scripts. It centralizes the filesystem
 and remote storage locations used by the pipeline, including the local pipeline
-root, the canonical NPL boundaries source path, and the per-state output path
+root, the canonical NPL boundaries source path, and the indicator-output path
 template. A major goal of this configuration object is to give client code a
 simple and consistent way to switch between local storage for testing and
 remote storage for production.
@@ -26,7 +26,7 @@ REQUIRED_CONFIG_FIELDS = (
 	'local_root_path',
 	'remote_root_path',
 	'canonical_npl_boundaries_relative_path',
-	'state_output_relative_path_template',
+	'indicator_output_relative_path_template',
 )
 
 
@@ -35,7 +35,7 @@ class SuperfundPathsConfig:
 	local_root_path: str
 	remote_root_path: str
 	canonical_npl_boundaries_relative_path: str
-	state_output_relative_path_template: str
+	indicator_output_relative_path_template: str
 
 
 def _require_string_field(raw_config: dict[str, object], field_name: str) -> str:
@@ -73,11 +73,11 @@ def get_superfund_paths_config() -> SuperfundPathsConfig:
 		local_root_path=_require_string_field(raw_config, 'local_root_path'),
 		remote_root_path=_require_string_field(raw_config, 'remote_root_path'),
 		canonical_npl_boundaries_relative_path=_require_string_field(raw_config, 'canonical_npl_boundaries_relative_path'),
-		state_output_relative_path_template=_require_string_field(raw_config, 'state_output_relative_path_template'),
+		indicator_output_relative_path_template=_require_string_field(raw_config, 'indicator_output_relative_path_template'),
 	)
 
 	_validate_relative_path('canonical_npl_boundaries_relative_path', config.canonical_npl_boundaries_relative_path)
-	_validate_relative_path('state_output_relative_path_template', config.state_output_relative_path_template)
+	_validate_relative_path('indicator_output_relative_path_template', config.indicator_output_relative_path_template)
 	return config
 
 

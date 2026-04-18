@@ -2,5 +2,5 @@
   "local_root_path": "./pipeline/",
   "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/",
   "canonical_npl_boundaries_relative_path": "downloads/NPL_Boundaries_20260217/NPL_Boundaries.gdb",
-  "state_output_relative_path_template": "{postal}"
+  "indicator_output_relative_path_template": "output/indicators/{postal}"
 }

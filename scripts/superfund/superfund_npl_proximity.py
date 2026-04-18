@@ -240,7 +240,7 @@ def get_config(argv=None) -> Config:
         '--output-dir',
         dest='output_dir',
         default=defaults.output_dir,
-        help='Explicit local path or S3 URI for the state output directory; overrides output-path + state postal code',
+        help='Explicit local path or S3 URI for the indicator output directory; overrides the configured indicator output path',
     )
     parser.add_argument(
         '--targeted-block-groups-filename',
@@ -437,7 +437,7 @@ def resolve_pipeline_paths(cfg: Config) -> ResolvedPaths:
     )
     output_dir = cfg.output_dir or join_path_and_file(
         output_root_path,
-        superfund_paths_config.state_output_relative_path_template.format(
+        superfund_paths_config.indicator_output_relative_path_template.format(
             postal=state_config.postal,
             fips=state_config.fips,
             name=state_config.name,

@@ -28,7 +28,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VALIDATION_DIR="$SCRIPT_DIR/../utilities/validation"
 VALIDATION_OUTPUT_DIR="$VALIDATION_DIR/output"
-PIPELINE_DIR="$SCRIPT_DIR/pipeline"
+PIPELINE_DIR="$SCRIPT_DIR/pipeline/output/indicators"
 
 echo "Starting Superfund proximity for $STATE_CODE in $STORAGE_MODE mode"
 if ! python3 "$SCRIPT_DIR/superfund_npl_proximity.py" \

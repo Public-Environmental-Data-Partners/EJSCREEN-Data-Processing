@@ -318,7 +318,10 @@ def plot_score_maps(
     )
 
     score_scale_bound = score_scale_max if score_scale_max > 0 else 1.0
-    diff_scale_bound = diff_max_abs if diff_max_abs > 0 else 1.0
+    # If the differences are very small (i.e. the new code is matching the old
+    # code very closely), then tiny differences were being exaggerated.
+    # So, a small hack to enforce a reasonable color scale even when the differences are small. 
+    diff_scale_bound = diff_max_abs if diff_max_abs > 1.0 else 1.0
     score_norm = Normalize(vmin=0.0, vmax=score_scale_bound)
     diff_norm = TwoSlopeNorm(vmin=-diff_scale_bound, vcenter=0.0, vmax=diff_scale_bound)
 

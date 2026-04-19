@@ -1,0 +1,14 @@
+{
+  "local_root_path": "./pipeline/",
+  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/pm25/pipeline/",
+  "preprocessed_tract_output_relative_path": "preprocessed_input/pm25_tract_annual_average.csv",
+  "indicator_output_relative_path_template": "output/indicators/{postal}",
+  "downloads": {
+    "request_timeout_seconds": 120,
+    "chunk_size_bytes": 1048576,
+    "raw_pm25_2020": {
+      "relative_path": "downloads/2020/2020_pm25_daily_average.txt.gz",
+      "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2020_pm25_daily_average.txt.gz"
+    }
+  }
+}

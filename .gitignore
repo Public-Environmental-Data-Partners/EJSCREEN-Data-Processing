@@ -23,12 +23,8 @@ scripts/traffic/.Rhistory
 # Everything within the pipeline trees should be ignored 
 # except .md files we write to document contents for the 
 # GitHub repo.
-scripts/superfund/pipeline/
-!scripts/superfund/pipeline/**/*.md
-scripts/traffic/pipeline/
-!scripts/traffic/pipeline/**/*.md
-scripts/hazardous_waste/pipeline/
-!scripts/hazardous_waste/pipeline/**/*.md
+pipeline/
+!pipeline/**/*.md
 
 # Local files for testing input and output
 # I don't think we want to commit any of these to the repo

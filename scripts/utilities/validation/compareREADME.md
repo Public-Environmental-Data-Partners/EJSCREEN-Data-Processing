@@ -32,11 +32,22 @@ python ejam2csv.py --state RI --data-type traffic -p ./output/ --dry-run
 ### 3) Compare EJAM CSV and pipeline CSV
 python prototypes/compare_csv_tables.py --state RI -p ./output/ --dry-run
 
+PM2.5 local validation quick start
+-----------------------------
+Use the PM2.5-specific helpers when you want to compare the tract-expanded PM2.5
+pipeline output to an EJAM PM subset for one state:
+
+1. `python ejam2csv.py --state RI --data-type pm25 -p ./output/`
+2. `bash ../pm25/run_state_validation.sh RI local`
+
+The current PM2.5 wrapper defaults to the EJAM score column `pm` and compares it
+to the pipeline score column `pm25_score`.
+
 Notes on options and defaults
 ----------------------------
 - All three scripts accept `-p/--path` (S3 prefix or local folder). If the path starts with `s3://` the scripts will read/write to S3 (boto3 + credentials required).
 - `geojson2csv.py` defaults: input `bg_summary.geojson`, output `bg_summary.csv`; both are expected under `{path}/{STATE}/` unless overridden.
-- `ejam2csv.py` accepts `--data-type/--type` with values `traffic`, `superfund`, or `hazardous_waste`.
+- `ejam2csv.py` accepts `--data-type/--type` with values `traffic`, `superfund`, `hazardous_waste`, or `pm25`.
 - `ejam2csv.py` defaults: `--data-type traffic`, output `ejam_{data_type}_subset.csv`, and writes a small JSON sample `ejam_response.json` in the same `{path}/{STATE}/` folder for inspection.
 - `prototypes/compare_csv_tables.py` defaults: EJAM input `ejam_traffic_subset.csv`, pipeline input `bg_summary.csv` (looked up under `{path}/{STATE}/`). Default join keys: `ejam_uniq_id` (EJAM) and `block_group_geoid` (pipeline). Default mapping (new_pipe -> ejam): `{"blk_grp_score":"traffic.score", "total_pop":"pop"}`.
 

@@ -14,7 +14,9 @@ Process summary:
         - Load the returned list-of-dicts into pandas and optionally limit the
             number of processed rows.
         - Build an output table from shared base fields plus indicator-specific
-            score columns for traffic, superfund, or hazardous_waste.
+            score columns for traffic, superfund, hazardous_waste, or pm25.
+            The pm25 branch currently exports the live PM-related EJAM columns
+            used by the PM2.5 validation workflow.
         - Clean selected fields for easier spreadsheet use, including extracting
             report URLs from HTML anchors and forcing EJAM IDs to import as text.
         - Write the selected-field CSV and a small sample JSON dump either to a
@@ -27,8 +29,8 @@ Runtime arguments:
         - -p / --path
             Local folder or S3 prefix used as the output root.
         - --data-type / --type
-            Indicator selector. Must be one of traffic, superfund, or
-            hazardous_waste.
+            Indicator selector. Must be one of traffic, superfund,
+            hazardous_waste, or pm25.
         - -n / --number_rows
             Optional row limit; values less than or equal to zero mean no limit.
         - --dry-run
@@ -37,6 +39,8 @@ Runtime arguments:
 Outputs:
         - ejam_{data_type}_subset.csv
             Selected EJAM fields written under {path}/{STATE}/.
+            For pm25 this currently includes `pm`, `avg.pm`, and `state.avg.pm`
+            when present in the API response.
         - ejam_response.json
             Small sample of the raw EJAM API response written beside the CSV.
 
@@ -83,7 +87,7 @@ def get_config(argv=None) -> Config:
     parser.add_argument('-p', '--path', type=str, default=Config.path,
                         help='S3 path prefix or local folder for output (default local example: ./output/)')
     parser.add_argument('--data-type', '--type', dest='data_type', type=str, default=Config.data_type,
-                        choices=['superfund', 'traffic', 'hazardous_waste'],
+                        choices=['superfund', 'traffic', 'hazardous_waste', 'pm25'],
                         help='indicator to extract from the EJAM response (default: traffic)')
     parser.add_argument('-n', '--number_rows', type=int, default=Config.number_rows,
                         help='maximum number of rows to process (default: 10); <=0 means no limit')
@@ -352,6 +356,11 @@ def main(argv=None) -> None:
         ],
         "hazardous_waste": [
             "proximity.tsdf", "pctile.proximity.tsdf"
+        ],
+        "pm25": [
+            "pm",
+            "avg.pm",
+            "state.avg.pm",
         ],
     }
     desired = base_required + indicator_columns[config.data_type] + base_last

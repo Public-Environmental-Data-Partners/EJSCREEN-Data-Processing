@@ -42,6 +42,11 @@ Outputs:
             Four-panel validation figure with three block-group maps and one
             scatterplot panel.
 
+Indicator note:
+        The indicator slug is inferred from the EJAM filename, the EJAM score
+        column, the new score column, or the comparison path. This now includes
+        PM2.5 validation inputs such as `pm` and `pm25_score`.
+
 Credits:
         Designed by Anne Gunn.
         Coded by GitHub Copilot (GPT-5.4) and Anne Gunn.
@@ -433,21 +438,25 @@ def _infer_indicator_slug(path_ejam: Path, path_b: Path, score_ejam: str, score_
         return _sanitize_indicator_slug(ejam_stem[len('ejam_'):-len('_subset')])
 
     score_slug_map = {
+        'pm': 'pm25',
         'proximity.tsdf': 'hazardous_waste',
         'proximity.npl': 'superfund',
+        'pm25': 'pm25',
+        'pm25.score': 'pm25',
     }
     if score_ejam in score_slug_map:
         return score_slug_map[score_ejam]
 
     new_score_slug_map = {
         'hazardous_waste_score': 'hazardous_waste',
+        'pm25_score': 'pm25',
         'superfund_score': 'superfund',
     }
     if score_new in new_score_slug_map:
         return new_score_slug_map[score_new]
 
     path_parts = [part.lower() for part in path_b.parts]
-    for candidate in ('hazardous_waste', 'superfund', 'traffic'):
+    for candidate in ('hazardous_waste', 'pm25', 'superfund', 'traffic'):
         if candidate in path_parts:
             return candidate
 

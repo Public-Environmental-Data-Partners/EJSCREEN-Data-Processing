@@ -47,3 +47,4 @@ scripts/utilities/agScratch/
 
 # Dev-specific Copilot instructions
 copilot-instructions.md
+scripts/o3/.python-version

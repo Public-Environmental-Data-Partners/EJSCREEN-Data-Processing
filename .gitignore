@@ -41,10 +41,11 @@ test.out
 
 # Dev-specific experiments, temp tools, and old
 # files kept for diffing
-scripts/utilities/agScratch/
+agScratch/
 *.old
 *.old/
 
 # Dev-specific Copilot instructions
 copilot-instructions.md
+*_plan.md
 scripts/o3/.python-version

@@ -446,6 +446,8 @@ def _infer_indicator_slug(path_ejam: Path, path_b: Path, score_ejam: str, score_
         'proximity.npl': 'superfund',
         'pm25': 'pm25',
         'pm25.score': 'pm25',
+        'o3': 'o3',
+        'o3.score': 'o3'
     }
     if score_ejam in score_slug_map:
         return score_slug_map[score_ejam]
@@ -454,12 +456,13 @@ def _infer_indicator_slug(path_ejam: Path, path_b: Path, score_ejam: str, score_
         'hazardous_waste_score': 'hazardous_waste',
         'pm25_score': 'pm25',
         'superfund_score': 'superfund',
+        'o3_score': 'o3'
     }
     if score_new in new_score_slug_map:
         return new_score_slug_map[score_new]
 
     path_parts = [part.lower() for part in path_b.parts]
-    for candidate in ('hazardous_waste', 'pm25', 'superfund', 'traffic'):
+    for candidate in ('hazardous_waste', 'pm25', 'superfund', 'traffic', 'o3'):
         if candidate in path_parts:
             return candidate
 

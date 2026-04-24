@@ -1,11 +1,12 @@
 # Central Fetch Design
 
-## Purpose
+## The Do's
 
 - Add one central fetch runner at `scripts/fetch_raw.py`.
 - Use indicator-owned config files as the single source of truth for root paths and download definitions.
 - Support both local filesystem targets and remote S3 targets.
 - Download authoritative source files as-is without expanding `.zip` or `.gz` archives.
+- Do download directly to the ultimate destination location, using a `.tmp` sibling file and rename for local downloads, and direct streaming for remote downloads.
 - Skip content validation of downloaded archives.
 - Require explicit state selection for any state-scoped download.
 
@@ -162,26 +163,32 @@ python scripts/fetch_raw.py <indicator> <storage_mode> --download <download_key>
 - Resolve the active root path from `indicator` and `storage_mode`.
 - Resolve the selected download entry from `--download`.
 - Expand state-scoped templates when `--state all` or `--state <postal>` is provided.
-- Stream each file to a local temp file.
-- Copy the completed temp file to the local or remote destination.
+- For `local`, stream each file to a temp file created in the destination directory.
+- For `local`, rename the completed temp file into place after the download finishes.
+- For `remote`, stream each file directly to the final remote object path.
 - Skip downloads whose destination already exists.
 - Append one audit row per attempted file.
 - Write file-based logs beside the central runner.
 
 ## Download behavior
 
-- Fetch streams to a temp file first.
-- After the stream completes, copy the temp file to the final destination.
-- Delete the temp file whether the copy succeeds or fails.
+- For `local`, fetch streams to a temp file in the ultimate destination folder rather than to a separate temp area.
+- For `local`, the temp filename should be a clearly temporary sibling of the final output, such as a dot-prefixed or suffix-marked name.
+- For `local`, rename the temp file to the final destination name only after the stream completes successfully.
+- For `local`, delete the temp file if the download fails or is interrupted.
+- For `remote`, fetch streams directly to the final remote destination path without a local temp-file stage.
+- The local and remote behaviors are intentionally different: local rename within one directory gives a cheap and strong way to avoid exposing a partial final filename, while remote object stores typically do not support true atomic rename and usually implement rename as copy-plus-delete.
 - If the destination already exists, skip the download and write an audit row with status `skipped`.
 - No unzip or gunzip step occurs in fetch.
 - No post-download inspection occurs in fetch.
 
 ## Audit contract
 
-- The central runner writes one `fetch_audit.csv` under the active indicator root.
+- The central runner writes one centralized `fetch_audit.csv` beside `scripts/fetch_raw.py` in the `scripts` folder.
+- All indicators append rows into that same audit file.
 - Audit columns should stay aligned with the current broad pattern used by the existing fetch scripts:
   - `process_name`
+  - `indicator`
   - `run_id`
   - `dl_started_at`
   - `dl_ended_at`
@@ -195,6 +202,9 @@ python scripts/fetch_raw.py <indicator> <storage_mode> --download <download_key>
   - `message`
 - For `scope = single`, `state` should be `ALL`.
 - For `scope = state`, `state` should be the selected postal code for each emitted row.
+- `indicator` should store the selected indicator key such as `pm25` or `shared`.
+- `run_id` should remain a run identifier only and should not be relied on to encode the indicator.
+- The centralized audit file should include enough context to distinguish indicators cleanly, so `process_name` should identify the central fetch runner, `indicator` should identify the selected indicator, and `destination_path` should continue to capture the resolved local or remote target path.
 
 ## Logging contract
 
@@ -251,69 +261,69 @@ python scripts/fetch_raw.py <indicator> <storage_mode> --download <download_key>
 }
 ```
 
-## Implementation outline
 
-### Slice 1: central runner skeleton
+## Implementation plan (three phases)
 
-Deliverables:
+We will migrate incrementally to reduce risk. Each phase makes a narrowly scoped change and includes quick validation checks before moving to the next phase.
 
-1. Add `scripts/fetch_raw.py`.
-2. Add CLI parsing for `indicator`, `storage_mode`, `--download`, and `--state`.
-3. Move the reusable download, local/S3 write, logging, and audit helpers into the central runner.
+Phase 1 — PM2.5: change transfer mechanics only
 
-Checks:
+- Goal: implement the new write behavior in the smallest, easiest-to-test script before any config or folder-level refactor.
+- Target file: `scripts/pm25/pm25_fetch_raw.py`.
+- Changes:
+  - For `local`, write the download into a `.tmp` sibling in the destination directory and rename into place on success.
+  - For `remote`, stream directly to the configured remote destination (no intermediate local copy for remote mode).
+  - Keep existing PM2.5 config shape and loader; do not introduce the shared `downloads` schema yet.
+  - Keep logging and the per-script audit behavior until Phase 3 (temporary local audit rows may still be written under the PM2.5 root while testing).
+- Tests / checks:
+  - Local download lands at the configured path and is renamed atomically into place.
+  - Rerun skips when the file exists.
+  - Remote mode uploads to the configured S3 path and is readable (if credentials available).
+  - No archive expansion or ZIP validation is performed.
 
-1. Unknown indicator fails fast.
-2. Unknown download key fails fast.
-3. Invalid `--state` combinations fail fast.
+Phase 2 — Shared: transfer mechanics + remove ZIP validation
 
-### Slice 2: PM2.5 migration
+- Goal: apply the same transfer behavior to the more complex shared fetch and remove content validation.
+- Target file: `scripts/shared/fetch_tiger_lines_bg.py`.
+- Changes:
+  - Implement the same local `.tmp`-then-rename and direct-remote streaming behavior.
+  - Remove per-file ZIP content validation (do not inspect archive members).
+  - Preserve `--state` and state expansion behavior; make `--state <postal|all>` required for state-scoped downloads.
+  - Keep the config file where it is for now; add a `downloads` block in the shared config if convenient, but do not yet require the central schema.
+- Tests / checks:
+  - `--download`-style invocation is not required in this phase; validate with the existing CLI (`storage_mode` and `--state`).
+  - `--state RI` resolves one URL and writes to the expected destination path.
+  - `--state all` resolves one destination per configured state.
+  - ZIP validation has been removed: downloads complete regardless of archive member contents.
 
-Deliverables:
+Phase 3 — Central runner, consolidated config, centralized audit
 
-1. Keep PM2.5 config in one file.
-2. Update the PM2.5 config loader to expose the common `downloads` shape.
-3. Point the central runner at the PM2.5 config module.
+- Goal: consolidate the runner, config schema, and audit file after the I/O semantics are stable.
+- Changes:
+  - Add `scripts/fetch_raw.py` as the central runner; require `--download <download_key>`.
+  - Migrate each indicator config to expose the common `downloads` shape (examples already in this document).
+  - Centralize audit into `scripts/fetch_audit.csv` and update the runner to append rows there.
+  - Implement `--download` validation, `--state` requirement rules, and template expansion using `scripts/shared/state_config.py` for state-scoped downloads.
+  - Optionally, leave thin wrappers in per-indicator folders that call the central runner to preserve existing documentation or CI hooks.
+- Tests / checks:
+  - `scripts/fetch_raw.py pm25 local --download raw_pm25_2020` performs the PM2.5 download using the PM2.5 config.
+  - `scripts/fetch_raw.py shared local --download tiger_bg_2020 --state RI` resolves to the same destination path as the legacy shared script produced.
+  - The centralized `scripts/fetch_audit.csv` contains clear rows for each attempted download with `indicator` filled in.
+  - Old indicator-specific fetch scripts either delegate to the central runner or are removed, and documentation is updated.
 
-Checks:
+Notes on sequencing
 
-1. `raw_pm25_2020` downloads to the configured local path.
-2. A rerun skips cleanly.
-3. Remote mode resolves the configured S3 path.
+- The primary reason for this order is diagnostic clarity: if transfer mechanics fail, it is far easier to debug in a single, simple script than after centralization and config changes.
+- Keep CLI stability during Phases 1–2 to reduce the churn in callers and CI; introduce `--download` only in Phase 3.
 
-### Slice 3: shared migration
-
-Deliverables:
-
-1. Move TIGER fetch metadata into `scripts/shared/shared_paths_config.json`.
-2. Update the shared config loader to validate the new `downloads` block.
-3. Keep `tiger_bg_relative_path_template` as the canonical downstream path field.
-4. Validate that the canonical TIGER path and the download relative path template match.
-
-Checks:
-
-1. `--download tiger_bg_2020 --state RI` resolves one expected URL and one expected destination path.
-2. `--download tiger_bg_2020 --state all` resolves one URL and destination path per configured state.
-3. Omitted `--state` for `tiger_bg_2020` fails fast.
-
-### Slice 4: retire indicator-specific fetch scripts
-
-Deliverables:
-
-1. Replace direct use of `scripts/pm25/pm25_fetch_raw.py` and `scripts/shared/fetch_tiger_lines_bg.py` with the central runner.
-2. Either remove the old fetch scripts or leave thin wrappers that call the central runner with fixed arguments during transition.
-3. Update README or per-indicator notes if they reference the old fetch entry points.
-
-Checks:
-
-1. Existing fetch workflows still succeed through the new entry point.
-2. No fetch flow relies on current working directory path behavior.
 
 ## Open decisions already resolved for implementation
 
 - Put the new fetch runner under `scripts`.
 - Keep downloaded files compressed.
 - Do not perform archive member validation.
+- Stream remote downloads directly to the final remote object path.
+- For local downloads, create the temp file in the final destination folder and rename it into place on success.
 - Require explicit `--state <postal|all>` for state-scoped downloads.
 - Require `--download <download_key>` in version 1.
 - Keep canonical downstream path fields outside `downloads` and validate any duplicated values for agreement.

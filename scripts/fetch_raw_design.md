@@ -262,59 +262,60 @@ python scripts/fetch_raw.py <indicator> <storage_mode> --download <download_key>
 ```
 
 
-## Implementation plan (three phases)
+## Implementation plan (phased)
 
-We will migrate incrementally to reduce risk. Each phase makes a narrowly scoped change and includes quick validation checks before moving to the next phase.
+We will migrate incrementally to reduce risk. Each phase makes a narrowly scoped change and includes quick validation checks before moving to the next phase. The plan below reflects the updated approach: copy the working PM2.5 script into a central runner first, add `--download` immediately, then integrate other indicators one at a time.
 
-Phase 1 — PM2.5: change transfer mechanics only
+Phase 1 — PM2.5 (transfer mechanics)
 
-- Goal: implement the new write behavior in the smallest, easiest-to-test script before any config or folder-level refactor.
+- Status: completed (implement and validate local `.tmp` write + remote direct streaming in `scripts/pm25/pm25_fetch_raw.py`).
+- Goal: validate the new write behavior in the simplest, easiest-to-test indicator.
 - Target file: `scripts/pm25/pm25_fetch_raw.py`.
-- Changes:
+- Key changes validated in this phase:
   - For `local`, write the download into a `.tmp` sibling in the destination directory and rename into place on success.
   - For `remote`, stream directly to the configured remote destination (no intermediate local copy for remote mode).
   - Keep existing PM2.5 config shape and loader; do not introduce the shared `downloads` schema yet.
-  - Keep logging and the per-script audit behavior until Phase 3 (temporary local audit rows may still be written under the PM2.5 root while testing).
-- Tests / checks:
-  - Local download lands at the configured path and is renamed atomically into place.
-  - Rerun skips when the file exists.
-  - Remote mode uploads to the configured S3 path and is readable (if credentials available).
   - No archive expansion or ZIP validation is performed.
 
-Phase 2 — Shared: transfer mechanics + remove ZIP validation
+Phase 2 — Centralize runner and audit (copy PM2.5 -> central)
 
-- Goal: apply the same transfer behavior to the more complex shared fetch and remove content validation.
-- Target file: `scripts/shared/fetch_tiger_lines_bg.py`.
+- Goal: create the central runner by copying the tested PM2.5 fetch into `scripts/fetch_raw.py`, add the `--download` CLI argument immediately, and switch audit output to the script folder.
+- Target file: `scripts/fetch_raw.py` (initially a copy of `scripts/pm25/pm25_fetch_raw.py`).
 - Changes:
-  - Implement the same local `.tmp`-then-rename and direct-remote streaming behavior.
-  - Remove per-file ZIP content validation (do not inspect archive members).
-  - Preserve `--state` and state expansion behavior; make `--state <postal|all>` required for state-scoped downloads.
-  - Keep the config file where it is for now; add a `downloads` block in the shared config if convenient, but do not yet require the central schema.
+  - Create `scripts/fetch_raw.py` as a copy of the PM2.5 script and adapt it to accept the required `--indicator <indicator_key>` and optional `--download <download_key>`.
+  - Make `--indicator` required in this phase and `--download` optional. `--state` is unsupported for now.
+  - Configure the central runner to read PM2.5's config when `indicator=pm25` so downloads work immediately using existing PM2.5 config values.
+  - Change audit output so `fetch_audit.csv` is appended in the `scripts` folder (alongside the runner and its logs).
+  - Preserve existing per-indicator config files; the central runner should load each indicator's config module to resolve roots and download entries.
 - Tests / checks:
-  - `--download`-style invocation is not required in this phase; validate with the existing CLI (`storage_mode` and `--state`).
-  - `--state RI` resolves one URL and writes to the expected destination path.
-  - `--state all` resolves one destination per configured state.
-  - ZIP validation has been removed: downloads complete regardless of archive member contents.
+  - `python scripts/fetch_raw.py pm25 local --download raw_pm25_2020` downloads the PM2.5 file and appends one row to `scripts/fetch_audit.csv`.
+  - Logs are written beside `scripts/fetch_raw.py` and `scripts/fetch_audit.csv` is populated.
 
-Phase 3 — Central runner, consolidated config, centralized audit
+Phase 3 — O3 integration
 
-- Goal: consolidate the runner, config schema, and audit file after the I/O semantics are stable.
+- Goal: add `o3` as the next indicator and validate its downloads via the central runner.
 - Changes:
-  - Add `scripts/fetch_raw.py` as the central runner; require `--download <download_key>`.
-  - Migrate each indicator config to expose the common `downloads` shape (examples already in this document).
-  - Centralize audit into `scripts/fetch_audit.csv` and update the runner to append rows there.
-  - Implement `--download` validation, `--state` requirement rules, and template expansion using `scripts/shared/state_config.py` for state-scoped downloads.
-  - Optionally, leave thin wrappers in per-indicator folders that call the central runner to preserve existing documentation or CI hooks.
+  - Ensure `scripts/o3/o3_fetch_raw.py` behavior is reproduced (or retire it) and that the central runner can load the O3 config and perform its configured `--download` entries.
+  - No `--state` handling expected for O3; focus on making `--download` work for O3 entries.
 - Tests / checks:
-  - `scripts/fetch_raw.py pm25 local --download raw_pm25_2020` performs the PM2.5 download using the PM2.5 config.
-  - `scripts/fetch_raw.py shared local --download tiger_bg_2020 --state RI` resolves to the same destination path as the legacy shared script produced.
-  - The centralized `scripts/fetch_audit.csv` contains clear rows for each attempted download with `indicator` filled in.
-  - Old indicator-specific fetch scripts either delegate to the central runner or are removed, and documentation is updated.
+  - `python scripts/fetch_raw.py o3 local --download <o3_download_key>` succeeds and writes an audit row to `scripts/fetch_audit.csv`.
+
+Phase 4 — Shared integration and state handling
+
+- Goal: integrate the `shared` indicator into the central runner and add `--state` handling for state-scoped downloads.
+- Changes:
+  - Extend the central runner to validate `--state` for `scope=state` downloads and to expand templates when `--state` is `all` or a postal code.
+  - Migrate or add a `downloads` block in the shared config to expose the shared download entries to the central runner.
+  - Remove any ZIP-content validation from shared fetch logic and treat shared fetch as transfer-only; downstream preprocessors (in `scripts/shared/`) should perform any required archive inspection or extraction.
+- Tests / checks:
+  - `python scripts/fetch_raw.py shared local --download tiger_bg_2020 --state RI` resolves to the expected destination path and writes an audit row.
+  - `--state all` iterates across all configured states.
 
 Notes on sequencing
 
-- The primary reason for this order is diagnostic clarity: if transfer mechanics fail, it is far easier to debug in a single, simple script than after centralization and config changes.
-- Keep CLI stability during Phases 1–2 to reduce the churn in callers and CI; introduce `--download` only in Phase 3.
+- Rationale: copying the working PM2.5 script into `scripts/fetch_raw.py` and enabling `--download` immediately reduces integration risk and lets us migrate indicators one at a time.
+- `--download` will be required starting in Phase 2 so each run is explicit; `--state` support is postponed until Phase 4 when `shared` is integrated.
+- This sequencing lets us preserve working I/O semantics while incrementally centralizing config and audit handling.
 
 
 ## Open decisions already resolved for implementation

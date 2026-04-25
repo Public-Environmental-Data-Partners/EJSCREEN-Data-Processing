@@ -6,9 +6,8 @@ Purpose:
 
 Process summary:
 	- Read PM2.5 configuration and choose local or remote storage mode.
-	- Stream the configured source URL into a temporary file.
+	- Stream the configured source URL into the configured destination path
 	- Emit heartbeat logging during long downloads.
-	- Copy the completed temp file into the configured destination path.
 	- Append one fetch-audit row describing the run outcome.
 
 Runtime arguments:
@@ -30,8 +29,6 @@ from datetime import datetime
 import importlib
 import logging
 from pathlib import Path
-import shutil
-import tempfile
 import time
 import uuid
 
@@ -215,59 +212,6 @@ def append_audit_row(path: str, row: dict[str, str | int]) -> None:
 		writer.writerow(row)
 
 
-def download_to_temp_file(session: requests.Session, cfg: Config) -> tuple[Path, int]:
-	"""Stream the configured PM2.5 source file into a temporary local file."""
-	temp_file = tempfile.NamedTemporaryFile(delete=False)
-	temp_path = Path(temp_file.name)
-	total_bytes = 0
-	started_at = time.monotonic()
-	last_heartbeat_at = started_at
-	try:
-		with temp_file:
-			with session.get(cfg.source_url, stream=True, timeout=cfg.request_timeout_seconds) as response:
-				response.raise_for_status()
-				content_length_header = response.headers.get('Content-Length')
-				logging.info(
-					'Connected to source URL. HTTP %s. Content-Length=%s',
-					response.status_code,
-					content_length_header or 'unknown',
-				)
-				for chunk in response.iter_content(chunk_size=cfg.chunk_size_bytes):
-					if not chunk:
-						continue
-					temp_file.write(chunk)
-					total_bytes += len(chunk)
-					now = time.monotonic()
-					if now - last_heartbeat_at >= HEARTBEAT_INTERVAL_SECONDS:
-						elapsed_seconds = max(now - started_at, 0.001)
-						bytes_per_second = total_bytes / elapsed_seconds
-						logging.info(
-							'Downloaded %s bytes so far (elapsed=%.1fs, rate=%.1f bytes/s)',
-							total_bytes,
-							elapsed_seconds,
-							bytes_per_second,
-						)
-						print(f'Bytes downloaded so far: {total_bytes}', flush=True)
-						last_heartbeat_at = now
-	except Exception:
-		if temp_path.exists():
-			temp_path.unlink()
-		raise
-	logging.info('Finished download stream with %s total bytes', total_bytes)
-	return temp_path, total_bytes
-
-
-def write_temp_file_to_destination(temp_path: Path, destination_path: str, cfg: Config) -> None:
-	"""Copy a completed temp file into the configured local path or S3 object."""
-	logging.info('Starting file copy from temp file %s to %s', temp_path, destination_path)
-	print(f'Starting file copy to destination: {destination_path}')
-	with temp_path.open('rb') as input_stream:
-		with open_binary_output_stream(destination_path) as output_stream:
-			shutil.copyfileobj(input_stream, output_stream, length=cfg.chunk_size_bytes)
-	logging.info('Finished file copy from temp file %s to %s', temp_path, destination_path)
-	print(f'Finished file copy to destination: {destination_path}')
-
-
 def download_raw_pm25_file(session: requests.Session, cfg: Config, destination_path: str, filename: str) -> DownloadResult:
 	"""Download the raw PM2.5 file unless the configured destination already exists."""
 	if path_exists(destination_path):
@@ -286,16 +230,18 @@ def download_raw_pm25_file(session: requests.Session, cfg: Config, destination_p
 	logging.info('Downloading raw PM2.5 file from %s', cfg.source_url)
 	total_bytes = 0
 
-	# Optimize local writes: stream directly into a .tmp sibling inside the
-	# destination directory and atomically replace the final file. For remote
-	# storage we keep the existing temp-file + copy flow.
+	# Be explicit about the destination path and ensure parent
+	# directories exist ( these are a no-op for S3 but do no harm). 
+	# Then stream directly to the configured destination folder.
+	dest_path = Path(destination_path)
+	ensure_local_parent_dir(destination_path)
+	started_at = time.monotonic()
+	last_heartbeat_at = started_at
+	# Safety step for local writes stream directly into a .tmp sibling inside the
+	# destination directory and then atomically replace the final file.
 	if cfg.storage_mode == 'local':
-		dest_path = Path(destination_path)
-		ensure_local_parent_dir(destination_path)
 		temp_dest = dest_path.with_name(dest_path.name + '.tmp')
 		try:
-			started_at = time.monotonic()
-			last_heartbeat_at = started_at
 			with session.get(cfg.source_url, stream=True, timeout=cfg.request_timeout_seconds) as response:
 				response.raise_for_status()
 				logging.info('Connected to source URL. HTTP %s. Content-Length=%s', response.status_code, response.headers.get('Content-Length', 'unknown'))
@@ -310,6 +256,7 @@ def download_raw_pm25_file(session: requests.Session, cfg: Config, destination_p
 							elapsed_seconds = max(now - started_at, 0.001)
 							bytes_per_second = total_bytes / elapsed_seconds
 							logging.info('Downloading %s: %d bytes so far (%.1f B/s)', filename, total_bytes, bytes_per_second)
+							print(f'Bytes downloaded so far: {total_bytes}', flush=True)
 							last_heartbeat_at = now
 			temp_dest.replace(dest_path)
 		except Exception:
@@ -321,11 +268,34 @@ def download_raw_pm25_file(session: requests.Session, cfg: Config, destination_p
 			raise
 
 	else:
-		temp_path, total_bytes = download_to_temp_file(session, cfg)
 		try:
-			write_temp_file_to_destination(temp_path, destination_path, cfg)
-		finally:
-			temp_path.unlink(missing_ok=True)
+			with session.get(cfg.source_url, stream=True, timeout=cfg.request_timeout_seconds) as response:
+				response.raise_for_status()
+				logging.info('Connected to source URL. HTTP %s. Content-Length=%s', response.status_code, response.headers.get('Content-Length', 'unknown'))
+				with open_binary_output_stream(destination_path) as out_stream:
+					for chunk in response.iter_content(chunk_size=cfg.chunk_size_bytes):
+						if not chunk:
+							continue
+						out_stream.write(chunk)
+						total_bytes += len(chunk)
+						now = time.monotonic()
+						if now - last_heartbeat_at >= HEARTBEAT_INTERVAL_SECONDS:
+							elapsed_seconds = max(now - started_at, 0.001)
+							bytes_per_second = total_bytes / elapsed_seconds
+							logging.info('Downloading %s: %d bytes so far (%.1f B/s)', filename, total_bytes, bytes_per_second)
+							print(f'Bytes downloaded so far: {total_bytes}', flush=True)
+							last_heartbeat_at = now
+		except Exception:
+			# Best-effort cleanup for remote partial writes; don't mask original error.
+			try:
+				if is_s3_uri(destination_path):
+					fsspec = load_fsspec_module()
+					fs = fsspec.open(destination_path).fs
+					if fs.exists(destination_path):
+						fs.rm(destination_path)
+			except Exception:
+				pass
+			raise
 
 	logging.info('Wrote %s bytes to %s', total_bytes, destination_path)
 	return DownloadResult(
@@ -339,6 +309,7 @@ def download_raw_pm25_file(session: requests.Session, cfg: Config, destination_p
 		message='downloaded and uploaded',
 	)
 
+ 
 
 def main(argv=None) -> int:
 	"""Run the PM2.5 raw-download workflow and append one audit record."""

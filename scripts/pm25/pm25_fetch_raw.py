@@ -247,7 +247,7 @@ def download_to_temp_file(session: requests.Session, cfg: Config) -> tuple[Path,
 							elapsed_seconds,
 							bytes_per_second,
 						)
-						print(f'Bytes downloaded so far: {total_bytes}')
+						print(f'Bytes downloaded so far: {total_bytes}', flush=True)
 						last_heartbeat_at = now
 	except Exception:
 		if temp_path.exists():
@@ -284,11 +284,48 @@ def download_raw_pm25_file(session: requests.Session, cfg: Config, destination_p
 		)
 
 	logging.info('Downloading raw PM2.5 file from %s', cfg.source_url)
-	temp_path, total_bytes = download_to_temp_file(session, cfg)
-	try:
-		write_temp_file_to_destination(temp_path, destination_path, cfg)
-	finally:
-		temp_path.unlink(missing_ok=True)
+	total_bytes = 0
+
+	# Optimize local writes: stream directly into a .tmp sibling inside the
+	# destination directory and atomically replace the final file. For remote
+	# storage we keep the existing temp-file + copy flow.
+	if cfg.storage_mode == 'local':
+		dest_path = Path(destination_path)
+		ensure_local_parent_dir(destination_path)
+		temp_dest = dest_path.with_name(dest_path.name + '.tmp')
+		try:
+			started_at = time.monotonic()
+			last_heartbeat_at = started_at
+			with session.get(cfg.source_url, stream=True, timeout=cfg.request_timeout_seconds) as response:
+				response.raise_for_status()
+				logging.info('Connected to source URL. HTTP %s. Content-Length=%s', response.status_code, response.headers.get('Content-Length', 'unknown'))
+				with temp_dest.open('wb') as f:
+					for chunk in response.iter_content(chunk_size=cfg.chunk_size_bytes):
+						if not chunk:
+							continue
+						f.write(chunk)
+						total_bytes += len(chunk)
+						now = time.monotonic()
+						if now - last_heartbeat_at >= HEARTBEAT_INTERVAL_SECONDS:
+							elapsed_seconds = max(now - started_at, 0.001)
+							bytes_per_second = total_bytes / elapsed_seconds
+							logging.info('Downloading %s: %d bytes so far (%.1f B/s)', filename, total_bytes, bytes_per_second)
+							last_heartbeat_at = now
+			temp_dest.replace(dest_path)
+		except Exception:
+			# Try to remove a partial temp file, but don't mask the original exception.
+			try:
+				temp_dest.unlink()
+			except Exception:
+				pass
+			raise
+
+	else:
+		temp_path, total_bytes = download_to_temp_file(session, cfg)
+		try:
+			write_temp_file_to_destination(temp_path, destination_path, cfg)
+		finally:
+			temp_path.unlink(missing_ok=True)
 
 	logging.info('Wrote %s bytes to %s', total_bytes, destination_path)
 	return DownloadResult(

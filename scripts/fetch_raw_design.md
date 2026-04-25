@@ -8,7 +8,7 @@
 - Download authoritative source files as-is without expanding `.zip` or `.gz` archives.
 - Do download directly to the ultimate destination location, using a `.tmp` sibling file and rename for local downloads, and direct streaming for remote downloads.
 - Skip content validation of downloaded archives.
-- Require explicit state selection for any state-scoped download.
+- Require explicit state selection for any state-scoped downloads but support 'ALL' where appropriate.
 
 ## The Don'ts
 
@@ -31,10 +31,10 @@
 python scripts/fetch_raw.py <indicator> <storage_mode> --download <download_key> [--state <postal|all>]
 ```
 
-- `<indicator>`: indicator identifier such as `pm25` or `shared`
-- `<storage_mode>`: `local` or `remote`
-- `--download <download_key>`: required selector for one configured download entry
-- `--state <postal|all>`: required only when the selected download has `scope = state`
+- `-i <indicator>`: indicator identifier such as `pm25` or `shared`
+- `-m <storage_mode>`: `local` or `remote`
+- `--state | -s <postal|all>`: required only when the selected download has `scope = state`
+- `--download | -d <download_key>`: required selector for one configured download entry (default is `all`)
 
 ### CLI rules
 
@@ -172,13 +172,13 @@ python scripts/fetch_raw.py <indicator> <storage_mode> --download <download_key>
 
 ## Download behavior
 
+- If the destination file already exists, skip the download and write an audit row with status `skipped`. Skip as early in the process as possible to minimize processing time for files we already have.
 - For `local`, fetch streams to a temp file in the ultimate destination folder rather than to a separate temp area.
-- For `local`, the temp filename should be a clearly temporary sibling of the final output, such as a dot-prefixed or suffix-marked name.
-- For `local`, rename the temp file to the final destination name only after the stream completes successfully.
+- For `local`, the temp filename should be a clearly temporary sibling of the final output, with a .tmp suffix-marked name.
+- For `local`, rename the temp file to the final destination name only after the download stream completes successfully.
 - For `local`, delete the temp file if the download fails or is interrupted.
 - For `remote`, fetch streams directly to the final remote destination path without a local temp-file stage.
 - The local and remote behaviors are intentionally different: local rename within one directory gives a cheap and strong way to avoid exposing a partial final filename, while remote object stores typically do not support true atomic rename and usually implement rename as copy-plus-delete.
-- If the destination already exists, skip the download and write an audit row with status `skipped`.
 - No unzip or gunzip step occurs in fetch.
 - No post-download inspection occurs in fetch.
 

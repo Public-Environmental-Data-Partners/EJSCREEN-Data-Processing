@@ -279,7 +279,7 @@ Phase 1 — PM2.5 (transfer mechanics)
 
 Phase 2 — Centralize runner and audit (copy PM2.5 -> central)
 
-- Goal: create the central runner by copying the tested PM2.5 fetch into `scripts/fetch_raw.py`, add the `--download` CLI argument immediately, and switch audit output to the script folder.
+- Goal: create the central runner by copying the tested PM2.5 fetch into `scripts/fetch_raw.py`, add the `--indicator` and `--download` CLI arguments immediately, and switch audit output to the script folder.
 - Target file: `scripts/fetch_raw.py` (initially a copy of `scripts/pm25/pm25_fetch_raw.py`).
 - Changes:
   - Create `scripts/fetch_raw.py` as a copy of the PM2.5 script and adapt it to accept the required `--indicator <indicator_key>` and optional `--download <download_key>`.

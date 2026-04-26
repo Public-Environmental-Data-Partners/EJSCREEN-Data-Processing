@@ -55,7 +55,7 @@ except Exception:
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 HAZARDOUS_WASTE_DIR = Path(__file__).resolve().parent
 SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
-SHARED_PATHS_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_paths_config.py'
+SHARED_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_config.py'
 HAZARDOUS_WASTE_PATHS_CONFIG_MODULE_PATH = HAZARDOUS_WASTE_DIR / 'hazardous_waste_paths_config.py'
 
 
@@ -77,20 +77,20 @@ def _load_shared_state_config_symbols():
 
 
 def _load_shared_paths_config_symbols():
-	if not SHARED_PATHS_CONFIG_MODULE_PATH.exists():
-		raise ImportError(f'Shared shared_paths_config.py not found: {SHARED_PATHS_CONFIG_MODULE_PATH}')
+	if not SHARED_CONFIG_MODULE_PATH.exists():
+		raise ImportError(f'Shared shared_config.py not found: {SHARED_CONFIG_MODULE_PATH}')
 
 	module_spec = importlib.util.spec_from_file_location(
-		'shared_paths_config',
-		SHARED_PATHS_CONFIG_MODULE_PATH,
+		'shared_config',
+		SHARED_CONFIG_MODULE_PATH,
 	)
 	if module_spec is None or module_spec.loader is None:
-		raise ImportError(f'Unable to load module spec from {SHARED_PATHS_CONFIG_MODULE_PATH}')
+		raise ImportError(f'Unable to load module spec from {SHARED_CONFIG_MODULE_PATH}')
 
 	module = importlib.util.module_from_spec(module_spec)
 	sys.modules[module_spec.name] = module
 	module_spec.loader.exec_module(module)
-	return module.get_shared_paths_config, module.resolve_local_shared_root_path
+	return module.get_shared_config, module.resolve_local_shared_root_path
 
 
 def _load_hazardous_waste_paths_config_symbols():
@@ -118,12 +118,12 @@ except ImportError:
 		StateConfig, get_state_config, validate_metric_target_crs = _load_shared_state_config_symbols()
 
 try:
-	from ..shared.shared_paths_config import get_shared_paths_config, resolve_local_shared_root_path
+	from ..shared.shared_config import get_shared_config, resolve_local_shared_root_path
 except ImportError:
 	try:
-		from shared.shared_paths_config import get_shared_paths_config, resolve_local_shared_root_path
+		from shared.shared_config import get_shared_config, resolve_local_shared_root_path
 	except ImportError:
-		get_shared_paths_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
+		get_shared_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
 
 try:
 	from .hazardous_waste_paths_config import get_hazardous_waste_paths_config, resolve_local_hazardous_waste_root_path
@@ -388,7 +388,7 @@ def stage_geospatial_input(source_path: str, staging_root: Path, path_name: str)
 
 def resolve_pipeline_paths(cfg: Config) -> ResolvedPaths:
 	state_config = get_state_config(cfg.state)
-	shared_paths_config = get_shared_paths_config()
+	shared_cfg = get_shared_config()
 	hazardous_waste_paths_config = get_hazardous_waste_paths_config()
 	hazardous_waste_root_path = get_active_hazardous_waste_root_path(cfg.storage_mode)
 
@@ -397,13 +397,13 @@ def resolve_pipeline_paths(cfg: Config) -> ResolvedPaths:
 		hazardous_waste_paths_config.canonical_output_relative_path,
 	)
 	shared_input_path = (
-		shared_paths_config.remote_root_path
+		shared_cfg.remote_root_path
 		if cfg.storage_mode == 'remote'
 		else resolve_local_shared_root_path(SCRIPTS_DIR)
 	)
 	block_groups_path = cfg.block_groups_path or join_path_and_file(
 		shared_input_path,
-		shared_paths_config.tiger_bg_relative_path_template.format(
+		shared_cfg.tiger_bg_relative_path_template.format(
 			fips=state_config.fips,
 			postal=state_config.postal,
 			name=state_config.name,
@@ -411,7 +411,7 @@ def resolve_pipeline_paths(cfg: Config) -> ResolvedPaths:
 	)
 	census_blocks_path = cfg.census_blocks_path or join_path_and_file(
 		shared_input_path,
-		shared_paths_config.census_block_weights_relative_path_template.format(
+		shared_cfg.census_block_weights_relative_path_template.format(
 			fips=state_config.fips,
 			postal=state_config.postal,
 			name=state_config.name,

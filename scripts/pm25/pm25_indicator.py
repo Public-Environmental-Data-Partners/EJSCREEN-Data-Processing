@@ -64,7 +64,7 @@ def _resolve_scripts_dir() -> Path:
 
 SCRIPTS_DIR = _resolve_scripts_dir()
 SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
-SHARED_PATHS_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_paths_config.py'
+SHARED_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_config.py'
 
 
 def _load_shared_state_config_symbols():
@@ -82,17 +82,17 @@ def _load_shared_state_config_symbols():
 
 
 def _load_shared_paths_config_symbols():
-	if not SHARED_PATHS_CONFIG_MODULE_PATH.exists():
-		raise ImportError(f'Shared shared_paths_config.py not found: {SHARED_PATHS_CONFIG_MODULE_PATH}')
+	if not SHARED_CONFIG_MODULE_PATH.exists():
+		raise ImportError(f'Shared shared_config.py not found: {SHARED_CONFIG_MODULE_PATH}')
 
-	module_spec = importlib.util.spec_from_file_location('shared_paths_config_pm25', SHARED_PATHS_CONFIG_MODULE_PATH)
+	module_spec = importlib.util.spec_from_file_location('shared_config_pm25', SHARED_CONFIG_MODULE_PATH)
 	if module_spec is None or module_spec.loader is None:
-		raise ImportError(f'Unable to load module spec from {SHARED_PATHS_CONFIG_MODULE_PATH}')
+		raise ImportError(f'Unable to load module spec from {SHARED_CONFIG_MODULE_PATH}')
 
 	module = importlib.util.module_from_spec(module_spec)
 	sys.modules[module_spec.name] = module
 	module_spec.loader.exec_module(module)
-	return module.get_shared_paths_config, module.resolve_local_shared_root_path
+	return module.get_shared_config, module.resolve_local_shared_root_path
 
 
 try:
@@ -104,12 +104,12 @@ except ImportError:
 		StateConfig, STATE_CONFIG_PATH, get_state_config = _load_shared_state_config_symbols()
 
 try:
-	from ..shared.shared_paths_config import get_shared_paths_config, resolve_local_shared_root_path
+	from ..shared.shared_config import get_shared_config, resolve_local_shared_root_path
 except ImportError:
 	try:
-		from shared.shared_paths_config import get_shared_paths_config, resolve_local_shared_root_path
+		from shared.shared_config import get_shared_config, resolve_local_shared_root_path
 	except ImportError:
-		get_shared_paths_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
+		get_shared_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,14 +299,14 @@ def get_active_shared_root_path(storage_mode: str) -> str:
 	if storage_mode == 'local':
 		return resolve_local_shared_root_path(SCRIPTS_DIR)
 	if storage_mode == 'remote':
-		return get_shared_paths_config().remote_root_path
+		return get_shared_config().remote_root_path
 	raise ValueError(f'Unsupported storage mode: {storage_mode}')
 
 
 def resolve_paths(cfg: Config, state_config: Any) -> ResolvedPaths:
 	"""Resolve the tract input, shared block-weight input, and state output paths."""
 	pm25_config = get_pm25_config()
-	shared_paths_config = get_shared_paths_config()
+	shared_cfg = get_shared_config()
 	pm25_root_path = get_active_pm25_root_path(cfg.storage_mode)
 	shared_root_path = get_active_shared_root_path(cfg.storage_mode)
 
@@ -314,7 +314,7 @@ def resolve_paths(cfg: Config, state_config: Any) -> ResolvedPaths:
 		pm25_root_path,
 		pm25_config.preprocessed_tract_output_relative_path,
 	)
-	census_block_weights_relative_path = shared_paths_config.census_block_weights_relative_path_template.format(
+	census_block_weights_relative_path = shared_cfg.census_block_weights_relative_path_template.format(
 		postal=state_config.postal,
 	)
 	census_block_weights_path = cfg.census_block_weights_path or join_root_and_relative_path(

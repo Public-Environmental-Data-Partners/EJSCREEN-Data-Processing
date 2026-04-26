@@ -291,7 +291,7 @@ Phase 2 — Centralize runner and audit (copy PM2.5 -> central)
   - `python scripts/fetch_raw.py pm25 local --download raw_pm25_2020` downloads the PM2.5 file and appends one row to `scripts/fetch_audit.csv`.
   - Logs are written beside `scripts/fetch_raw.py` and `scripts/fetch_audit.csv` is populated.
 
-Phase 3 — O3 integration
+Phase 3 — O3 integration -- just works
 
 - Goal: add `o3` as the next indicator and validate its downloads via the central runner.
 - Changes:

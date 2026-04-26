@@ -1,15 +1,15 @@
 """fetch_raw.py
 
-Central fetch runner (Phase 2 initial slice).
 
 Purpose:
-        Minimal central runner copied from the PM2.5 fetch implementation.
-        Supports selecting an `indicator` and `storage_mode` and delegates to
-        the indicator's config loader for paths and download metadata.
+        Central fetch utility to download raw source files needed to generate indicator
+        scores. It depends on the indicator folder containing a config .json file with
+        the necessary `downloads` structure to specify the source and destination for the download.`
 
-Usage example (PM2.5):
+Usage examples:
 
-        python scripts/fetch_raw.py --indicator pm25 --mode local --download raw_pm25_2020
+        python scripts/fetch_raw.py --indicator pm25 --mode local (has only one file to download, so no --download key needed)
+        python scripts/fetch_raw.py --indicator o3 --mode remote  (ditto)
 
 Notes:
         - This initial slice supports indicators that expose the same helpers

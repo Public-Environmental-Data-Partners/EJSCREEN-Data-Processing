@@ -18,11 +18,14 @@ Usage examples:
     python scripts/fetch_raw.py --indicator shared --download tiger_bg_2020 --state VT --mode local
 
 Notes:
-    - `--download` is optional for indicators that expose a default download entry.
-    - For state-scoped downloads use `--state` with a two-letter postal code which will be
-      validated against `scripts/shared/state_config.json` and translated to the FIPS code
-      used in filenames and URLs. The postal code (uppercased) is stored in the audit.
-    - Use `--dry-run` to print the expanded source URL and destination path without downloading.
+        - `--mode` defaults to `local` when omitted.
+        - `--download` is optional for indicators that expose a default download entry.
+        - For state-scoped downloads use `--state` with a two-letter postal code which will be
+            validated against `scripts/shared/state_config.json` and translated to the FIPS code
+            used in filenames and URLs. The postal code (uppercased) is stored in the audit.
+        - The special value `all` is supported for `--state` (case-insensitive) to iterate across
+            all configured states.
+        - Use `--dry-run` to print the expanded source URL and destination path without downloading.
 """
 
 from __future__ import annotations
@@ -125,8 +128,8 @@ def _load_shared_state_module():
 def get_config(argv=None) -> Config:
     parser = argparse.ArgumentParser(description='Central fetch runner (Phase 2 initial slice).')
     parser.add_argument('--indicator', '-i', required=True, help='Indicator key such as pm25 or shared')
-    parser.add_argument('--mode', '-m', dest='storage_mode', choices=('local', 'remote'), required=True, help='Select storage mode: local or remote')
-    parser.add_argument('--download', '-d', help='Download key from the indicator config (optional for now)')
+    parser.add_argument('--mode', '-m', dest='storage_mode', choices=('local', 'remote'), default='local', help='Select storage mode: local or remote (default: local)')
+    parser.add_argument('--download', '-d', help='Download key from the indicator config')
     parser.add_argument('--state', '-s', dest='state', help='Two-letter postal state code for state-scoped downloads (e.g. VT)')
     parser.add_argument('--dry-run', action='store_true', help='Print expanded source URL and destination path and exit')
     args = parser.parse_args(argv)

@@ -7,8 +7,7 @@
 # - EJAM subset file: scripts/utilities/validation/output/{STATE}/ejam_o3_subset.csv
 # - EJAM score column: o3
 # - pipeline score column: o3_score
-# bash o3/run_state_validation.sh --state_code WY --storage_mode local --ejam_subset_csv output/WY/ejam_o3_subset.csv --ejam_score_column o3
-bash o3/run_state_validation.sh WY local output/WY/ejam_o3_subset.csv
+
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 4 ]]; then

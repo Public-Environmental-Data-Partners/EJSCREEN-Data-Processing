@@ -1,14 +1,12 @@
 """
-EJSCREEN Data Swapper & Validator (Data Wipe Version)
-
+EJSCREEN Data Swapper
 PURPOSE:
-    1. Loads a local EJSCREEN CSV archive.
-    2. Saves an untouched copy as 'ejscreen_validation.csv'.
-    3. For a specified indicator (e.g., 'ozone'):
+    1. Loads a copy of a local EJSCREEN CSV archive.
+    2. For a specified indicator (e.g., 'ozone'):
         - Wipes all data values in variant columns (e.g., 'P_OZONE', 'B_OZONE') 
           but keeps the headers.
         - Completely drops the base indicator column to allow for replacement.
-    4. Merges local data from the concat script via an outer join on 'ID'.
+    3. Merges local data from the concat script via an outer join on 'ID'.
 
 USAGE:
     python script_name.py [local_concat_csv] [indicator_name]
@@ -45,12 +43,8 @@ def main(local_csv_path, indicator_name):
     # Low memory False helps with the large number of EJSCREEN columns
     df_main = pd.read_csv(EJSCREEN_PATH, dtype={'ID': str}, low_memory=False)
     
-    # 2. Save Validation Set
-    print(f"--- Step 2: Saving Validation copy ---")
-    #df_main.to_csv("ejscreen_validation.csv", index=False)
-    
-    # 3. Handle Indicator Variants
-    print(f"--- Step 3: Wiping data for variants of '{indicator_name}' ---")
+    # 2. Handle Indicator Variants
+    print(f"--- Step 2: Wiping data for variants of '{indicator_name}' ---")
     
     # Regex to find any column containing the indicator name
     pattern = re.compile(f".*{indicator_name}.*", re.IGNORECASE)
@@ -73,8 +67,8 @@ def main(local_csv_path, indicator_name):
         print(f"Dropping base column for replacement: {base_col_to_drop}")
         df_main = df_main.drop(columns=[base_col_to_drop])
 
-    # 4. Load local concat data and join
-    print(f"--- Step 4: Merging local scores ---")
+    # 3. Load local concat data and join
+    print(f"--- Step 3: Merging local scores ---")
     df_local = pd.read_csv(local_csv_path, dtype={'block_group_geoid': str})
     
     # Rename local ID to 'ID' to match EJSCREEN primary key
@@ -87,7 +81,7 @@ def main(local_csv_path, indicator_name):
     # This places your new indicator data into the dataframe
     df_final_test = pd.merge(df_main, df_local, on='ID', how='outer')
 
-    # 5. Save Output
+    # 4. Save Output
     output_name = "ejscreen_test_replaced.csv"
     df_final_test.to_csv(output_name, index=False)
     

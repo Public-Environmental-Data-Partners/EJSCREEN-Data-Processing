@@ -80,6 +80,9 @@ def main(local_csv_path, indicator_name):
     # Rename local ID to 'ID' to match EJSCREEN primary key
     df_local = df_local.rename(columns={'block_group_geoid': 'ID'})
 
+    # Recase indicator column....
+    df_local = df_local.rename(columns={indicator_name: indicator_name.upper()})
+
     # Outer join on ID
     # This places your new indicator data into the dataframe
     df_final_test = pd.merge(df_main, df_local, on='ID', how='outer')

@@ -1,5 +1,5 @@
 {
-  "local_root_path": "shared/pipeline/",
+  "local_root_path": "pipeline/",
   "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/shared/pipeline/",
   "downloads_subtree_name": "downloads",
   "preprocessed_input_subtree_name": "preprocessed_input",

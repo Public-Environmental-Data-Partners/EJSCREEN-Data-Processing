@@ -297,7 +297,8 @@ def get_active_o3_root_path(storage_mode: str) -> str:
 
 def get_active_shared_root_path(storage_mode: str) -> str:
 	if storage_mode == 'local':
-		return resolve_local_shared_root_path(SCRIPTS_DIR)
+		this_path = SCRIPTS_DIR/"shared"
+		return resolve_local_shared_root_path(this_path)
 	if storage_mode == 'remote':
 		return get_shared_config().remote_root_path
 	raise ValueError(f'Unsupported storage mode: {storage_mode}')

@@ -235,7 +235,7 @@ def _prepare_map_geodataframe(
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, int, int, float, float]:
     state_config = get_state_config(state)
     shared_cfg = get_shared_config()
-    tiger_bg_path = Path(resolve_local_shared_root_path(SCRIPTS_DIR)) / shared_cfg.tiger_bg_relative_path_template.format(
+    tiger_bg_path = Path(resolve_local_shared_root_path(SCRIPTS_DIR/"shared")) /  shared_cfg.tiger_bg_relative_path_template.format(
         fips=state_config.fips,
         postal=state_config.postal,
         name=state_config.name,

@@ -504,7 +504,15 @@ def main(argv=None) -> int:
 	for state_config in state_targets:
 		process_state(cfg, state_config, prepared_tract_scores)
 
-	logging.info('Completed Ozone block-group indicator generation for %d states', len(state_targets))
+	state_count = len(state_targets)
+	msg = f"Completed Ozone block-group indicator generation"
+	if state_count == 1:
+		msg += f" for {state_count} state: {state_targets[0].postal}"
+	else:
+		msg += f" for {state_count} states"
+	logging.info(msg)
+	print(msg)
+
 	return 0
 
 

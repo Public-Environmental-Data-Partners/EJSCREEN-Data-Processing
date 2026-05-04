@@ -235,11 +235,21 @@ def load_state_targets(selected_state: str | None) -> list[Any]:
 	if not isinstance(payload, dict):
 		raise RuntimeError(f'State config file must contain a JSON object: {STATE_CONFIG_PATH}')
 
-	state_codes = sorted(payload)
+	# Filter configured states to CONUS entries first. For this indicator, "all"
+	# means only CONUS states. Also require that a requested single state be
+	# a CONUS state; otherwise raise to signal invalid selection.
+	conus_state_codes = sorted(
+		[code for code, cfg in payload.items() if isinstance(cfg, dict) and cfg.get('is_conus') is True]
+	)
+
 	if selected_state is not None:
-		if selected_state not in state_codes:
-			raise RuntimeError(f"Configured state '{selected_state}' was not found in {STATE_CONFIG_PATH.name}")
+		if selected_state not in conus_state_codes:
+			raise RuntimeError(
+				f"Configured state '{selected_state}' was not found among CONUS states in {STATE_CONFIG_PATH.name}"
+			)
 		state_codes = [selected_state]
+	else:
+		state_codes = conus_state_codes
 
 	return [get_state_config(state_code) for state_code in state_codes]
 
@@ -403,6 +413,7 @@ def build_final_scores(tract_scores: pd.DataFrame, block_group_population: pd.Da
 			'Positive-population block groups are missing tract-level Ozone scores. '
 			f'Sample block groups: {missing_samples}'
 		)
+
 
 	merged[FINAL_SCORE_COLUMN] = merged[ANNUAL_AVERAGE_COLUMN].astype('Float64')
 	merged.loc[~positive_population_mask, FINAL_SCORE_COLUMN] = pd.NA

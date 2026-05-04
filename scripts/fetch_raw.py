@@ -641,6 +641,15 @@ def main(argv=None) -> int:
         print(f'  state: {cfg.state or ""}')
         print(f'  source_url: {cfg.source_url}')
         print(f'  destination_path: {destination_path}')
+        # Provide a short, human-friendly summary for quick inspection
+        print('SUMMARY:')
+        print('  total: 1')
+        print('  succeeded: 0')
+        print('  failed: 0')
+        print('  skipped: 1')
+        print(f'  filename: {filename}')
+        print(f'  destination: {destination_path}')
+        print('  status: dry-run')
         logging.info('Dry run requested; no download performed')
         return 0
 
@@ -682,6 +691,27 @@ def main(argv=None) -> int:
                 result=result,
             ),
         )
+
+    # Print a concise summary for single-download runs
+    try:
+        total = 1
+        succeeded = 1 if result.status == 'uploaded' else 0
+        skipped = 1 if result.status == 'skipped' else 0
+        failed = 0 if result.status in ('uploaded', 'skipped') else 1
+    except Exception:
+        total = succeeded = skipped = failed = 0
+
+    print('SUMMARY:')
+    print(f'  total: {total}')
+    print(f'  succeeded: {succeeded}')
+    print(f'  failed: {failed}')
+    print(f'  skipped: {skipped}')
+    print(f'  filename: {result.filename}')
+    print(f'  destination: {result.destination_path}')
+    print(f'  bytes_downloaded: {result.bytes_downloaded}')
+    print(f'  status: {result.status}')
+    if result.message:
+        print(f'  message: {result.message}')
 
     logging.info('Completed fetch with status %s', result.status)
     return 0

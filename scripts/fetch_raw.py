@@ -92,7 +92,9 @@ class DownloadResult:
     bytes_downloaded: int
     message: str
 
-
+# This looks like a lot of code to simply load a module.
+# But, since the module we want depends on our --indicator runtime
+# argument, we need dynamic loading rather than static.
 def _load_indicator_config_module(indicator: str):
     cfg_path = SCRIPTS_DIR / indicator / f'{indicator}_config.py'
     if not cfg_path.exists():
@@ -296,10 +298,11 @@ def get_config(argv=None) -> Config:
 def initialize_runtime_dependencies(cfg: Config) -> None:
     if cfg.storage_mode != 'remote':
         return
-    importlib.import_module('dotenv')
+    dotenv =importlib.import_module('dotenv')
     importlib.import_module('s3fs')
     importlib.import_module('fsspec')
     importlib.import_module('boto3')
+    dotenv.load_dotenv()
 
 
 def load_fsspec_module():

@@ -19,7 +19,9 @@ Usage examples:
 
 Notes:
         - `--mode` defaults to `local` when omitted.
-        - `--download` is optional for indicators that expose a default download entry.
+        - `--download` must be specified when the indicator config includes multiple download entries.
+           See the pm25_config.json for an example of a single entry and shared_config.json for an
+           example set up for multiple entries.
         - For state-scoped downloads use `--state` with a two-letter postal code which will be
             validated against `scripts/shared/state_config.json` and translated to the FIPS code
             used in filenames and URLs. The postal code (uppercased) is stored in the audit.

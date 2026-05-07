@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 
-# Run the PM2.5 indicator for one state and, in local mode, compare the output
-# against a PM2.5 EJAM subset CSV using compareScores2Ejam.py.
+# Run the Ozone indicator for one state and, in local mode, compare the output
+# against a Ozone EJAM subset CSV using compareScores2Ejam.py.
 #
-# Defaults follow the current working PM2.5 validation setup:
-# - EJAM subset file: scripts/utilities/validation/output/{STATE}/ejam_pm25_subset.csv
-# - EJAM score column: pm
-# - pipeline score column: pm25_score
-# run_state_validation.sh --state_code RI --storage_mode local --ejam_subset_csv ../utilities/validation/output/RI/ejam_o3_subset.csv --ejam_score_column o3
+# Defaults follow the current working Ozone validation setup:
+# - EJAM subset file: scripts/utilities/validation/output/{STATE}/ejam_o3_subset.csv
+# - EJAM score column: o3
+# - pipeline score column: o3_score
+
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 4 ]]; then
 	echo "Usage: $0 <state_code> [storage_mode] [ejam_subset_csv] [ejam_score_column]"
 	echo "  state_code: required two-letter state code, for example RI"
 	echo "  storage_mode: optional local or remote, defaults to local"
-	echo "  ejam_subset_csv: optional local path to the PM2.5 EJAM subset CSV"
-	echo "                   defaults to scripts/utilities/validation/output/{STATE}/ejam_pm25_subset.csv"
-	echo "  ejam_score_column: optional EJAM PM2.5 score column name"
-	echo "                    defaults to pm"
+	echo "  ejam_subset_csv: optional local path to the Ozone EJAM subset CSV"
+	echo "                   defaults to scripts/utilities/validation/output/{STATE}/ejam_o3_subset.csv"
+	echo "  ejam_score_column: optional EJAM Ozone score column name"
+	echo "                    defaults to o3"
 	exit 1
 fi
 

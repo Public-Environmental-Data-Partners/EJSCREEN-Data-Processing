@@ -156,7 +156,7 @@ def _resolve_scripts_dir() -> Path:
 
 SCRIPTS_DIR = _resolve_scripts_dir()
 SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
-SHARED_PATHS_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_paths_config.py'
+SHARED_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_config.py'
 BG_GEOID_COLUMN = 'GEOID'
 SCORE_DIFF_COLUMN = 'score_diff'
 
@@ -179,20 +179,20 @@ def _load_shared_state_config_symbols():
 
 
 def _load_shared_paths_config_symbols():
-    if not SHARED_PATHS_CONFIG_MODULE_PATH.exists():
-        raise ImportError(f'Shared shared_paths_config.py not found: {SHARED_PATHS_CONFIG_MODULE_PATH}')
+    if not SHARED_CONFIG_MODULE_PATH.exists():
+        raise ImportError(f'Shared shared_config.py not found: {SHARED_CONFIG_MODULE_PATH}')
 
     module_spec = importlib.util.spec_from_file_location(
-        'shared_paths_config_compare_scores',
-        SHARED_PATHS_CONFIG_MODULE_PATH,
+        'shared_config_compare_scores',
+        SHARED_CONFIG_MODULE_PATH,
     )
     if module_spec is None or module_spec.loader is None:
-        raise ImportError(f'Unable to load module spec from {SHARED_PATHS_CONFIG_MODULE_PATH}')
+        raise ImportError(f'Unable to load module spec from {SHARED_CONFIG_MODULE_PATH}')
 
     module = importlib.util.module_from_spec(module_spec)
     sys.modules[module_spec.name] = module
     module_spec.loader.exec_module(module)
-    return module.get_shared_paths_config, module.resolve_local_shared_root_path
+    return module.get_shared_config, module.resolve_local_shared_root_path
 
 
 try:
@@ -204,12 +204,12 @@ except ImportError:
         get_state_config = _load_shared_state_config_symbols()
 
 try:
-    from ...shared.shared_paths_config import get_shared_paths_config, resolve_local_shared_root_path
+    from ...shared.shared_config import get_shared_config, resolve_local_shared_root_path
 except ImportError:
     try:
-        from shared.shared_paths_config import get_shared_paths_config, resolve_local_shared_root_path
+        from shared.shared_config import get_shared_config, resolve_local_shared_root_path
     except ImportError:
-        get_shared_paths_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
+        get_shared_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
 
 
 def _read_block_groups_geodataframe(bg_path: Path) -> gpd.GeoDataFrame:
@@ -234,8 +234,8 @@ def _prepare_map_geodataframe(
     score_new: str,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, int, int, float, float]:
     state_config = get_state_config(state)
-    shared_paths_config = get_shared_paths_config()
-    tiger_bg_path = Path(resolve_local_shared_root_path(SCRIPTS_DIR)) / shared_paths_config.tiger_bg_relative_path_template.format(
+    shared_cfg = get_shared_config()
+    tiger_bg_path = Path(resolve_local_shared_root_path(SCRIPTS_DIR/"shared")) /  shared_cfg.tiger_bg_relative_path_template.format(
         fips=state_config.fips,
         postal=state_config.postal,
         name=state_config.name,

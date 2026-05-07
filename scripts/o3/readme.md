@@ -4,20 +4,28 @@ This folder contains the Ozone (O3) indicator pipeline and its state-validation 
 
 ## Workflow
 
-1. `o3_fetch_raw.py` downloads the national 2020 O3 `.txt.gz` source into the active O3 pipeline root.
+1. Raw data fetching is now handled by the central fetch runner `../fetch_raw.py` rather than an indicator-specific script.
+  Example (local dry-run):
+
+  ```bash
+  # use the following to see/verify paths
+    python scripts/fetch_raw.py -i o3  --mode local --dry-run
+  # use this to actually fetch the raw data file
+    python scripts/fetch_raw.py -i o3  --mode local --dry-run
+
+  ```
 2. `o3_preprocess.py` reads the compressed source directly and writes one annual average concentration per tract.
 3. `o3_indicator.py` expands tract scores to block groups, applies the zero-population null rule, and writes per-state `final_bg_scores.csv` outputs.
 4. `run_state_validation.sh` reruns one state and, in local mode, compares the result to an Ozone-oriented EJAM subset file.
 
 ## Key files
 
+- `../fetch_raw.py` central fetch runner for raw data
 - `o3_config.json`: O3 local and remote roots plus raw-download settings.
 - `o3_config.py`: validated config loader shared by the O3 scripts.
-- `o3_fetch_raw.py`: raw national download step.
 - `o3_preprocess.py`: tract-level annual averaging step.
 - `o3_indicator.py`: tract-to-block-group expansion and final state output step.
 - `run_state_validation.sh`: one-state validation wrapper.
-- `o3_indicator_plan.md`: implementation notes and slice history. DOES NOT EXIST.
 
 ## Current local validation flow
 

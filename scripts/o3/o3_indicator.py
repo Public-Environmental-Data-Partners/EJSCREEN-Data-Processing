@@ -64,7 +64,7 @@ def _resolve_scripts_dir() -> Path:
 
 SCRIPTS_DIR = _resolve_scripts_dir()
 SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
-SHARED_PATHS_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_paths_config.py'
+SHARED_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_config.py'
 
 
 def _load_shared_state_config_symbols():
@@ -82,17 +82,17 @@ def _load_shared_state_config_symbols():
 
 
 def _load_shared_paths_config_symbols():
-	if not SHARED_PATHS_CONFIG_MODULE_PATH.exists():
-		raise ImportError(f'Shared shared_paths_config.py not found: {SHARED_PATHS_CONFIG_MODULE_PATH}')
+	if not SHARED_CONFIG_MODULE_PATH.exists():
+		raise ImportError(f'Shared shared_config.py not found: {SHARED_CONFIG_MODULE_PATH}')
 
-	module_spec = importlib.util.spec_from_file_location('shared_paths_config_o3', SHARED_PATHS_CONFIG_MODULE_PATH)
+	module_spec = importlib.util.spec_from_file_location('shared_config_o3', SHARED_CONFIG_MODULE_PATH)
 	if module_spec is None or module_spec.loader is None:
-		raise ImportError(f'Unable to load module spec from {SHARED_PATHS_CONFIG_MODULE_PATH}')
+		raise ImportError(f'Unable to load module spec from {SHARED_CONFIG_MODULE_PATH}')
 
 	module = importlib.util.module_from_spec(module_spec)
 	sys.modules[module_spec.name] = module
 	module_spec.loader.exec_module(module)
-	return module.get_shared_paths_config, module.resolve_local_shared_root_path
+	return module.get_shared_config, module.resolve_local_shared_root_path
 
 
 try:
@@ -104,12 +104,12 @@ except ImportError:
 		StateConfig, STATE_CONFIG_PATH, get_state_config = _load_shared_state_config_symbols()
 
 try:
-	from ..shared.shared_paths_config import get_shared_paths_config, resolve_local_shared_root_path
+	from ..shared.shared_config import get_shared_config, resolve_local_shared_root_path
 except ImportError:
 	try:
-		from shared.shared_paths_config import get_shared_paths_config, resolve_local_shared_root_path
+		from shared.shared_config import get_shared_config, resolve_local_shared_root_path
 	except ImportError:
-		get_shared_paths_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
+		get_shared_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,11 +235,21 @@ def load_state_targets(selected_state: str | None) -> list[Any]:
 	if not isinstance(payload, dict):
 		raise RuntimeError(f'State config file must contain a JSON object: {STATE_CONFIG_PATH}')
 
-	state_codes = sorted(payload)
+	# Filter configured states to CONUS entries first. For this indicator, "all"
+	# means only CONUS states. Also require that a requested single state be
+	# a CONUS state; otherwise raise to signal invalid selection.
+	conus_state_codes = sorted(
+		[code for code, cfg in payload.items() if isinstance(cfg, dict) and cfg.get('is_conus') is True]
+	)
+
 	if selected_state is not None:
-		if selected_state not in state_codes:
-			raise RuntimeError(f"Configured state '{selected_state}' was not found in {STATE_CONFIG_PATH.name}")
+		if selected_state not in conus_state_codes:
+			raise RuntimeError(
+				f"Configured state '{selected_state}' was not found among CONUS states in {STATE_CONFIG_PATH.name}"
+			)
 		state_codes = [selected_state]
+	else:
+		state_codes = conus_state_codes
 
 	return [get_state_config(state_code) for state_code in state_codes]
 
@@ -297,16 +307,17 @@ def get_active_o3_root_path(storage_mode: str) -> str:
 
 def get_active_shared_root_path(storage_mode: str) -> str:
 	if storage_mode == 'local':
-		return resolve_local_shared_root_path(SCRIPTS_DIR)
+		this_path = SCRIPTS_DIR/"shared"
+		return resolve_local_shared_root_path(this_path)
 	if storage_mode == 'remote':
-		return get_shared_paths_config().remote_root_path
+		return get_shared_config().remote_root_path
 	raise ValueError(f'Unsupported storage mode: {storage_mode}')
 
 
 def resolve_paths(cfg: Config, state_config: Any) -> ResolvedPaths:
 	"""Resolve the tract input, shared block-weight input, and state output paths."""
 	o3_config = get_o3_config()
-	shared_paths_config = get_shared_paths_config()
+	shared_cfg = get_shared_config()
 	o3_root_path = get_active_o3_root_path(cfg.storage_mode)
 	shared_root_path = get_active_shared_root_path(cfg.storage_mode)
 
@@ -314,7 +325,7 @@ def resolve_paths(cfg: Config, state_config: Any) -> ResolvedPaths:
 		o3_root_path,
 		o3_config.preprocessed_tract_output_relative_path,
 	)
-	census_block_weights_relative_path = shared_paths_config.census_block_weights_relative_path_template.format(
+	census_block_weights_relative_path = shared_cfg.census_block_weights_relative_path_template.format(
 		postal=state_config.postal,
 	)
 	census_block_weights_path = cfg.census_block_weights_path or join_root_and_relative_path(
@@ -403,6 +414,7 @@ def build_final_scores(tract_scores: pd.DataFrame, block_group_population: pd.Da
 			'Positive-population block groups are missing tract-level Ozone scores. '
 			f'Sample block groups: {missing_samples}'
 		)
+
 
 	merged[FINAL_SCORE_COLUMN] = merged[ANNUAL_AVERAGE_COLUMN].astype('Float64')
 	merged.loc[~positive_population_mask, FINAL_SCORE_COLUMN] = pd.NA
@@ -493,7 +505,15 @@ def main(argv=None) -> int:
 	for state_config in state_targets:
 		process_state(cfg, state_config, prepared_tract_scores)
 
-	logging.info('Completed Ozone block-group indicator generation for %d states', len(state_targets))
+	state_count = len(state_targets)
+	msg = f"Completed Ozone block-group indicator generation"
+	if state_count == 1:
+		msg += f" for {state_count} state: {state_targets[0].postal}"
+	else:
+		msg += f" for {state_count} states"
+	logging.info(msg)
+	print(msg)
+
 	return 0
 
 

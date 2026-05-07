@@ -1,0 +1,20 @@
+{
+  "local_root_path": "pipeline/",
+  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/shared/pipeline/",
+  "downloads_subtree_name": "downloads",
+  "preprocessed_input_subtree_name": "preprocessed_input",
+  "target_year": 2020,
+  "tiger_bg_relative_path_template": "downloads/tiger_lines/2020/bg/tl_2020_{fips}_bg.zip",
+  "census_block_weights_relative_path_template": "preprocessed_input/census_block_weights_2020/census_block_weights_2020_{postal}.csv",
+  "downloads": {
+    "request_timeout_seconds": 120,
+    "chunk_size_bytes": 1048576,
+    "entries": {
+      "tiger_bg_2020": {
+        "scope": "state",
+        "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/BG/tl_2020_{fips}_bg.zip",
+        "relative_path_template": "downloads/tiger_lines/2020/bg/tl_2020_{fips}_bg.zip"
+      }
+    }
+  }
+}

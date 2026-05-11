@@ -10,15 +10,19 @@ Process summary:
 	- Read the tract-level preprocess output.
 	- Read each state's census block weights file from the shared pipeline inputs.
 	- Derive tract GEOIDs from block-group GEOIDs and join tract scores.
-	- Require scores for positive-population block groups.
+	- Generate scores for positive-population block groups.
 	- Set pm25_score to null for zero-population block groups.
 	- Write per-state final_bg_scores.csv files and state summary logs.
 
 Runtime arguments:
-	- storage_mode
-		Required. Either local or remote.
-	- --state
+	- `storage_mode`
+		Required. Either `local` or `remote`.
+	- `--state`
 		Optional two-letter state filter. If omitted, process all configured states.
+	- `--output-dir`
+		Optional explicit local path or S3 URI for the state output directory.
+	- `--final-bg-scores-filename`
+		Optional override for the output filename (default: final_bg_scores.csv).
 
 Outputs:
 	- output/indicators/{postal}/final_bg_scores.csv under the active PM2.5 root.
@@ -53,78 +57,46 @@ BLOCK_GROUP_GEOID_COLUMN = 'block_group_geoid'
 BLOCK_GROUP_POP_COLUMN = 'block_group_pop'
 PM25_STORAGE_MODES = ('local', 'remote')
 
-
+# Find and then ensure the scripts directory is on sys.path so we can import shared modules
+# using the fixed relationship (scripts/shared) without dynamic module loading.
 def _resolve_scripts_dir() -> Path:
 	current_path = Path(__file__).resolve()
 	for parent in current_path.parents:
 		if parent.name == 'scripts':
 			return parent
 	raise RuntimeError(f'Unable to locate scripts directory from {current_path}')
-
-
 SCRIPTS_DIR = _resolve_scripts_dir()
-SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
-SHARED_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_config.py'
-
-
-def _load_shared_state_config_symbols():
-	if not SHARED_STATE_CONFIG_MODULE_PATH.exists():
-		raise ImportError(f'Shared state_config.py not found: {SHARED_STATE_CONFIG_MODULE_PATH}')
-
-	module_spec = importlib.util.spec_from_file_location('shared_state_config_pm25', SHARED_STATE_CONFIG_MODULE_PATH)
-	if module_spec is None or module_spec.loader is None:
-		raise ImportError(f'Unable to load module spec from {SHARED_STATE_CONFIG_MODULE_PATH}')
-
-	module = importlib.util.module_from_spec(module_spec)
-	sys.modules[module_spec.name] = module
-	module_spec.loader.exec_module(module)
-	return module.StateConfig, module.STATE_CONFIG_PATH, module.get_state_config
-
-
-def _load_shared_paths_config_symbols():
-	if not SHARED_CONFIG_MODULE_PATH.exists():
-		raise ImportError(f'Shared shared_config.py not found: {SHARED_CONFIG_MODULE_PATH}')
-
-	module_spec = importlib.util.spec_from_file_location('shared_config_pm25', SHARED_CONFIG_MODULE_PATH)
-	if module_spec is None or module_spec.loader is None:
-		raise ImportError(f'Unable to load module spec from {SHARED_CONFIG_MODULE_PATH}')
-
-	module = importlib.util.module_from_spec(module_spec)
-	sys.modules[module_spec.name] = module
-	module_spec.loader.exec_module(module)
-	return module.get_shared_config, module.resolve_local_shared_root_path
-
+if str(SCRIPTS_DIR) not in sys.path:
+	sys.path.insert(0, str(SCRIPTS_DIR))
 
 try:
-	from ..shared.state_config import StateConfig, STATE_CONFIG_PATH, get_state_config
-except ImportError:
-	try:
-		from shared.state_config import StateConfig, STATE_CONFIG_PATH, get_state_config
-	except ImportError:
-		StateConfig, STATE_CONFIG_PATH, get_state_config = _load_shared_state_config_symbols()
+	from shared.state_config import StateConfig, get_state_config, get_state_config_list
+except Exception as exc:
+	raise RuntimeError(
+		'Failed to import shared.state_config. Ensure scripts/shared/state_config.py is present and '
+		'that the repository root (containing the scripts directory) is on PYTHONPATH.'
+	) from exc
 
 try:
-	from ..shared.shared_config import get_shared_config, resolve_local_shared_root_path
-except ImportError:
-	try:
-		from shared.shared_config import get_shared_config, resolve_local_shared_root_path
-	except ImportError:
-		get_shared_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
+	from shared.shared_config import get_shared_config, resolve_local_shared_root_path
+except Exception as exc:
+	raise RuntimeError(
+		'Failed to import shared.shared_config. Ensure scripts/shared/shared_config.py is present and '
+		'that the repository root (containing the scripts directory) is on PYTHONPATH.'
+	) from exc
 
 
 @dataclass(frozen=True, slots=True)
 class Config:
 	storage_mode: str
 	state: str | None
-	tract_scores_path: str | None = None
-	census_block_weights_path: str | None = None
 	output_dir: str | None = None
 	final_bg_scores_filename: str = DEFAULT_FINAL_BG_SCORES_FILENAME
 
 
 @dataclass(frozen=True, slots=True)
 class ResolvedPaths:
-	state_config: Any
+	state_config: StateConfig
 	pm25_root_path: str
 	shared_root_path: str
 	tract_scores_path: str
@@ -150,18 +122,8 @@ def get_config(argv=None) -> Config:
 		default=defaults.state,
 		help='Optional two-letter state code to process a single state.',
 	)
-	parser.add_argument(
-		'--tract-scores-path',
-		dest='tract_scores_path',
-		default=defaults.tract_scores_path,
-		help='Optional explicit local path or S3 URI for the tract-level PM2.5 preprocessed CSV.',
-	)
-	parser.add_argument(
-		'--census-block-weights-path',
-		dest='census_block_weights_path',
-		default=defaults.census_block_weights_path,
-		help='Optional explicit local path or S3 URI for a state census block weights CSV.',
-	)
+	# Removed optional overrides for tract and census block weights paths;
+	# these are resolved from the project config and shared config.
 	parser.add_argument(
 		'--output-dir',
 		dest='output_dir',
@@ -183,8 +145,6 @@ def get_config(argv=None) -> Config:
 	return Config(
 		storage_mode=args.storage_mode,
 		state=state,
-		tract_scores_path=args.tract_scores_path,
-		census_block_weights_path=args.census_block_weights_path,
 		output_dir=args.output_dir,
 		final_bg_scores_filename=args.final_bg_scores_filename,
 	)
@@ -223,25 +183,22 @@ def normalize_state_code(state_code: str) -> str:
 		raise RuntimeError(f"State code must be a two-letter postal abbreviation, got '{state_code}'")
 	return normalized_state_code
 
+# We can load one state or 'all' (as indicated by no argument). 
+# But note that each indicator needs to be aware of what its own 'all'
+# entails. In the case of PM2.5, values are only available for the continental US,
+# so all is the 48 lower states plus DC.
+def load_state_targets(selected_state: str | None) -> list[StateConfig]:
+	logging.info('Loading state config(s) for selection: %s', selected_state or 'all')
+	state_list = []
 
-def load_state_targets(selected_state: str | None) -> list[Any]:
-	"""Return the configured state targets, optionally filtered to one postal code."""
-	if not STATE_CONFIG_PATH.exists():
-		raise FileNotFoundError(f'State config file not found: {STATE_CONFIG_PATH}')
+	if selected_state:
+		state_config = get_state_config(selected_state)
+		state_list.append(state_config)
+	else:
+		state_list = get_state_config_list('conus')
 
-	with STATE_CONFIG_PATH.open('r', encoding='utf-8') as state_stream:
-		payload = json.load(state_stream)
-
-	if not isinstance(payload, dict):
-		raise RuntimeError(f'State config file must contain a JSON object: {STATE_CONFIG_PATH}')
-
-	state_codes = sorted(payload)
-	if selected_state is not None:
-		if selected_state not in state_codes:
-			raise RuntimeError(f"Configured state '{selected_state}' was not found in {STATE_CONFIG_PATH.name}")
-		state_codes = [selected_state]
-
-	return [get_state_config(state_code) for state_code in state_codes]
+	logging.info('Loaded %d state configs for processing', len(state_list))
+	return state_list
 
 
 def is_s3_uri(path: str) -> bool:
@@ -303,21 +260,21 @@ def get_active_shared_root_path(storage_mode: str) -> str:
 	raise ValueError(f'Unsupported storage mode: {storage_mode}')
 
 
-def resolve_paths(cfg: Config, state_config: Any) -> ResolvedPaths:
+def resolve_paths(cfg: Config, state_config: StateConfig) -> ResolvedPaths:
 	"""Resolve the tract input, shared block-weight input, and state output paths."""
 	pm25_config = get_pm25_config()
 	shared_cfg = get_shared_config()
 	pm25_root_path = get_active_pm25_root_path(cfg.storage_mode)
 	shared_root_path = get_active_shared_root_path(cfg.storage_mode)
 
-	tract_scores_path = cfg.tract_scores_path or join_root_and_relative_path(
+	tract_scores_path = join_root_and_relative_path(
 		pm25_root_path,
 		pm25_config.preprocessed_tract_output_relative_path,
 	)
 	census_block_weights_relative_path = shared_cfg.census_block_weights_relative_path_template.format(
 		postal=state_config.postal,
 	)
-	census_block_weights_path = cfg.census_block_weights_path or join_root_and_relative_path(
+	census_block_weights_path = join_root_and_relative_path(
 		shared_root_path,
 		census_block_weights_relative_path,
 	)
@@ -421,7 +378,7 @@ def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
 
 def log_state_summary(
 	*,
-	state_config: Any,
+	state_config: StateConfig,
 	block_group_population: pd.DataFrame,
 	final_scores: pd.DataFrame,
 ) -> None:
@@ -451,7 +408,7 @@ def log_state_summary(
 	)
 
 
-def process_state(cfg: Config, state_config: Any, tract_scores: pd.DataFrame) -> None:
+def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataFrame) -> None:
 	"""Build and write one state's final PM2.5 block-group score file."""
 	paths = resolve_paths(cfg, state_config)
 	log_resolved_paths(paths, cfg)
@@ -479,7 +436,7 @@ def main(argv=None) -> int:
 	cfg = get_config(argv)
 	initialize_runtime_dependencies(cfg)
 	state_targets = load_state_targets(cfg.state)
-	tract_scores_path = cfg.tract_scores_path or join_root_and_relative_path(
+	tract_scores_path = join_root_and_relative_path(
 		get_active_pm25_root_path(cfg.storage_mode),
 		get_pm25_config().preprocessed_tract_output_relative_path,
 	)
@@ -493,7 +450,9 @@ def main(argv=None) -> int:
 	for state_config in state_targets:
 		process_state(cfg, state_config, prepared_tract_scores)
 
-	logging.info('Completed PM2.5 block-group indicator generation for %d states', len(state_targets))
+	msg = f'Completed PM2.5 block-group indicator generation for {len(state_targets)} state(s).'
+	logging.info(msg)
+	print(msg)
 	return 0
 
 

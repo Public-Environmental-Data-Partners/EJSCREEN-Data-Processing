@@ -122,8 +122,6 @@ def get_config(argv=None) -> Config:
 		default=defaults.state,
 		help='Optional two-letter state code to process a single state.',
 	)
-	# Removed optional overrides for tract and census block weights paths;
-	# these are resolved from the project config and shared config.
 	parser.add_argument(
 		'--output-dir',
 		dest='output_dir',
@@ -254,6 +252,9 @@ def get_active_pm25_root_path(storage_mode: str) -> str:
 
 def get_active_shared_root_path(storage_mode: str) -> str:
 	if storage_mode == 'local':
+		# 12 May 2026, not adopting Eric's change for this chunk of
+		# code. I don't think that hard-coding "shared" here is or should
+		# be needed. 
 		return resolve_local_shared_root_path(SCRIPTS_DIR)
 	if storage_mode == 'remote':
 		return get_shared_config().remote_root_path
@@ -450,7 +451,12 @@ def main(argv=None) -> int:
 	for state_config in state_targets:
 		process_state(cfg, state_config, prepared_tract_scores)
 
-	msg = f'Completed PM2.5 block-group indicator generation for {len(state_targets)} state(s).'
+	state_count = len(state_targets)
+	msg = f"Completed PM2.5 block-group indicator generation"
+	if state_count == 1:
+		msg += f" for {state_count} state: {state_targets[0].postal}"
+	else:
+		msg += f" for {state_count} states"
 	logging.info(msg)
 	print(msg)
 	return 0

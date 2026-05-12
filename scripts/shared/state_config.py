@@ -5,10 +5,24 @@ records keyed by two-letter postal code. It centralizes the canonical state
 identifiers used by client code, including FIPS code, postal abbreviation,
 display name, and the projected metric CRS to use for state-level processing.
 
-The loader fails fast when state codes are invalid, required fields are
-missing, or CRS definitions are not projected in meters. This gives downstream
-scripts a simple, consistent way to retrieve validated state metadata before
-performing distance calculations or writing state-specific outputs.
+The loader fails fast when parameter values are invalid.
+
+Public functions:
+- `get_state_config(state_code: str) -> StateConfig`:
+    Return a validated `StateConfig` for the given two-letter postal state code.
+    The `state_code` argument is normalized to upper-case; the function raises
+    `RuntimeError` if the code is not present in the config file, if required fields are
+    missing, or CRS definitions are not projected in meters. This gives downstream
+    scripts a simple, consistent way to retrieve validated state metadata before
+    performing distance calculations or writing state-specific outputs. 
+
+- `get_state_config_list(extent: str) -> list[StateConfig]`:
+    Return a list of `StateConfig` objects filtered by `extent`. Valid `extent`
+    values (case-insensitive) are: `CONUS`, `US-51`, `US-52`, `TERRITORIES`,
+    and `ALL`. The function raises `RuntimeError` for invalid `extent` values.
+    This function does not perform the per-entry field validation done by
+    `get_state_config`; it maps raw config entries into `StateConfig` objects.
+
 """
 
 from __future__ import annotations
@@ -137,3 +151,75 @@ def _require_nonempty_string(raw_state_config: dict[str, Any], field_name: str, 
         )
 
     return field_value.strip()
+
+
+def _make_sc(postal: str, raw: Any) -> StateConfig:
+    if not isinstance(raw, dict):
+        raw = {}
+    fips = raw.get('fips') or ''
+    postal_field = (raw.get('postal') or postal or '')
+    name = raw.get('name') or ''
+    metric_crs = raw.get('metric_crs') or DEFAULT_METRIC_CRS
+    return StateConfig(fips=fips, postal=postal_field, name=name, metric_crs=metric_crs)
+
+
+def get_state_config_list(extent: str) -> list[StateConfig]:
+    """Return a list of StateConfig entries filtered by `extent`.
+
+    extent (case-insensitive) must be one of:
+      - CONUS: 48 continental US states + DC (uses `is_conus` flag)
+      - US-51: all 50 states + DC
+      - US-52: all 50 states + DC + PR
+      - TERRITORIES: only territories (no states)
+      - ALL: all configured entries
+
+    This function does not perform the field-level validation that `get_state_config`
+    does; it simply maps raw JSON entries into `StateConfig` objects and returns
+    the list. Missing fields are filled with empty-string defaults (or
+    `DEFAULT_METRIC_CRS` for `metric_crs`).
+    """
+    if not isinstance(extent, str):
+        raise RuntimeError(f'extent must be a string, got {type(extent).__name__}')
+
+    key = extent.strip().upper()
+    valid = {'CONUS', 'US-51', 'US-52', 'TERRITORIES', 'ALL'}
+    if key not in valid:
+        raise RuntimeError(f"Invalid extent value '{extent}'. Must be one of: {', '.join(sorted(valid))}")
+
+    raw_state_configs = _load_state_configs()
+
+    results: list[StateConfig] = []
+
+    if key == 'ALL':
+        for postal, raw in raw_state_configs.items():
+            results.append(_make_sc(postal, raw))
+    elif key == 'TERRITORIES':
+        for postal, raw in raw_state_configs.items():
+            if isinstance(raw, dict) and str(raw.get('type', '')).lower() == 'territory':
+                results.append(_make_sc(postal, raw))
+    elif key == 'CONUS':
+        for postal, raw in raw_state_configs.items():
+            if isinstance(raw, dict) and raw.get('is_conus') is True:
+                results.append(_make_sc(postal, raw))
+    elif key in {'US-51', 'US-52'}:
+        for postal, raw in raw_state_configs.items():
+            if not isinstance(raw, dict):
+                continue
+            typ = str(raw.get('type', '')).lower()
+            postal_upper = str(raw.get('postal') or postal or '').upper()
+            # include all states
+            if typ == 'state':
+                results.append(_make_sc(postal, raw))
+                continue
+            # include DC
+            if postal_upper == 'DC':
+                results.append(_make_sc(postal, raw))
+                continue
+            # for US-52 include Puerto Rico (PR) explicitly; do not include other territories
+            if key == 'US-52' and postal_upper == 'PR':
+                results.append(_make_sc(postal, raw))
+    else:
+        # sure, this can't happen given validation above, but stuff happens . . .
+        raise RuntimeError(f"Unhandled extent value '{extent}'")
+
+    return results

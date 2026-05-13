@@ -14,6 +14,11 @@
         "scope": "state",
         "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/BG/tl_2020_{fips}_bg.zip",
         "relative_path_template": "downloads/tiger_lines/2020/bg/tl_2020_{fips}_bg.zip"
+      },
+      "tiger_block_2020": {
+        "scope": "state",
+        "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2022/TABBLOCK20/tl_2022_{fips}_tabblock20.zip",
+        "relative_path_template": "downloads/tiger_lines/2022/tabblock20/tl_2022_{fips}_tabblock20.zip"
       }
     }
   }

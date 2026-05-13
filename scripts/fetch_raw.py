@@ -22,11 +22,12 @@ Notes:
         - `--download` must be specified when the indicator config includes multiple download entries.
            See the pm25_config.json for an example of a single entry and shared_config.json for an
            example set up for multiple entries.
-        - For state-scoped downloads use `--state` with a two-letter postal code which will be
-            validated against `scripts/shared/state_config.json` and translated to the FIPS code
-            used in filenames and URLs. The postal code (uppercased) is stored in the audit.
-        - The special value `all` is supported for `--state` (case-insensitive) to iterate across
-            all configured states.
+        - `--state`
+           - For state-scoped downloads use `--state` with a two-letter postal code which will be
+             validated against `scripts/shared/state_config.json` and translated to the FIPS code
+             used in filenames and URLs. The postal code (uppercased) is stored in the audit.
+           - The special value `all` is supported for `--state` (case-insensitive) to iterate across
+             all configured states.
         - Use `--dry-run` to print the expanded source URL and destination path without downloading.
 """
 
@@ -279,7 +280,11 @@ def get_config(argv=None) -> Config:
 
         raise ValueError('Loaded indicator config does not expose expected download metadata for this slice')
 
-    local_root = resolve_local_fn(SCRIPTS_DIR / indicator)
+    if indicator != 'shared':
+        local_root = resolve_local_fn(SCRIPTS_DIR / indicator)
+    else:
+        local_root = resolve_local_fn(SCRIPTS_DIR)
+
     remote_root = getattr(raw_config, 'remote_root_path')
 
     return Config(

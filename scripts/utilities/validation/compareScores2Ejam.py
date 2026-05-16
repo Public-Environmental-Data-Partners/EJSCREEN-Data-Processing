@@ -1,9 +1,9 @@
 """compareScores2Ejam.py
 
 Purpose:
-        Compare EJAM-derived block-group scores to a second score file, summarize
-        agreement between the two series, and produce both scatterplot and map-based
-        validation outputs for one state.
+    Compare EJAM-derived block-group scores to a second score file, summarize
+    agreement between the two series, and produce both scatterplot and map-based
+    validation outputs for one state.
 
 Process summary:
         - Read two CSV files, validate the requested ID and score columns, coerce
@@ -19,6 +19,11 @@ Process summary:
             inputs and write a four-panel validation figure showing the EJAM scores,
             the new scores, their differences, and a scatterplot of matched rows.
 
+            
+Example usage:
+    python scripts/utilities/validation/compareScores2Ejam.py -state MT 
+    (uses many defaults, see additional arguments below)
+    
 Runtime arguments:
         - --state
             Two-letter postal code used for default paths and for locating the shared
@@ -43,17 +48,22 @@ Outputs:
             scatterplot panel.
 
 Indicator note:
-        The indicator slug is inferred from the EJAM filename, the EJAM score
-        column, the new score column, or the comparison path. This now includes
-        PM2.5 validation inputs such as `pm` and `pm25_score`.
+    The indicator slug is inferred from the EJAM filename, the EJAM score
+    column, the new score column, or the comparison path. This includes
+    PM2.5 and Ozone validation inputs (for example `pm25` or `o3`).
+
+Shared config:
+    The script uses the repository's `shared` helpers (`shared.shared_config`
+    and `shared.state_config`) to resolve the TIGER block-group geometry
+    location when running in the repository checkout.
 
 Credits:
-        Designed by Anne Gunn.
-        Coded by GitHub Copilot (GPT-5.4) and Anne Gunn.
+    Designed by Anne Gunn.
+    Coded by GitHub Copilot (using various ChatGPT versions) and Anne Gunn.
 """
+
 from __future__ import annotations
 import argparse
-import importlib.util
 from pathlib import Path
 import re
 import sys
@@ -155,61 +165,28 @@ def _resolve_scripts_dir() -> Path:
 
 
 SCRIPTS_DIR = _resolve_scripts_dir()
-SHARED_STATE_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'state_config.py'
-SHARED_CONFIG_MODULE_PATH = SCRIPTS_DIR / 'shared' / 'shared_config.py'
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 BG_GEOID_COLUMN = 'GEOID'
 SCORE_DIFF_COLUMN = 'score_diff'
 
 
-def _load_shared_state_config_symbols():
-    if not SHARED_STATE_CONFIG_MODULE_PATH.exists():
-        raise ImportError(f'Shared state_config.py not found: {SHARED_STATE_CONFIG_MODULE_PATH}')
-
-    module_spec = importlib.util.spec_from_file_location(
-        'shared_state_config_compare_scores',
-        SHARED_STATE_CONFIG_MODULE_PATH,
-    )
-    if module_spec is None or module_spec.loader is None:
-        raise ImportError(f'Unable to load module spec from {SHARED_STATE_CONFIG_MODULE_PATH}')
-
-    module = importlib.util.module_from_spec(module_spec)
-    sys.modules[module_spec.name] = module
-    module_spec.loader.exec_module(module)
-    return module.get_state_config
-
-
-def _load_shared_paths_config_symbols():
-    if not SHARED_CONFIG_MODULE_PATH.exists():
-        raise ImportError(f'Shared shared_config.py not found: {SHARED_CONFIG_MODULE_PATH}')
-
-    module_spec = importlib.util.spec_from_file_location(
-        'shared_config_compare_scores',
-        SHARED_CONFIG_MODULE_PATH,
-    )
-    if module_spec is None or module_spec.loader is None:
-        raise ImportError(f'Unable to load module spec from {SHARED_CONFIG_MODULE_PATH}')
-
-    module = importlib.util.module_from_spec(module_spec)
-    sys.modules[module_spec.name] = module
-    module_spec.loader.exec_module(module)
-    return module.get_shared_config, module.resolve_local_shared_root_path
-
 
 try:
-    from ...shared.state_config import get_state_config
-except ImportError:
-    try:
-        from shared.state_config import get_state_config
-    except ImportError:
-        get_state_config = _load_shared_state_config_symbols()
+    from shared.state_config import get_state_config
+except Exception as exc:
+    raise RuntimeError(
+        'Failed to import shared.state_config. Ensure scripts/shared/state_config.py is present and '
+        'that the repository root (containing the scripts directory) is on PYTHONPATH.'
+    ) from exc
 
 try:
-    from ...shared.shared_config import get_shared_config, resolve_local_shared_root_path
-except ImportError:
-    try:
-        from shared.shared_config import get_shared_config, resolve_local_shared_root_path
-    except ImportError:
-        get_shared_config, resolve_local_shared_root_path = _load_shared_paths_config_symbols()
+    from shared.shared_config import get_shared_config, resolve_local_shared_root_path
+except Exception as exc:
+    raise RuntimeError(
+        'Failed to import shared.shared_config. Ensure scripts/shared/shared_config.py is present and '
+        'that the repository root (containing the scripts directory) is on PYTHONPATH.'
+    ) from exc
 
 
 def _read_block_groups_geodataframe(bg_path: Path) -> gpd.GeoDataFrame:
@@ -235,7 +212,7 @@ def _prepare_map_geodataframe(
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, int, int, float, float]:
     state_config = get_state_config(state)
     shared_cfg = get_shared_config()
-    tiger_bg_path = Path(resolve_local_shared_root_path(SCRIPTS_DIR/"shared")) /  shared_cfg.tiger_bg_relative_path_template.format(
+    tiger_bg_path = Path(resolve_local_shared_root_path(SCRIPTS_DIR)) / shared_cfg.tiger_bg_relative_path_template.format(
         fips=state_config.fips,
         postal=state_config.postal,
         name=state_config.name,

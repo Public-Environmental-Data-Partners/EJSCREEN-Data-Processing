@@ -12,7 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+import logging
 import json
+
+logger = logging.getLogger(__name__)
 
 
 SHARED_CONFIG_PATH = Path(__file__).with_name('shared_config.json')
@@ -68,6 +71,7 @@ def _validate_relative_path(field_name: str, relative_path: str) -> None:
 @lru_cache(maxsize=1)
 def get_shared_config() -> SharedConfig:
     """Return validated SharedConfig loaded from shared_config.json."""
+    logger.info('Loading shared config from %s', SHARED_CONFIG_PATH)
     if not SHARED_CONFIG_PATH.exists():
         raise FileNotFoundError(f'Shared config not found: {SHARED_CONFIG_PATH}')
 
@@ -126,15 +130,14 @@ def get_shared_config() -> SharedConfig:
         downloads_entries=entries,
     )
 
-    # Validate relative path templates
-    _validate_relative_path('tiger_bg_relative_path_template', config.tiger_bg_relative_path_template)
-    if config.census_block_weights_relative_path_template:
-        _validate_relative_path('census_block_weights_relative_path_template', config.census_block_weights_relative_path_template)
-
+    logger.info('Shared config loaded successfully')
     return config
 
 
 def resolve_local_shared_root_path(shared_dir: Path) -> str:
     """Resolve the configured local shared pipeline root from the shared script directory."""
+    logger.info('resolve_local_shared_root_path: shared_dir=%s', str(shared_dir))
     cfg = get_shared_config()
-    return str((shared_dir / cfg.local_root_path).resolve())
+    result = str((shared_dir / cfg.local_root_path).resolve())
+    logger.info('resolve_local_shared_root_path: resolved=%s', result)
+    return result

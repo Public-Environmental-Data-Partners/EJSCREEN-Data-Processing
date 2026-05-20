@@ -419,7 +419,7 @@
     "fips": "60",
     "postal": "AS",
     "name": "American Samoa",
-    "metric_crs": "ESPG:32702",
+    "metric_crs": "EPSG:32702",
     "type": "territory",
     "is_conus": false
   },

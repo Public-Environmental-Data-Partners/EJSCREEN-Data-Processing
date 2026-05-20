@@ -415,12 +415,11 @@
     "is_conus": false,
     "metric_crs": "+proj=aea +lat_1=8 +lat_2=18 +lat_0=3 +lon_0=-66 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs"
   },
-
   "AS": {
     "fips": "60",
     "postal": "AS",
     "name": "American Samoa",
-    "metric_crs": "",
+    "metric_crs": "ESPG:32702",
     "type": "territory",
     "is_conus": false
   },
@@ -428,7 +427,7 @@
     "fips": "66",
     "postal": "GU",
     "name": "Guam",
-    "metric_crs": "",
+    "metric_crs": "+proj=aea +lat_1=8 +lat_2=18 +lat_0=3 +lon_0=145 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs",
     "type": "territory",
     "is_conus": false
   },
@@ -436,7 +435,7 @@
     "fips": "69",
     "postal": "MP",
     "name": "Commonwealth of the Northern Mariana Islands",
-    "metric_crs": "",
+    "metric_crs": "+proj=aea +lat_1=8 +lat_2=18 +lat_0=3 +lon_0=145 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs",
     "type": "territory",
     "is_conus": false
   },
@@ -444,7 +443,7 @@
     "fips": "78",
     "postal": "VI",
     "name": "U.S. Virgin Islands",
-    "metric_crs": "",
+    "metric_crs": "+proj=aea +lat_1=8 +lat_2=18 +lat_0=3 +lon_0=-66 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs",
     "type": "territory",
     "is_conus": false
   }

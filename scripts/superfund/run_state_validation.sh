@@ -31,13 +31,21 @@ VALIDATION_OUTPUT_DIR="$VALIDATION_DIR/output"
 PIPELINE_DIR="$SCRIPT_DIR/pipeline/output/indicators"
 
 echo "Starting Superfund proximity for $STATE_CODE in $STORAGE_MODE mode"
-if ! python3 "$SCRIPT_DIR/superfund_npl_proximity.py" \
-	"$STORAGE_MODE" \
-	--state "$STATE_CODE"; then
-	echo "Superfund proximity failed for state $STATE_CODE in $STORAGE_MODE mode."
+if ! python3 "$SCRIPT_DIR/superfund_preprocess.py" \
+	"$STORAGE_MODE"; then
+	echo "Superfund preprocess failed in $STORAGE_MODE mode."
 	exit 1
 fi
-echo "Completed Superfund proximity for $STATE_CODE"
+echo "Completed Superfund preprocess"
+
+echo "Starting Superfund indicator for $STATE_CODE in $STORAGE_MODE mode"
+if ! python3 "$SCRIPT_DIR/superfund_indicator.py" \
+	"$STORAGE_MODE" \
+	--state "$STATE_CODE"; then
+	echo "Superfund indicator failed for state $STATE_CODE in $STORAGE_MODE mode."
+	exit 1
+fi
+echo "Completed Superfund indicator for $STATE_CODE"
 
 if [[ "$STORAGE_MODE" == "remote" ]]; then
 	echo "Skipping compareScores2Ejam.py for remote mode because the validation harness currently reads local files only."

@@ -1,0 +1,14 @@
+{
+  "local_root_path": "./pipeline/",
+  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/superfund_npl/pipeline/",
+  "preprocessed_npl_boundaries_relative_path": "preprocessed_input/npl_boundaries/NPL_Boundaries.gdb",
+  "indicator_output_relative_path_template": "output/indicators/{postal}",
+  "downloads": {
+    "request_timeout_seconds": 120,
+    "chunk_size_bytes": 1048576,
+    "raw_npl_boundaries_zip": {
+      "relative_path": "downloads/raw_npl_boundaries/NPL_Boundaries.zip",
+      "source_url": "https://edg.epa.gov/data/PUBLIC/OLEM/OLEM-OSRTI/NPL_Boundaries.zip"
+    }
+  }
+}

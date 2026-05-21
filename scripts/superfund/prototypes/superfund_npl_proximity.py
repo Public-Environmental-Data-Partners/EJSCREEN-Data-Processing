@@ -1,33 +1,39 @@
-"""
-superfund_npl_proximity.py
+"""Run the Superfund NPL proximity pipeline for one state.
 
 Purpose:
-  Run the Superfund NPL proximity pipeline for one state and emit three
-  CSV artifacts:
-    - targeted_block_groups.csv (intermediate output from Step 1)
-        - block_site_distances.csv (distance and proximity-score output written in Step 3)
-    - final_bg_scores.csv (final output from Step 4)
+    Read the canonical NPL boundaries geodatabase together with shared block-group
+    boundaries and census block weights, then generate per-state Superfund
+    proximity outputs.
 
-Behavior summary:
-    - Uses externalized state metadata, shared path configuration, and
-        Superfund path configuration to resolve state-specific inputs and outputs.
-    - Supports local paths or S3 URIs for the NPL input, shared inputs, and
-        output directory.
-  - Stages S3-hosted geospatial assets to a temporary local directory before
-    reading them with Fiona or GeoPandas.
-    - Computes targeted block groups, block-to-site distances, inverse-distance
-        proximity scores, and final population-weighted block-group scores for one
-        state at a time.
+Process summary:
+    - Resolve Superfund and shared input paths from the indicator and shared configs.
+    - Support local filesystem paths or remote S3 URIs for inputs and outputs.
+    - Stage geospatial inputs locally when needed so Fiona and GeoPandas can read them.
+    - Identify block groups within the configured buffer distance of active or proposed NPL sites.
+    - Compute block-to-site distances, convert them to inverse-distance proximity scores,
+      and aggregate those scores to block groups using shared population weights.
+
+Runtime arguments:
+    - storage_mode
+        Required. Either local or remote.
+    - --state
+        Optional two-letter postal code. Defaults to VT.
+    - --npl-boundaries-path, --block-groups-path, --census-blocks-path
+        Optional input overrides for the canonical Superfund or shared datasets.
+    - --output-dir
+        Optional explicit local path or S3 URI for the state output directory.
+    - --targeted-block-groups-filename, --block-site-distances-filename,
+      --final-bg-scores-filename
+        Optional output filename overrides.
+
+Outputs:
+    - targeted_block_groups.csv for Step 1 targeted block groups.
+    - block_site_distances.csv for Step 3 distance and proximity-score rows.
+    - final_bg_scores.csv for final block-group Superfund scores.
 
 Sample commands:
-    - Local output:
-        python ./superfund_npl_proximity.py local --state MT
-    - S3 output:
-        python ./superfund_npl_proximity.py remote --state MT
-
-Credits:
-  - Prototype scoring logic by Anne Gunn, Gemini, and GitHub Copilot.
-  - Refactor into the formal pipeline shape by GitHub Copilot, GPT-5.4 and Anne Gunn.
+    - python ./superfund_npl_proximity.py local --state MT
+    - python ./superfund_npl_proximity.py remote --state MT
 """
 from __future__ import annotations
 

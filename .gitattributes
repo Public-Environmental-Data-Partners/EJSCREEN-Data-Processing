@@ -1,0 +1,6 @@
+# git has been helpfully changing the Linux line-endings for my Bash scripts
+# to Windows line-endings since it knows I'm on a Windows box. But that means
+# I have to change line endings every time I go to use them.
+# This line simply tells git to leave the line endings alone for .sh files, 
+# which means they will have lf only, rather than crlf.
+*.sh text eol=lf

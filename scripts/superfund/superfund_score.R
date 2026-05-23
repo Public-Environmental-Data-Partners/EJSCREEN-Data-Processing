@@ -1,7 +1,19 @@
 #!/usr/bin/env Rscript
-# superfund_indicator.R
-# R translation of scripts/superfund/superfund_indicator.py
-# Uses reticulate to call Python config loaders for exact parity.
+# superfund_score.R
+# R translation of scripts/superfund/superfund_score.py
+# Uses reticulate to call Python config loaders for parity with the Python
+# implementation. This wrapper mirrors the Python CLI: `-l/--location`,
+# `-s/--state` (required, or 'all'), and `-o/--output-dir`.
+
+# Short usage:
+#   Purpose: Run the Superfund proximity scoring pipeline for one or more states.
+#   Usage:   Rscript scripts/superfund/superfund_score.R -l <local|remote> -s <STATE|all>
+#   Required R packages: optparse, sf, dplyr, readr, reticulate, jsonlite
+#
+#   Examples:
+#     Rscript scripts/superfund/superfund_score.R -l local -s NJ
+#     Rscript scripts/superfund/superfund_score.R -l local -s all
+#     Rscript scripts/superfund/superfund_score.R -l remote -s NJ
 
 suppressPackageStartupMessages({
   required <- c('optparse','sf','dplyr','readr','reticulate','jsonlite')
@@ -35,28 +47,27 @@ NPL_LAYER_NAME <- 'SITE_BOUNDARIES_SF'
 ACTIVE_NPL_STATUS_CODES <- c('F','P')
 
 option_list <- list(
-  make_option(c('--state'), type='character', default='VT', help='Two-letter state code (default VT)'),
-  make_option(c('--npl-boundaries-path'), type='character', default=NULL, help='Optional path to canonical .gdb directory or zip'),
-  make_option(c('--block-groups-path'), type='character', default=NULL, help='Optional path or zip for TIGER block-groups'),
-  make_option(c('--census-blocks-path'), type='character', default=NULL, help='Optional path for census block weights CSV'),
-  make_option(c('--output-dir'), type='character', default=NULL, help='Optional output directory path or s3 URI'),
+  make_option(c('-l','--location'), type='character', default='local', help='Select location: local or remote (default: local)'),
+  make_option(c('-s','--state'), type='character', default=NULL, help="Required two-letter state code or 'all'"),
+  make_option(c('-o','--output-dir'), type='character', default=NULL, help='Optional output directory path or s3 URI'),
   make_option(c('--targeted-block-groups-filename'), type='character', default=DEFAULT_TARGETED_BLOCK_GROUPS_FILENAME),
   make_option(c('--block-site-distances-filename'), type='character', default=DEFAULT_BLOCK_SITE_DISTANCES_FILENAME),
   make_option(c('--final-bg-scores-filename'), type='character', default=DEFAULT_FINAL_BG_SCORES_FILENAME),
   make_option(c('--buffer-meters'), type='double', default=DEFAULT_BUFFER_METERS)
 )
 
-parser <- OptionParser(usage='%prog storage_mode [options]', option_list=option_list)
-args_all <- parse_args(parser, positional_arguments = TRUE)
-pos <- args_all$args
-opts <- args_all$options
+parser <- OptionParser(usage='%prog [options]', option_list=option_list)
+args_all <- parse_args(parser, positional_arguments = FALSE)
+opts <- args_all
 
-if (length(pos) < 1) stop('storage_mode positional argument required: local or remote')
-storage_mode <- pos[1]
-if (!storage_mode %in% c('local','remote')) stop('storage_mode must be "local" or "remote"')
+if (is.null(opts$state) || trimws(opts$state) == '') stop('The -s/--state argument is required (use a two-letter postal code or "all").')
 
-state_code <- toupper(trimws(opts$state))
-buffer_meters <- opts$buffer_meters
+location <- tolower(trimws(opts$location))
+if (!location %in% c('local','remote')) stop('Invalid location: must be "local" or "remote"')
+
+state_code <- opts$state
+if (tolower(trimws(state_code)) != 'all') state_code <- toupper(trimws(state_code))
+buffer_meters <- opts$`buffer-meters`
 
 is_s3_uri <- function(path) {
   is.character(path) && startsWith(tolower(path), 's3://')
@@ -133,45 +144,77 @@ main <- function() {
 
   # get configs
   py_state <- py_get_state_config(state_code)
-  metric_crs <- py_state$metric_crs %||% 'EPSG:5070'
 
   shared_cfg <- py_get_shared_config()
   super_cfg <- py_get_superfund_config()
 
-  # resolve paths similar to Python implementation
-  npl_path <- if (!is.null(opts$`npl-boundaries-path`)) opts$`npl-boundaries-path` else file.path(resolvePath(superfund_dir), super_cfg$preprocessed_npl_boundaries_relative_path)
+  # Determine whether to run a single-state or all-states
+  # Note that we depend on this code
+  # in each scoring module to know which state to process. We may want to move
+  # that wisdom to the configuration file.
+  # TODO: The "EJScreen Technical Documentation for Version 2.3, July 31, 2024" pdf
+  # that has been our bible for these implementations says, on page 58, that this
+  # indicator/index should be supported for CONUS, AK, HI, PR, Guam, and the USVI.
+  # It omits mention of DC. However, I think the right logic here would be to 
+  # ask for a state list with extent=US-52 (which includes DC). It seems unlikely
+  # to me that DC would not be supported unless we are all supposed to 
+  # simply know that the District has no superfund sites>? The 
+  # state configs for Guam and USVI need to be added to the list explicitly. 
+  # I can't see coming up with a named extent for that grouping.
+  # I'm using only US-52 for now since I don't know if we have block weight
+  # data for the territories.
+  states <- NULL
+  if (is.character(state_code) && tolower(state_code) == 'all') {
+    if (!is.null(py_state_mod$get_state_config_list)) {
+      py_get_state_config_list <- py_state_mod$get_state_config_list
+      states <- py_get_state_config_list('us-52')
+    } else {
+      stop('Shared state module does not expose get_state_config_list; cannot run "all"')
+    }
+  } else {
+    states <- list(py_state)
+  }
 
-  # block groups and census blocks path templates from shared config
-  tiger_template <- shared_cfg$tiger_bg_relative_path_template
-  census_template <- shared_cfg$census_block_weights_relative_path_template
+  # Iterate states
+  for (st in states) {
+    postal <- st$postal
+    fips <- st$fips
+    metric_crs <- st$metric_crs %||% 'EPSG:5070'
 
-  block_groups_path <- if (!is.null(opts$`block-groups-path`)) opts$`block-groups-path` else file.path(resolvePath(shared_dir), gsub('\{fips\}', py_state$fips, tiger_template))
-  census_blocks_path <- if (!is.null(opts$`census-blocks-path`)) opts$`census-blocks-path` else file.path(resolvePath(shared_dir), gsub('\{postal\}', state_code, census_template))
+    # resolve paths similar to Python implementation
+    npl_path <- if (!is.null(opts$`npl-boundaries-path`)) opts$`npl-boundaries-path` else file.path(resolvePath(superfund_dir), super_cfg$preprocessed_npl_boundaries_relative_path)
 
-  output_root <- if (!is.null(opts$`output-dir`)) opts$`output-dir` else if (storage_mode == 'local') file.path(resolvePath(superfund_dir), 'output') else super_cfg$remote_root_path
-  output_dir <- file.path(output_root, gsub('\{postal\}', state_code, super_cfg$indicator_output_relative_path_template))
-  dir.create(output_dir, recursive=TRUE, showWarnings=FALSE)
+    # block groups and census blocks path templates from shared config
+    tiger_template <- shared_cfg$tiger_bg_relative_path_template
+    census_template <- shared_cfg$census_block_weights_relative_path_template
 
-  targeted_out <- file.path(output_dir, opts$`targeted-block-groups-filename`)
-  distances_out <- file.path(output_dir, opts$`block-site-distances-filename`)
-  final_out <- file.path(output_dir, opts$`final-bg-scores-filename`)
+    block_groups_path <- if (!is.null(opts$`block-groups-path`)) opts$`block-groups-path` else file.path(resolvePath(shared_dir), gsub('\{fips\}', fips, tiger_template))
+    census_blocks_path <- if (!is.null(opts$`census-blocks-path`)) opts$`census-blocks-path` else file.path(resolvePath(shared_dir), gsub('\{postal\}', postal, census_template))
 
-  # staging
-  stg <- tempdir()
-  npl_local <- if (is_s3_uri(npl_path)) stage_s3_to_local(npl_path, file.path(stg, 'npl')) else npl_path
-  bg_local <- if (is_s3_uri(block_groups_path)) stage_s3_to_local(block_groups_path, file.path(stg, 'bg')) else block_groups_path
-  blocks_local <- if (is_s3_uri(census_blocks_path)) stage_s3_to_local(census_blocks_path, file.path(stg, 'blocks')) else census_blocks_path
+    output_root <- if (!is.null(opts$`output-dir`)) opts$`output-dir` else if (location == 'local') file.path(resolvePath(superfund_dir), 'output') else super_cfg$remote_root_path
+    output_dir <- file.path(output_root, gsub('\{postal\}', postal, super_cfg$indicator_output_relative_path_template))
+    dir.create(output_dir, recursive=TRUE, showWarnings=FALSE)
 
-  # read inputs
-  npl_gdf <- read_npl_layer(npl_local)
-  if (!all(c('NPL_STATUS_CODE','EPA_ID') %in% names(npl_gdf))) stop('NPL layer missing required columns')
-  npl_gdf <- st_transform(npl_gdf, crs = metric_crs)
+    targeted_out <- file.path(output_dir, opts$`targeted-block-groups-filename`)
+    distances_out <- file.path(output_dir, opts$`block-site-distances-filename`)
+    final_out <- file.path(output_dir, opts$`final-bg-scores-filename`)
 
-  bg_gdf <- read_block_groups(bg_local)
-  if (!('GEOID' %in% names(bg_gdf))) stop('Block-group data missing GEOID column')
-  bg_gdf <- st_transform(bg_gdf, crs = metric_crs)
+    # staging
+    stg <- tempdir()
+    npl_local <- if (is_s3_uri(npl_path)) stage_s3_to_local(npl_path, file.path(stg, 'npl')) else npl_path
+    bg_local <- if (is_s3_uri(block_groups_path)) stage_s3_to_local(block_groups_path, file.path(stg, 'bg')) else block_groups_path
+    blocks_local <- if (is_s3_uri(census_blocks_path)) stage_s3_to_local(census_blocks_path, file.path(stg, 'blocks')) else census_blocks_path
 
-  blocks_df <- read_csv(blocks_local, col_types = cols(.default = col_character()))
+    # read inputs
+    npl_gdf <- read_npl_layer(npl_local)
+    if (!all(c('NPL_STATUS_CODE','EPA_ID') %in% names(npl_gdf))) stop('NPL layer missing required columns')
+    npl_gdf <- st_transform(npl_gdf, crs = metric_crs)
+
+    bg_gdf <- read_block_groups(bg_local)
+    if (!('GEOID' %in% names(bg_gdf))) stop('Block-group data missing GEOID column')
+    bg_gdf <- st_transform(bg_gdf, crs = metric_crs)
+
+    blocks_df <- read_csv(blocks_local, col_types = cols(.default = col_character()))
   required_cols <- c('GEOID20','INTPTLAT20','INTPTLON20','POP20','block_group_geoid','block_group_pop','fraction_of_total')
   missing <- setdiff(required_cols, names(blocks_df))
   if (length(missing) > 0) stop('Blocks CSV missing columns: ', paste(missing, collapse=', '))
@@ -236,6 +279,8 @@ main <- function() {
   }
   final_df <- agg %>% rename(superfund_score = weighted_score)
   write_csv(final_df, final_out)
+  
+  } # end for (st in states)
 
   message('Superfund indicator R pipeline completed successfully')
 }

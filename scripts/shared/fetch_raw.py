@@ -9,26 +9,26 @@ Purpose:
 Usage examples:
 
     # Simple indicator with a default download
-    python scripts/fetch_raw.py --indicator pm25 --mode local
+    python scripts/fetch_raw.py --indicator pm25 --location local
 
     # Remote fetch for ozone
-    python scripts/fetch_raw.py --indicator o3 --mode remote
+    python scripts/fetch_raw.py --indicator o3 --location remote
 
     # Shared tiger BG download for Vermont (postal code). --state uses two-letter postal codes.
-    python scripts/fetch_raw.py --indicator shared --download tiger_bg_2020 --state VT --mode local
+    python scripts/fetch_raw.py --indicator shared --download tiger_bg_2020 --state VT --location local
 
 Notes:
-        - `--mode` defaults to `local` when omitted.
-        - `--download` must be specified when the indicator config includes multiple download entries.
-           See the pm25_config.json for an example of a single entry and shared_config.json for an
-           example set up for multiple entries.
-        - `--state`
-           - For state-scoped downloads use `--state` with a two-letter postal code which will be
-             validated against `scripts/shared/state_config.json` and translated to the FIPS code
-             used in filenames and URLs. The postal code (uppercased) is stored in the audit.
-           - The special value `all` is supported for `--state` (case-insensitive) to iterate across
-             all configured states.
-        - Use `--dry-run` to print the expanded source URL and destination path without downloading.
+    - `--location`/`-l` is required and must be either `local` or `remote`.
+    - `--download` must be specified when the indicator config includes multiple download entries.
+        See the pm25_config.json for an example of a single entry and shared_config.json for an
+        example set up for multiple entries.
+    - `--state`
+        - For state-scoped downloads use `--state` with a two-letter postal code which will be
+            validated against `scripts/shared/state_config.json` and translated to the FIPS code
+            used in filenames and URLs. The postal code (uppercased) is stored in the audit.
+        - The special value `all` is supported for `--state` (case-insensitive) to iterate across
+            all configured states.
+    - Use `--dry-run` to print the expanded source URL and destination path without downloading.
 """
 
 from __future__ import annotations
@@ -99,7 +99,9 @@ class DownloadResult:
 # But, since the module we want depends on our --indicator runtime
 # argument, we need dynamic loading rather than static.
 def _load_indicator_config_module(indicator: str):
-    cfg_path = SCRIPTS_DIR / indicator / f'{indicator}_config.py'
+    # Indicator configs live at scripts/<indicator>/<indicator>_config.py
+    cfg_root = SCRIPTS_DIR.parent
+    cfg_path = cfg_root / indicator / f'{indicator}_config.py'
     if not cfg_path.exists():
         raise FileNotFoundError(f'Indicator config not found: {cfg_path}')
     loader = importlib.machinery.SourceFileLoader(f'{indicator}_config', str(cfg_path))
@@ -119,7 +121,8 @@ def _load_shared_state_module():
     This mirrors how indicator config modules are loaded so we get the
     same import semantics and dataclass behavior.
     """
-    state_py = SCRIPTS_DIR / 'shared' / 'state_config.py'
+    # Shared state config should live beside this runner in scripts/shared/
+    state_py = SCRIPTS_DIR / 'state_config.py'
     if not state_py.exists():
         raise FileNotFoundError(f'Shared state config module not found: {state_py}')
     loader = importlib.machinery.SourceFileLoader('shared_state_config', str(state_py))
@@ -131,12 +134,16 @@ def _load_shared_state_module():
 
 
 def get_config(argv=None) -> Config:
-    parser = argparse.ArgumentParser(description='Central fetch runner (Phase 2 initial slice).')
-    parser.add_argument('--indicator', '-i', required=True, help='Indicator key such as pm25 or shared')
-    parser.add_argument('--mode', '-m', dest='storage_mode', choices=('local', 'remote'), default='local', help='Select storage mode: local or remote (default: local)')
-    parser.add_argument('--download', '-d', help='Download key from the indicator config')
-    parser.add_argument('--state', '-s', dest='state', help='Two-letter postal state code for state-scoped downloads (e.g. VT)')
-    parser.add_argument('--dry-run', action='store_true', help='Print expanded source URL and destination path and exit')
+    parser = argparse.ArgumentParser(description='Centralized raw data fetch utility.')
+    # Required arguments (listed first)
+    parser.add_argument('-i', '--indicator', required=True, help='Required: Indicator key such as pm25 or shared')
+    parser.add_argument('-l', '--location', dest='storage_mode', choices=('local', 'remote'), required=True, help='Required: Select storage location (local or remote)')
+
+    # Optional arguments
+    parser.add_argument('-d', '--download', help='Optional: Download key from the indicator config')
+    parser.add_argument('-s', '--state', dest='state', help='Optional: Two-letter postal state code for state-scoped downloads (e.g. VT)')
+    parser.add_argument('--dry-run', action='store_true', help='Optional: Print expanded source URL and destination path and exit')
+ 
     args = parser.parse_args(argv)
 
     indicator = args.indicator
@@ -161,9 +168,12 @@ def get_config(argv=None) -> Config:
     request_timeout_seconds = getattr(raw_config, 'request_timeout_seconds', 120)
     chunk_size_bytes = getattr(raw_config, 'chunk_size_bytes', 1048576)
 
+    # Determine the repo-level scripts root (runner lives in scripts/shared)
+    SCRIPTS_ROOT = SCRIPTS_DIR.parent
+
     # If a download key was provided, validate it against the indicator JSON
     # configuration (this mirrors the pm25_config.json structure).
-    json_cfg_path = SCRIPTS_DIR / indicator / f'{indicator}_config.json'
+    json_cfg_path = SCRIPTS_ROOT / indicator / f'{indicator}_config.json'
     indicator_raw = None
     if json_cfg_path.exists():
         import json
@@ -280,10 +290,13 @@ def get_config(argv=None) -> Config:
 
         raise ValueError('Loaded indicator config does not expose expected download metadata for this slice')
 
+    # The runner now lives in scripts/shared; resolve indicator folders
+    # relative to the repository `scripts/` directory (one level up).
+    SCRIPTS_ROOT = SCRIPTS_DIR.parent
     if indicator != 'shared':
-        local_root = resolve_local_fn(SCRIPTS_DIR / indicator)
+        local_root = resolve_local_fn(SCRIPTS_ROOT / indicator)
     else:
-        local_root = resolve_local_fn(SCRIPTS_DIR)
+        local_root = resolve_local_fn(SCRIPTS_ROOT)
 
     remote_root = getattr(raw_config, 'remote_root_path')
 
@@ -520,25 +533,28 @@ def main(argv=None) -> int:
     if cfg.state_all_mode:
         try:
             state_mod = _load_shared_state_module()
-            state_map = state_mod._load_state_configs()
+            # Use the public accessor to obtain the list of configured states
+            # rather than reaching into the module's private JSON loader.
+            state_list = state_mod.get_state_config_list('ALL')
         except Exception as exc:
             raise RuntimeError(f'Failed to load shared state configs for --state all: {exc}')
 
         with requests.Session() as session:
             overall_result_status = 'completed'
-            total_states = len(state_map)
+            total_states = len(state_list)
             succeeded = 0
             failed = 0
             skipped = 0
-            for idx, postal in enumerate(sorted(state_map.keys()), start=1):
-                try:
-                    state_cfg = state_mod.get_state_config(postal)
-                    fips = getattr(state_cfg, 'fips')
-                    postal_up = getattr(state_cfg, 'postal')
-                except Exception as exc:
-                    logging.error('Skipping state %s due to invalid state config: %s', postal, exc)
+            # Iterate deterministic order by postal code using the lightweight
+            # `StateConfig` objects returned by `get_state_config_list()`.
+            for idx, cand in enumerate(sorted(state_list, key=lambda s: s.postal), start=1):
+                postal_up = getattr(cand, 'postal') or ''
+                fips = getattr(cand, 'fips') or ''
+                # Require both postal and fips to be non-blank; skip otherwise.
+                if not postal_up or not fips:
+                    logging.error('Skipping state entry with missing postal or fips: postal=%r fips=%r', postal_up, fips)
                     failed += 1
-                    print(f'[{idx}/{total_states}] {postal}: skipped (invalid state config)')
+                    print(f'[{idx}/{total_states}] {postal_up or "<missing>"}: skipped (missing postal or fips)')
                     continue
 
                 # Expand templates for this state

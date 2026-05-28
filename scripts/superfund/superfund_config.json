@@ -10,5 +10,10 @@
       "relative_path": "downloads/raw_npl_boundaries/NPL_Boundaries.zip",
       "source_url": "https://edg.epa.gov/data/PUBLIC/OLEM/OLEM-OSRTI/NPL_Boundaries.zip"
     }
+  },
+  "geography": {
+    "extent": "US-52",
+    "states": ["GU", "VI"],
+    "notes": "The 'EJScreen Technical Documentation for Version 2.3, July 31, 2024' pdf which has been our bible for these implementations says, on page 58, that this indicator/index should be supported for CONUS, AK, HI, PR, Guam, and the USVI. It omits mention of DC. However, I think the right logic here is to get a state list for extent=US-52 (which includes DC). It seems unlikely to me that DC would not be supported unless we are all supposed to simply know that the District has no superfund sites? The state configs for Guam and USVI need to be added to the list explicitly. I can't see coming up with a named extent for that grouping. ~ag"
   }
 }

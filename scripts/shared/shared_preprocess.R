@@ -7,17 +7,12 @@
 # to a given block. This table is often seen in EJScreen data processing script 
 # to weight datasets. 
 # 
-# The decennial census populations come from https://www2.census.gov/geo/tiger/TIGER2022/TABBLOCK20/
-# I can confirm these are the exact same population estimates as the redistricting 
-# file noted in the EJScreen documentation.
+# TODO - translate this code to match the pipeline 
+# TODO - create args for code for: local vs remote, location (req), and state (opt) 
+# TODO - keep national file push 
+# TODO - add ACS block group pops, and figure out how to handle CT 
+# TODO - add data for the territories 
 # 
-# NOTE - On April 15th, we discovered an error in our calculations, where we 
-# were not using the ACS block group populations in the weight calculation (just 
-# the decennial census block & block group populations)
-# Weight calculation = 2020 decennial block population / 2022 ACS block group population estimate 
-# 
-# NOTE: we can make this a function in the future! 
-#
 # Outputs: all from 2020 decennial census 
 #   - state_abb: abbreviated state name 
 #   - STATEFP20: state number 
@@ -54,6 +49,7 @@ acs_year = 2022
 state_acro <- states() %>%
   as.data.frame() %>%
   janitor::clean_names() %>%
+  arrange(stusps) %>%
   select(statefp, stusps) %>%
   # TODO - there is definitely a way to collect populations for these territories, 
   # I just can't figure it out right now 
@@ -68,50 +64,33 @@ for (i in 1:nrow(state_acro)) {
                " out of ", nrow(state_acro)))
   
   # load blocks: 
-  state_i_b_url <- paste0("https://www2.census.gov/geo/tiger/TIGER2022/TABBLOCK20/tl_2022_",
+  state_i_b_url <- paste0("https://www2.census.gov/geo/tiger/TIGER2020/TABBLOCK20/tl_2020_",
                           state_num_i, 
                           "_tabblock20.zip")
   # downloading to temporary directory: 
   file_loc <- tempdir()
   on.exit(unlink(tmp))
-  # using curl to download the RI blocks faster
+  # using curl to download the blocks faster
   curl_download(state_i_b_url, 
                 destfile = paste0(file_loc, ".zip"))
   unzip(zipfile = paste0(file_loc, ".zip"), exdir = file_loc) 
   file.remove(paste0(file_loc, ".zip"))
   # reading it from the download: 
-  state_i_b <- st_read(paste0(file_loc, "/tl_2022_", state_num_i, "_tabblock20.shp")) %>%
+  state_i_b <- st_read(paste0(file_loc, "/tl_2020_", state_num_i, "_tabblock20.shp")) %>%
     # create the block group geoid
     mutate(block_group_geoid = substr(GEOID20, 0, 12))
   
   
-  # note that I also pulled block groups from here, but they don't have 
-  # population estimates 
-  # state_i_bg_url <- paste0("https://www2.census.gov/geo/tiger/TIGER2022/BG/tl_2022_", state_num_i, 
-  #                         "_bg.zip")
+  # group decennial block data by census block group geoid, and sun 
+  # populations to create the weights table
+  bg_pops_i <- state_i_b %>%
+    as.data.frame() %>%
+    # group by block group geoid and find total pop from block pops:
+    group_by(block_group_geoid) %>%
+    mutate(block_group_pop = sum(POP20)) %>%
+    select(block_group_geoid, block_group_pop) %>%
+    unique()
   
-  # this was the old code, where i simply grouped the decennial block data by 
-  # census block group geoid, and summed populations to create the weights table
-  # bg_pops_i <- state_i_b %>%
-  #   as.data.frame() %>%
-  #   # group by block group geoid and find total pop from block pops: 
-  #   group_by(block_group_geoid) %>%
-  #   mutate(block_group_pop = sum(POP20)) %>%
-  #   select(block_group_geoid, block_group_pop) %>%
-  #   unique()
-  
-  # create block group table - this is the new method I'm testing using 2022
-  # ACS data. 
-  bg_pops_i <- tidycensus::get_acs(
-    geography = "block group", 
-    variables = "B01003_001", 
-    state = state_num_i,
-    year = as.numeric(acs_year),
-    geometry = F) %>%
-    rename(block_group_geoid = GEOID, 
-           block_group_pop = estimate) %>%
-    select(block_group_geoid, block_group_pop)
-    
   # add total block group populations to block table to calculate weight 
   b_weights_i <- state_i_b %>%
     left_join(bg_pops_i, by = "block_group_geoid") %>%
@@ -125,19 +104,40 @@ for (i in 1:nrow(state_acro)) {
     relocate(state_abb, .before = STATEFP20) %>%
     select(state_abb, STATEFP20, GEOID20, ALAND20:fraction_of_total)
   
-  # binding 
-  weights_df <- bind_rows(weights_df, b_weights_i)
+  # adding the 2022 ACS block group population, which should help identify
+  # NULL values. Note the BG ACS files in Tiger 
+  # (https://www2.census.gov/geo/tiger/TIGER2022/BG/) do not actually contain 
+  # populations, so I need to grab them from the census 
+  state_i_bg_2022 <- tidycensus::get_acs(
+    geography = "block group", 
+    variables = "B01003_001", 
+    state = state_num_i,
+    year = as.numeric(acs_year),
+    geometry = F) %>%
+    rename(block_group_geoid = GEOID, 
+           acs_2022_bg_pop = estimate) %>%
+    select(block_group_geoid, acs_2022_bg_pop)
+
+  # quick check of block group geoids 
+  print(paste0("2022 ACS BG GEOIDS: ", length(unique(state_i_bg_2022$block_group_geoid)), 
+               "; ", "Decennial BG GEOIDS:", length(unique(b_weights_i$block_group_geoid)), 
+               "; for state: ", state_i$stusps))
   
+  # break if these do not have the same number of block groups 
+  # TODO - figure out how to handle CT - this currently breaks (as expected!)
+  if(length(unique(state_i_bg_2022$block_group_geoid)) != length(unique(b_weights_i$block_group_geoid))){
+    break
+  }
+  
+  # mergin: 
+  b_weights_i_merged <- merge(b_weights_i, 
+                              state_i_bg_2022, 
+                              by = "block_group_geoid", 
+                              all = T)
+  
+  # binding 
+  weights_df <- bind_rows(weights_df, b_weights_i_merged)
 }
-
-# quick check against the weights we already have: 
-# test <- weights_df %>%
-#   filter(state_abb == "RI")
-# test
-
-# NOTE:
-# Code above generated this file: s3://pedp-data-preserved/ejscreen-data-processing/census_tables/census_block_weights_2020_2022acsbg_pops.csv
-# The previous version created this file: s3://pedp-data-preserved/ejscreen-data-processing/census_tables/census_block_weights_2020.csv
 
 
 # adding to s3: 
@@ -146,6 +146,6 @@ write.csv(weights_df, paste0(tmp, ".csv"), row.names = F)
 on.exit(unlink(tmp))
 put_object(
   file = paste0(tmp, ".csv"),
-  object = "s3://pedp-data-preserved/ejscreen-data-processing/census_tables/census_block_weights_2020_2022acsbg_pops.csv",
+  object = "s3://pedp-data-preserved/ejscreen-data-processing/census_tables/census_block_weights_2020.csv",
   multipart = T
 )

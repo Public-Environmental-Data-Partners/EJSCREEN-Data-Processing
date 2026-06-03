@@ -10,7 +10,6 @@
 # TODO - translate this code to match the pipeline 
 # TODO - create args for code for: local vs remote, location (req), and state (opt) 
 # TODO - keep national file push 
-# TODO - add ACS block group pops, and figure out how to handle CT 
 # TODO - add data for the territories 
 # 
 # Outputs: all from 2020 decennial census 
@@ -27,8 +26,16 @@
 #   - block_group_pop: census block group population 
 #   - fraction_of_total: percentage of the census block population for a given 
 #       block (POP20 / block_group_pop)
+#   - acs_2022_bg_pop: block group population from the 2022 ACS estimate, with the 
+#       goal of making it easier to override null values for the indicators 
+#   - block_group_geoid_2022: block group FIPS for the 2022 ACS. Note for CT, which 
+#       changed their FIPS codes in 2022, we used a crosswalk developed by the 
+#       CT data collaborative to identify the corresponding 2020 FIPS match. 
+#       I can confirm the spatial boundaries did not change, it was just simply 
+#       a swap in census codes. 
 # 
-# Date: Feb 24th, 2026
+# Date: Feb 24th, 2026 
+# Updated: June 3rd, 2026
 # Author: EmmaLi Tsai
 ###############################################################################
 # libraries 
@@ -39,8 +46,10 @@ library(curl)
 library(sf)
 library(tidycensus)
 library(aws.s3)
+library(data.table)
 # cache tigris files:
 options(tigris_use_cache = TRUE)
+options(scipen = 9999)
 
 # setting ACS year for block group populations
 acs_year = 2022
@@ -114,38 +123,99 @@ for (i in 1:nrow(state_acro)) {
     state = state_num_i,
     year = as.numeric(acs_year),
     geometry = F) %>%
-    rename(block_group_geoid = GEOID, 
+    rename(block_group_geoid_2022 = GEOID, 
            acs_2022_bg_pop = estimate) %>%
-    select(block_group_geoid, acs_2022_bg_pop)
+    select(block_group_geoid_2022, acs_2022_bg_pop)
 
   # quick check of block group geoids 
-  print(paste0("2022 ACS BG GEOIDS: ", length(unique(state_i_bg_2022$block_group_geoid)), 
+  print(paste0("2022 ACS BG GEOIDS: ", length(unique(state_i_bg_2022$block_group_geoid_2022)), 
                "; ", "Decennial BG GEOIDS:", length(unique(b_weights_i$block_group_geoid)), 
                "; for state: ", state_i$stusps))
   
   # break if these do not have the same number of block groups 
-  # TODO - figure out how to handle CT - this currently breaks (as expected!)
-  if(length(unique(state_i_bg_2022$block_group_geoid)) != length(unique(b_weights_i$block_group_geoid))){
-    break
+  # I think this is the code I need: https://github.com/Public-Environmental-Data-Partners/EJAM/blob/main/data-raw/datacreate_blockwts.R
+  # however, a raw file gets loaded in here and I don't have access to it. 
+  # Based on my understanding & considering the actual bounaries didn't change, 
+  # we can remap them pretty easily: 
+  if(length(unique(state_i_bg_2022$block_group_geoid_2022)) != length(unique(b_weights_i$block_group_geoid))){
+    print("Fixing FIPS in CT")
+    # reading in CT crosswalk
+    ct_xwalk <- data.table::fread("https://raw.githubusercontent.com/CT-Data-Collaborative/2022-block-crosswalk/main/2022blockcrosswalk.csv")
+    # tidying and cleaning fips codes: 
+    ct_xwalk_tidy <- ct_xwalk %>%
+      as.data.frame() %>%
+      mutate(block_fips_2020 = as.character(block_fips_2020), 
+             block_fips_2022 = as.character(block_fips_2022), 
+             block_fips_2020 = case_when(nchar(block_fips_2020) == 14 ~ paste0("0", block_fips_2020)), 
+             block_fips_2022 = case_when(nchar(block_fips_2022) == 14 ~ paste0("0", block_fips_2022)),
+             block_group_2020 = substr(block_fips_2020, 1, 12), 
+             block_group_2022 = substr(block_fips_2022, 1, 12)) %>%
+      select(block_group_2020, block_group_2022) 
+    
+    state_i_bg_2022_ct <- merge(state_i_bg_2022, 
+                                ct_xwalk_tidy, 
+                                by.x = "block_group_geoid_2022", 
+                                by.y = "block_group_2022", 
+                                all = T)
+    
+    b_weights_i_merged <- merge(b_weights_i, 
+                                state_i_bg_2022_ct, 
+                                by.x = "block_group_geoid", 
+                                by.y = "block_group_2020",
+                                all = T)
+    
+  } else {
+    # mergin: 
+    b_weights_i_merged <- merge(b_weights_i, 
+                                state_i_bg_2022, 
+                                by.x = "block_group_geoid", 
+                                by.y = "block_group_geoid_2022",
+                                all = T) %>%
+      mutate(block_group_geoid_2022 = block_group_geoid)
+    
   }
   
-  # mergin: 
-  b_weights_i_merged <- merge(b_weights_i, 
-                              state_i_bg_2022, 
-                              by = "block_group_geoid", 
-                              all = T)
+
   
   # binding 
   weights_df <- bind_rows(weights_df, b_weights_i_merged)
 }
 
+# Trimming any extra duplicates 
+weights_df_uniq <- weights_df %>%
+  unique() %>%
+  select(-VINTAGE)
 
 # adding to s3: 
 tmp <- tempfile()
-write.csv(weights_df, paste0(tmp, ".csv"), row.names = F)
+write.csv(weights_df_uniq, paste0(tmp, ".csv"), row.names = F)
 on.exit(unlink(tmp))
 put_object(
   file = paste0(tmp, ".csv"),
-  object = "s3://pedp-data-preserved/ejscreen-data-processing/census_tables/census_block_weights_2020.csv",
+  object = "s3://pedp-data-preserved/ejscreen-data-processing/census_tables/census_block_weights_2020_w2022pops.csv",
   multipart = T
 )
+
+
+### extra code to check output against previous file in s3: 
+# # looking at differences against our original file: 
+# test <- aws.s3::s3read_using(read.csv, 
+#                              object = "s3://pedp-data-preserved/ejscreen-data-processing/census_tables/census_block_weights_2020.csv")
+# # fixing geoids & leading 0s
+# test_tidy <- test %>%
+#   mutate(GEOID20 = as.character(GEOID20), 
+#          GEOID20 = case_when(nchar(GEOID20) == 14 ~ paste0("0", GEOID20), 
+#                                    TRUE ~ GEOID20))
+# # which ones got dropped? 
+# missing_from_update <- test_tidy %>%
+#   filter(!(GEOID20 %in% weights_df_uniq$GEOID20))
+# 
+# # there are 5,911 observations that are missing 
+# unique(missing_from_update$state_abb)
+# # "VI" "MP" "GU" "AS" --- as expected. Great!
+# 
+# # extra checks to confirm issues raised in:
+# # https://github.com/Public-Environmental-Data-Partners/EJSCREEN-Data-Processing/issues/15
+# # FIPS: 300290017032 & 300679806001
+# mt_data <- weights_df_uniq %>% 
+#   filter(state_abb == "MT")

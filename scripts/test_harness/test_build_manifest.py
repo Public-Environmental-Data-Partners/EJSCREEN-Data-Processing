@@ -19,9 +19,10 @@ import build_manifest  # type: ignore[import-not-found]
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Dry-run stage manifest build for an indicator.")
+    parser = argparse.ArgumentParser(description="Dry-run stage manifest build for an indicator or shared asset.")
     parser.add_argument("--environment", required=True)
-    parser.add_argument("--indicator", required=True)
+    parser.add_argument("--target-type", required=True)
+    parser.add_argument("--name", required=True)
     parser.add_argument("--stage", required=True)
     parser.add_argument("--version", required=True)
     return parser
@@ -34,7 +35,8 @@ def main() -> int:
 
     try:
         manifest = build_manifest.get_stage_manifest(
-            indicator=args.indicator,
+            target_type=args.target_type,
+            name=args.name,
             stage=args.stage,
             version=args.version,
             environment=args.environment,

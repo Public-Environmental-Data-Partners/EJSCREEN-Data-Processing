@@ -1,4 +1,4 @@
-"""Strict stage manifest builder for indicator workflows."""
+"""Strict stage manifest builder for indicator and shared workflows."""
 
 from __future__ import annotations
 
@@ -14,31 +14,55 @@ LOGGER.addHandler(logging.NullHandler())
 
 SCRIPTS_ROOT = Path(__file__).resolve().parent.parent
 VALID_ENVIRONMENTS = {"local", "remote"}
+VALID_TARGET_TYPES = {"indicator", "shared"}
+SHARED_CONFIG_PATH = Path(__file__).with_name("shared_config.json")
 
 
 class _ManifestBuilder:
     def __init__(self) -> None:
         self._indicator_config_cache: dict[str, dict[str, object]] = {}
+        self._shared_config_cache: dict[str, object] | None = None
 
     def get_stage_manifest(
         self,
-        indicator: str,
+        target_type: str,
+        name: str,
         stage: str,
         version: str,
         environment: str = "local",
     ) -> dict[str, dict[str, dict[str, str]]]:
+        self._validate_target_type(target_type)
         self._validate_environment(environment)
-        config = self._load_indicator_config(indicator)
-        version_block = self._get_indicator_version_block(config, indicator, version)
-        stage_block = self._get_stage_block(version_block, indicator, version, stage)
 
+        if target_type == "indicator":
+            config = self._load_indicator_config(name)
+            version_block = self._get_indicator_version_block(config, name, version)
+            stage_block = self._get_indicator_stage_block(version_block, name, version, stage)
+            return {
+                "inputs": self._compile_indicator_inputs(config, stage_block, name, version, environment),
+                "outputs": self._compile_target_outputs(
+                    config,
+                    stage_block,
+                    f"{name}.versions.{version}.stages.{stage}",
+                    environment,
+                ),
+            }
+
+        config = self._load_shared_config()
+        version_block = self._get_shared_version_block(config, name, version)
+        stage_block = self._get_shared_stage_block(version_block, name, version, stage)
         manifest = {
-            "inputs": self._compile_inputs(config, stage_block, indicator, version, environment),
-            "outputs": self._compile_outputs(config, stage_block, indicator, version, stage, environment),
+            "inputs": self._compile_shared_inputs(stage_block, name, version),
+            "outputs": self._compile_target_outputs(
+                config,
+                stage_block,
+                f"shared.assets.{name}.{version}.stages.{stage}",
+                environment,
+            ),
         }
         return manifest
 
-    def _compile_inputs(
+    def _compile_indicator_inputs(
         self,
         config: dict[str, object],
         stage_block: dict[str, object],
@@ -91,40 +115,69 @@ class _ManifestBuilder:
 
         return compiled
 
-    def _compile_outputs(
+    def _compile_shared_inputs(
+        self,
+        stage_block: dict[str, object],
+        asset_name: str,
+        version: str,
+    ) -> dict[str, dict[str, str]]:
+        inputs = self._optional_mapping(stage_block.get("inputs"), "inputs")
+        if not inputs:
+            return {}
+
+        for input_name in inputs:
+            self._fail(
+                f"Shared target inputs are not yet defined for strict manifest compilation: "
+                f"shared.assets.{asset_name}.{version}.stages.*.inputs.{input_name}"
+            )
+
+        return {}
+
+    def _compile_target_outputs(
         self,
         config: dict[str, object],
         stage_block: dict[str, object],
-        indicator: str,
-        version: str,
-        stage: str,
+        field_prefix: str,
         environment: str,
     ) -> dict[str, dict[str, str]]:
         outputs = self._optional_mapping(stage_block.get("outputs"), "outputs")
         compiled: dict[str, dict[str, str]] = {}
 
         for output_name, entry in outputs.items():
-            field_prefix = f"{indicator}.versions.{version}.stages.{stage}.outputs.{output_name}"
+            output_prefix = f"{field_prefix}.outputs.{output_name}"
             entry_mapping = self._require_mapping(entry, field_prefix)
-            compiled[output_name] = self._compile_indicator_relative_entry(
+            compiled[output_name] = self._compile_relative_entry(
                 config,
                 entry_mapping,
-                field_prefix,
+                output_prefix,
                 environment,
             )
 
         return compiled
 
-    def _compile_indicator_relative_entry(
+    def _compile_relative_entry(
         self,
         config: dict[str, object],
         entry_mapping: dict[str, object],
         field_prefix: str,
         environment: str,
     ) -> dict[str, str]:
-        root = self._get_root(config, environment, "indicator")
-        relative = self._require_non_empty_string(entry_mapping.get("relative_path"), f"{field_prefix}.relative_path")
+        root = self._get_root(config, environment, "target")
+        relative = self._extract_relative_value(entry_mapping, field_prefix)
         return {"root": root, "relative": relative}
+
+    def _extract_relative_value(self, entry_mapping: dict[str, object], field_prefix: str) -> str:
+        relative_path = entry_mapping.get("relative_path")
+        relative_template = entry_mapping.get("relative_path_template")
+
+        if isinstance(relative_path, str) and relative_path:
+            return relative_path
+        if isinstance(relative_template, str) and relative_template:
+            return relative_template
+
+        self._fail(
+            f"Expected {field_prefix} to define a non-empty relative_path or relative_path_template"
+        )
 
     def _load_indicator_config(self, indicator: str) -> dict[str, object]:
         if indicator in self._indicator_config_cache:
@@ -134,6 +187,13 @@ class _ManifestBuilder:
         config = self._load_json_object(config_path, f"indicator {indicator}")
         self._indicator_config_cache[indicator] = config
         return config
+
+    def _load_shared_config(self) -> dict[str, object]:
+        if self._shared_config_cache is not None:
+            return self._shared_config_cache
+
+        self._shared_config_cache = self._load_json_object(SHARED_CONFIG_PATH, "shared")
+        return self._shared_config_cache
 
     def _load_json_object(self, config_path: Path, label: str) -> dict[str, object]:
         if not config_path.exists():
@@ -156,7 +216,7 @@ class _ManifestBuilder:
         versions = self._require_mapping(config.get("versions"), f"{indicator}.versions")
         return self._require_mapping(versions.get(version), f"{indicator}.versions.{version}")
 
-    def _get_stage_block(
+    def _get_indicator_stage_block(
         self,
         version_block: dict[str, object],
         indicator: str,
@@ -166,6 +226,26 @@ class _ManifestBuilder:
         stages = self._require_mapping(version_block.get("stages"), f"{indicator}.versions.{version}.stages")
         return self._require_mapping(stages.get(stage), f"{indicator}.versions.{version}.stages.{stage}")
 
+    def _get_shared_version_block(
+        self,
+        config: dict[str, object],
+        asset_name: str,
+        version: str,
+    ) -> dict[str, object]:
+        assets = self._require_mapping(config.get("assets"), "shared.assets")
+        asset_versions = self._require_mapping(assets.get(asset_name), f"shared.assets.{asset_name}")
+        return self._require_mapping(asset_versions.get(version), f"shared.assets.{asset_name}.{version}")
+
+    def _get_shared_stage_block(
+        self,
+        version_block: dict[str, object],
+        asset_name: str,
+        version: str,
+        stage: str,
+    ) -> dict[str, object]:
+        stages = self._require_mapping(version_block.get("stages"), f"shared.assets.{asset_name}.{version}.stages")
+        return self._require_mapping(stages.get(stage), f"shared.assets.{asset_name}.{version}.stages.{stage}")
+
     def _get_root(self, config: dict[str, object], environment: str, label: str) -> str:
         field_name = "local_root_path" if environment == "local" else "remote_root_path"
         return self._require_non_empty_string(config.get(field_name), f"{label}.{field_name}")
@@ -173,6 +253,10 @@ class _ManifestBuilder:
     def _validate_environment(self, environment: str) -> None:
         if environment not in VALID_ENVIRONMENTS:
             self._fail(f"Invalid environment {environment!r}; expected one of {sorted(VALID_ENVIRONMENTS)}")
+
+    def _validate_target_type(self, target_type: str) -> None:
+        if target_type not in VALID_TARGET_TYPES:
+            self._fail(f"Invalid target_type {target_type!r}; expected one of {sorted(VALID_TARGET_TYPES)}")
 
     def _optional_mapping(self, value: object, field_name: str) -> dict[str, object]:
         if value is None:
@@ -205,9 +289,10 @@ def _get_builder() -> _ManifestBuilder:
 
 
 def get_stage_manifest(
-    indicator: str,
+    target_type: str,
+    name: str,
     stage: str,
     version: str,
     environment: str = "local",
 ) -> dict[str, dict[str, dict[str, str]]]:
-    return _get_builder().get_stage_manifest(indicator, stage, version, environment)
+    return _get_builder().get_stage_manifest(target_type, name, stage, version, environment)

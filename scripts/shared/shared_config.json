@@ -8,27 +8,47 @@
   "assets": {
     "census_block_weights": {
       "1.0": {
-        "preprocessed_input_relative_path_template": "census_block_weights/1.0/preprocessed_input/census_block_weights_2020_{postal}.csv"
+        "stages": {
+          "preprocess": {
+            "outputs": {
+              "census_block_weights": {
+                "type": "shared_asset",
+                "scope": "postal",
+                "relative_path_template": "census_block_weights/1.0/preprocessed_input/census_block_weights_2020_{postal}.csv"
+              }
+            }
+          }
+        }
       }
     },
     "tiger_bg": {
       "2020": {
-        "downloads": {
-          "tiger_bg_2020": {
-            "scope": "state",
-            "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/BG/tl_2020_{fips}_bg.zip",
-            "relative_path_template": "downloads/tiger_lines/2020/bg/tl_2020_{fips}_bg.zip"
+        "stages": {
+          "fetch": {
+            "outputs": {
+              "tiger_bg_2020": {
+                "type": "download",
+                "scope": "state",
+                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/BG/tl_2020_{fips}_bg.zip",
+                "relative_path_template": "downloads/tiger_lines/2020/bg/tl_2020_{fips}_bg.zip"
+              }
+            }
           }
         }
       }
     },
     "tiger_block": {
       "2022": {
-        "downloads": {
-          "tiger_block_2020": {
-            "scope": "state",
-            "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2022/TABBLOCK20/tl_2022_{fips}_tabblock20.zip",
-            "relative_path_template": "downloads/tiger_lines/2022/tabblock20/tl_2022_{fips}_tabblock20.zip"
+        "stages": {
+          "fetch": {
+            "outputs": {
+              "tiger_block_2020": {
+                "type": "download",
+                "scope": "state",
+                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2022/TABBLOCK20/tl_2022_{fips}_tabblock20.zip",
+                "relative_path_template": "downloads/tiger_lines/2022/tabblock20/tl_2022_{fips}_tabblock20.zip"
+              }
+            }
           }
         }
       }

@@ -40,8 +40,8 @@ The module must parse configurations from two known locations based on the input
 
 #### `get_download_path(indicator: str, version: str, asset_key: str, environment: str = "local") -> dict`
 
-* **What it does:** Looks up an indicator-specific download asset block.
-* **Behavior:** Traverses the indicator's configuration file for the matching `version`, navigates to the `downloads` dictionary, and extracts the target `asset_key` information.
+* **What it does:** Looks up an indicator-specific fetch-stage output asset.
+* **Behavior:** Traverses the indicator's configuration file for the matching `version`, navigates to `stages -> fetch -> outputs`, and extracts the target `asset_key` information.
 * **Return Value:** A dictionary that includes `"root"` and `"relative"` keys mapped to the selected environment settings.
 
 #### `get_dependency_version(indicator: str, version: str, dependency: str) -> str`
@@ -54,8 +54,8 @@ The module must parse configurations from two known locations based on the input
 
 * **What it does:** Looks up paths inside the global `shared_config.json`.
 * **Behavior:** Targets the specific `asset` and its nested `version`.
-* If `category` is `"preprocessed_input"`, it resolves the location using `preprocessed_input_relative_path_template`.
-* If `category` is `"downloads"`, it requires the `asset_key` and resolves using the nested `relative_path_template` inside the downloads definition.
+* If `category` is `"preprocessed_input"`, it resolves the location from `stages -> preprocess -> outputs` using the asset output's `relative_path_template`.
+* If `category` is `"downloads"`, it requires the `asset_key` and resolves from `stages -> fetch -> outputs` using the selected output's `relative_path_template`.
 
 
 * **Return Value:** A dictionary that includes `"root"` and `"relative"` keys.
@@ -80,7 +80,7 @@ The harness must be a standalone executable Python script located at `./scripts/
 * `--version` (Required): String version identifier (e.g., `1.0`, `2020.1`).
 * `--key` (Optional): String key name representing an item's sub-asset key (e.g., `raw_o3` for indicators, or `raw_weight_crosswalks` for shared downloads).
 * `--category` (Optional): String matching either `downloads` or `preprocessed_input` (used strictly when `--type` is `shared`).
-* **Validation Rule:** Invalid `--environment` values must fail fast with a clear error message.
+* **Validation Rule:** The harness should validate command shape, but invalid `--environment` and invalid shared `--category` values must be passed through so the resolver module itself performs the fast-fail semantic validation.
 
 ### 3. Execution Behavior & Sample Output
 
@@ -100,7 +100,7 @@ python ./scripts/test_harness/test_resolver.py --environment remote --type indic
 ```json
 {
   "status": "DRY_RUN_RESOLVED",
-  "root": "s3://pedp-data-preserved/ejscreen-data-processing/o3/pipeline/",
+  "root": "s3://pedp-data-preserved/ejscreen-data-processing/pipeline/o3/",
   "relative": "v1.0/downloads/2020/2020_ozone_daily_8hour_maximum.txt.gz"
 }
 
@@ -218,3 +218,13 @@ if (run_env == "remote") {
 ### 4. Open Path-Join Detail
 
 The examples above assume that `root` can be concatenated directly with `relative`. If the configuration standard changes to omit trailing separators from `root`, the runtime examples should be updated to insert the separator explicitly in a cloud-safe way.
+
+### 5. Stage-Oriented Configuration Model
+
+The resolver now assumes a stage-oriented configuration layout:
+
+* **Indicator fetch assets:** `versions -> {version} -> stages -> fetch -> outputs -> {asset_key}`
+* **Shared fetch assets:** `assets -> {asset} -> {version} -> stages -> fetch -> outputs -> {asset_key}`
+* **Shared preprocess assets:** `assets -> {asset} -> {version} -> stages -> preprocess -> outputs -> {asset}`
+
+The resolver does not implement fallback support for older top-level `downloads` or `preprocessed_input_relative_path_template` layouts.

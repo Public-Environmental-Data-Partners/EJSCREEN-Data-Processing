@@ -31,14 +31,18 @@ class _PathResolver:
         self._validate_environment(environment)
         config = self._load_indicator_config(indicator)
         version_block = self._get_indicator_version_block(config, indicator, version)
-        downloads = self._require_mapping(
-            version_block.get("downloads"),
-            f"{indicator}.versions.{version}.downloads",
+        fetch_outputs = self._get_stage_outputs(
+            version_block,
+            f"{indicator}.versions.{version}",
+            "fetch",
         )
-        asset = self._require_mapping(downloads.get(asset_key), f"{indicator}.versions.{version}.downloads.{asset_key}")
+        asset = self._require_mapping(
+            fetch_outputs.get(asset_key),
+            f"{indicator}.versions.{version}.stages.fetch.outputs.{asset_key}",
+        )
         relative = self._require_non_empty_string(
             asset.get("relative_path"),
-            f"{indicator}.versions.{version}.downloads.{asset_key}.relative_path",
+            f"{indicator}.versions.{version}.stages.fetch.outputs.{asset_key}.relative_path",
         )
         root = self._get_root(config, environment, f"indicator {indicator}")
         return {"root": root, "relative": relative}
@@ -75,26 +79,36 @@ class _PathResolver:
         version_block = self._require_mapping(asset_versions.get(version), f"shared.assets.{asset}.{version}")
 
         if category == "preprocessed_input":
+            preprocess_outputs = self._get_stage_outputs(
+                version_block,
+                f"shared.assets.{asset}.{version}",
+                "preprocess",
+            )
+            preprocess_asset = self._require_mapping(
+                preprocess_outputs.get(asset),
+                f"shared.assets.{asset}.{version}.stages.preprocess.outputs.{asset}",
+            )
             relative = self._require_non_empty_string(
-                version_block.get("preprocessed_input_relative_path_template"),
-                f"shared.assets.{asset}.{version}.preprocessed_input_relative_path_template",
+                preprocess_asset.get("relative_path_template"),
+                f"shared.assets.{asset}.{version}.stages.preprocess.outputs.{asset}.relative_path_template",
             )
         else:
             if not asset_key:
                 self._fail(
                     "asset_key is required when resolving shared downloads"
                 )
-            downloads = self._require_mapping(
-                version_block.get("downloads"),
-                f"shared.assets.{asset}.{version}.downloads",
+            fetch_outputs = self._get_stage_outputs(
+                version_block,
+                f"shared.assets.{asset}.{version}",
+                "fetch",
             )
             download_asset = self._require_mapping(
-                downloads.get(asset_key),
-                f"shared.assets.{asset}.{version}.downloads.{asset_key}",
+                fetch_outputs.get(asset_key),
+                f"shared.assets.{asset}.{version}.stages.fetch.outputs.{asset_key}",
             )
             relative = self._require_non_empty_string(
                 download_asset.get("relative_path_template"),
-                f"shared.assets.{asset}.{version}.downloads.{asset_key}.relative_path_template",
+                f"shared.assets.{asset}.{version}.stages.fetch.outputs.{asset_key}.relative_path_template",
             )
 
         root = self._get_root(config, environment, "shared")
@@ -136,6 +150,16 @@ class _PathResolver:
     ) -> dict[str, object]:
         versions = self._require_mapping(config.get("versions"), f"{indicator}.versions")
         return self._require_mapping(versions.get(version), f"{indicator}.versions.{version}")
+
+    def _get_stage_outputs(
+        self,
+        version_block: dict[str, object],
+        field_prefix: str,
+        stage_name: str,
+    ) -> dict[str, object]:
+        stages = self._require_mapping(version_block.get("stages"), f"{field_prefix}.stages")
+        stage_block = self._require_mapping(stages.get(stage_name), f"{field_prefix}.stages.{stage_name}")
+        return self._require_mapping(stage_block.get("outputs"), f"{field_prefix}.stages.{stage_name}.outputs")
 
     def _get_root(self, config: dict[str, object], environment: str, label: str) -> str:
         field_name = "local_root_path" if environment == "local" else "remote_root_path"

@@ -21,6 +21,8 @@ The module reads the indicator configuration file located at `./scripts/{indicat
 ### 2. Dependency Tracking Invariant
 When an entry under a stage's `inputs` section points to a global shared asset (e.g., `type: "shared_asset"`), `build_manifest.py` must automatically step back up the configuration tree, query `resolve_path.py` to identify the precise version string pinned under `required_shared_assets` for that indicator version, and then pass that information along to get the asset's shared paths. The calling processing script should never have to explicitly declare or look up dependency versions.
 
+Indicator-owned fetched assets are now modeled as outputs of the indicator's `fetch` stage. Shared downloaded assets are modeled as outputs of the shared asset's `fetch` stage. Shared preprocessed assets are modeled as outputs of the shared asset's `preprocess` stage.
+
 ### 3. Output Data Shape Contract
 The function must compile and return a **single Python Dictionary** containing exactly two top-level keys: `"inputs"` and `"outputs"`. 
 
@@ -46,7 +48,7 @@ The value of every single nested asset identity key within this manifest must fo
 1. **Load Configuration:** Read and parse the target indicator JSON file (`./scripts/{indicator}/{indicator}_config.json`).
 2. **Isolate Stage Requirements:** Navigate down to the specific `["versions"][version]["stages"][stage]` block. If the stage or version does not exist, raise an explicit descriptive error.
 3. **Compile Inputs:** Loop through all items defined inside the stage's `inputs` block:
-* If an input maps to a local indicator asset, request its coordinates from `resolve_path.get_download_path()`.
+* If an input maps to an indicator fetch asset, request its coordinates from `resolve_path.get_download_path()`, which resolves through the indicator's `fetch` stage outputs.
 * If an input maps to a global shared asset, query `resolve_path.get_dependency_version()` to find the required version, then pass that version to `resolve_path.get_shared_asset_path()`.
 
 
@@ -95,3 +97,9 @@ The AI code generator must guarantee that calling this module results in a dicti
 2. **Remote Score Context Resolution:**
 `get_stage_manifest(indicator="o3", stage="score", version="1.0", environment="remote")`
 => Must return an input/output mapping dictionary prefixing all `"root"` parameters with the explicit S3 protocol block retrieved from the configuration file, keeping relative string structures preserved for pipeline orchestration.
+
+## 6. Current Strictness Decision
+
+`build_manifest.py` should remain strict and should not implement fallback logic for incomplete or transitional config shapes.
+
+`census_block_weights` is currently in a provisional configuration state. Its final shared-asset stage layout will be completed later. Until that schema is finalized, the manifest implementation should not add compatibility layers or silent fallbacks for it.

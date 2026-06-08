@@ -10,13 +10,16 @@
       "required_shared_assets": {
         "census_block_weights": "1.0"
       },
-      "downloads": {
-        "raw_o3": {
-          "relative_path": "v1.0/downloads/2020/2020_ozone_daily_8hour_maximum.txt.gz",
-          "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2020_ozone_daily_8hour_maximum.txt.gz"
-        }
-      },
       "stages": {
+        "fetch": {
+          "outputs": {
+            "raw_o3": {
+              "type": "download",
+              "relative_path": "v1.0/downloads/2020/2020_ozone_daily_8hour_maximum.txt.gz",
+              "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2020_ozone_daily_8hour_maximum.txt.gz"
+            }
+          }
+        },
         "preprocess": {
           "inputs": {
             "primary_o3": {

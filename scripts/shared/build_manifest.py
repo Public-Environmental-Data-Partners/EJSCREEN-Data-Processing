@@ -115,6 +115,17 @@ class _ManifestBuilder:
 
         return compiled
 
+    def _compile_indicator_relative_entry(
+        self,
+        config: dict[str, object],
+        entry_mapping: dict[str, object],
+        field_prefix: str,
+        environment: str,
+    ) -> dict[str, str]:
+        # Indicator inputs that reference local files/directories/templates
+        # reuse the same relative entry compilation used for outputs.
+        return self._compile_relative_entry(config, entry_mapping, field_prefix, environment)
+
     def _compile_shared_inputs(
         self,
         stage_block: dict[str, object],
@@ -164,7 +175,21 @@ class _ManifestBuilder:
     ) -> dict[str, str]:
         root = self._get_root(config, environment, "target")
         relative = self._extract_relative_value(entry_mapping, field_prefix)
-        return {"root": root, "relative": relative}
+        compiled: dict[str, str] = {"root": root, "relative": relative}
+
+        # Optionally copy fetch/source metadata when present (fetch outputs
+        # may define `source_url`, `source_url_template`, and `scope`).
+        source_url = entry_mapping.get("source_url")
+        if isinstance(source_url, str) and source_url:
+            compiled["source_url"] = source_url
+        source_template = entry_mapping.get("source_url_template")
+        if isinstance(source_template, str) and source_template:
+            compiled["source_url_template"] = source_template
+        scope = entry_mapping.get("scope")
+        if isinstance(scope, str) and scope:
+            compiled["scope"] = scope
+
+        return compiled
 
     def _extract_relative_value(self, entry_mapping: dict[str, object], field_prefix: str) -> str:
         relative_path = entry_mapping.get("relative_path")
@@ -214,7 +239,10 @@ class _ManifestBuilder:
         version: str,
     ) -> dict[str, object]:
         versions = self._require_mapping(config.get("versions"), f"{indicator}.versions")
-        return self._require_mapping(versions.get(version), f"{indicator}.versions.{version}")
+        version_block = versions.get(version)
+        if version_block is None:
+            self._fail(f"Version {version!r} not found for indicator {indicator}")
+        return self._require_mapping(version_block, f"{indicator}.versions.{version}")
 
     def _get_indicator_stage_block(
         self,
@@ -234,7 +262,10 @@ class _ManifestBuilder:
     ) -> dict[str, object]:
         assets = self._require_mapping(config.get("assets"), "shared.assets")
         asset_versions = self._require_mapping(assets.get(asset_name), f"shared.assets.{asset_name}")
-        return self._require_mapping(asset_versions.get(version), f"shared.assets.{asset_name}.{version}")
+        version_block = asset_versions.get(version)
+        if version_block is None:
+            self._fail(f"Version {version!r} not found for shared asset {asset_name}")
+        return self._require_mapping(version_block, f"shared.assets.{asset_name}.{version}")
 
     def _get_shared_stage_block(
         self,

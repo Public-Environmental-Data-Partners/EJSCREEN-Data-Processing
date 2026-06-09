@@ -2,9 +2,8 @@
 
 Purpose:
     Central fetch utility to download raw source files needed to generate indicator
-    scores. It depends on the indicator folder containing a config .json file with
-    the necessary `downloads` structure to specify the source and destination for
-    the download.
+    scores. It depends on the stage-based indicator and shared config .json files
+    to specify fetch outputs, source locations, and destination paths.
 
 Usage examples:
 
@@ -19,9 +18,9 @@ Usage examples:
 
 Notes:
     - `--location`/`-l` is required and must be either `local` or `remote`.
-    - `--download` must be specified when the indicator config includes multiple download entries.
-        See the pm25_config.json for an example of a single entry and shared_config.json for an
-        example set up for multiple entries.
+    - `--download` selects a fetch-stage output key. It is required when the selected target has
+        multiple fetch outputs, and for shared fetches.
+    - `--version` is optional only when the selected target has exactly one configured version.
     - `--state`
         - For state-scoped downloads use `--state` with a two-letter postal code which will be
             validated against `scripts/shared/state_config.json` and translated to the FIPS code
@@ -39,6 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import importlib.machinery
 import importlib.util
+import json
 import sys
 import logging
 from pathlib import Path
@@ -47,7 +47,11 @@ import uuid
 
 import requests
 
+import build_manifest
+import resolve_path
+
 SCRIPTS_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPTS_DIR.parent.parent
 PROCESS_NAME = 'fetch_raw'
 DEFAULT_LOG_FILENAME = 'fetch_raw.log'
 DEFAULT_AUDIT_FILENAME = 'fetch_audit.csv'
@@ -72,6 +76,7 @@ AUDIT_FIELDNAMES = (
 @dataclass(frozen=True, slots=True)
 class Config:
     indicator: str
+    version: str
     storage_mode: str
     local_root_path: str
     remote_root_path: str
@@ -95,26 +100,6 @@ class DownloadResult:
     bytes_downloaded: int
     message: str
 
-# This looks like a lot of code to simply load a module.
-# But, since the module we want depends on our --indicator runtime
-# argument, we need dynamic loading rather than static.
-def _load_indicator_config_module(indicator: str):
-    # Indicator configs live at scripts/<indicator>/<indicator>_config.py
-    cfg_root = SCRIPTS_DIR.parent
-    cfg_path = cfg_root / indicator / f'{indicator}_config.py'
-    if not cfg_path.exists():
-        raise FileNotFoundError(f'Indicator config not found: {cfg_path}')
-    loader = importlib.machinery.SourceFileLoader(f'{indicator}_config', str(cfg_path))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    # Ensure the module is present in sys.modules so decorators and runtime
-    # introspection (e.g. dataclasses) can locate the module object during
-    # execution. This mirrors importlib.import_module behavior.
-    sys.modules[loader.name] = module
-    loader.exec_module(module)
-    return module
-
-
 def _load_shared_state_module():
     """Load the canonical shared state_config.py as a module and return it.
 
@@ -133,6 +118,140 @@ def _load_shared_state_module():
     return module
 
 
+def _load_json_object(config_path: Path, label: str) -> dict[str, object]:
+    if not config_path.exists():
+        raise FileNotFoundError(f'{label} config not found: {config_path}')
+    with config_path.open('r', encoding='utf-8') as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f'{label} config must contain a JSON object: {config_path}')
+    return payload
+
+
+def _require_mapping(value: object, field_name: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f'Expected {field_name} to be a JSON object')
+    return value
+
+
+def _require_non_empty_string(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f'Expected {field_name} to be a non-empty string')
+    return value
+
+
+def _require_positive_int(value: object, field_name: str) -> int:
+    if not isinstance(value, int) or value <= 0:
+        raise ValueError(f'Expected {field_name} to be a positive integer')
+    return value
+
+
+# local root resolution is now provided by `resolve_path.get_indicator_root`
+# and `resolve_path.get_shared_root`.
+
+
+def _resolve_version(versions: dict[str, object], label: str, requested_version: str | None) -> str:
+    if requested_version:
+        if requested_version not in versions:
+            raise ValueError(f'Unknown version {requested_version!r} for {label}')
+        return requested_version
+
+    available_versions = sorted(versions.keys())
+    if len(available_versions) != 1:
+        joined = ', '.join(available_versions)
+        raise ValueError(f'{label} requires an explicit --version. Available versions: {joined}')
+    return available_versions[0]
+
+
+def _get_download_settings(config: dict[str, object], field_prefix: str) -> tuple[int, int]:
+    settings = _require_mapping(config.get('download_settings'), f'{field_prefix}.download_settings')
+    timeout = _require_positive_int(settings.get('request_timeout_seconds'), f'{field_prefix}.download_settings.request_timeout_seconds')
+    chunk_size = _require_positive_int(settings.get('chunk_size_bytes'), f'{field_prefix}.download_settings.chunk_size_bytes')
+    return timeout, chunk_size
+
+
+def _resolve_fetch_output_key(outputs: dict[str, dict[str, str]], requested_key: str | None, label: str) -> str:
+    if requested_key:
+        if requested_key not in outputs:
+            available = ', '.join(sorted(outputs.keys()))
+            raise ValueError(f'Unknown fetch output key for {label}: {requested_key}. Available keys: {available}')
+        return requested_key
+
+    if len(outputs) != 1:
+        available = ', '.join(sorted(outputs.keys()))
+        raise ValueError(f'{label} requires --download because multiple fetch outputs are available: {available}')
+    return next(iter(outputs))
+
+
+def _resolve_shared_fetch_target(shared_config: dict[str, object], download_key: str, requested_version: str | None) -> tuple[str, str, dict[str, object]]:
+    assets = _require_mapping(shared_config.get('assets'), 'shared.assets')
+    matches: list[tuple[str, str, dict[str, object]]] = []
+
+    for asset_name, versions_obj in assets.items():
+        if not isinstance(versions_obj, dict):
+            continue
+        for version, version_block in versions_obj.items():
+            if requested_version and version != requested_version:
+                continue
+            if not isinstance(version_block, dict):
+                continue
+            stages = version_block.get('stages')
+            if not isinstance(stages, dict):
+                continue
+            fetch_stage = stages.get('fetch')
+            if not isinstance(fetch_stage, dict):
+                continue
+            outputs = fetch_stage.get('outputs')
+            if not isinstance(outputs, dict):
+                continue
+            output_entry = outputs.get(download_key)
+            if isinstance(output_entry, dict):
+                matches.append((asset_name, version, output_entry))
+
+    if not matches:
+        if requested_version:
+            raise ValueError(f'Unknown shared fetch output key {download_key!r} for version {requested_version!r}')
+        raise ValueError(f'Unknown shared fetch output key {download_key!r}')
+
+    if len(matches) > 1:
+        joined = ', '.join(f'{asset}@{version}' for asset, version, _ in matches)
+        raise ValueError(
+            f'Shared fetch output key {download_key!r} is ambiguous across targets: {joined}. Supply --version.'
+        )
+
+    return matches[0]
+
+
+def _resolve_fetch_source_and_relative(
+    entry: dict[str, object],
+    manifest_relative: str,
+    validated_postal: str | None,
+    validated_fips: str | None,
+    state_all_requested: bool,
+) -> tuple[str, str, bool]:
+    source_url = entry.get('source_url')
+    source_url_template = entry.get('source_url_template')
+    is_state_scoped = bool(entry.get('scope') == 'state' or isinstance(source_url_template, str))
+
+    if is_state_scoped:
+        if not isinstance(source_url_template, str) or not source_url_template:
+            raise ValueError('State-scoped fetch output must define source_url_template')
+        if state_all_requested:
+            return manifest_relative, source_url_template, True
+        if not validated_postal or not validated_fips:
+            raise ValueError('This fetch output requires a valid --state/-s two-letter postal code')
+        try:
+            relative = manifest_relative.format(fips=validated_fips, postal=validated_postal)
+            source = source_url_template.format(fips=validated_fips, postal=validated_postal)
+        except Exception as exc:
+            raise ValueError(f'Failed to expand state templates for fetch output: {exc}')
+        return relative, source, False
+
+    if not isinstance(source_url, str) or not source_url:
+        raise ValueError('Fetch output must define source_url')
+    return manifest_relative, source_url, False
+
+
 def get_config(argv=None) -> Config:
     parser = argparse.ArgumentParser(description='Centralized raw data fetch utility.')
     # Required arguments (listed first)
@@ -140,45 +259,15 @@ def get_config(argv=None) -> Config:
     parser.add_argument('-l', '--location', dest='storage_mode', choices=('local', 'remote'), required=True, help='Required: Select storage location (local or remote)')
 
     # Optional arguments
-    parser.add_argument('-d', '--download', help='Optional: Download key from the indicator config')
+    parser.add_argument('-d', '--download', help='Optional: Fetch-stage output key from the stage-based config')
+    parser.add_argument('-v', '--version', help='Optional: Explicit config version; required when multiple versions exist')
     parser.add_argument('-s', '--state', dest='state', help='Optional: Two-letter postal state code for state-scoped downloads (e.g. VT)')
     parser.add_argument('--dry-run', action='store_true', help='Optional: Print expanded source URL and destination path and exit')
  
     args = parser.parse_args(argv)
 
     indicator = args.indicator
-    cfg_module = _load_indicator_config_module(indicator)
-
-    # Expect the indicator config to expose a get_<indicator>_config() helper and
-    # a resolve_local_<indicator>_root_path(pm_dir) helper similar to PM2.5.
-    get_cfg_fn_name = f'get_{indicator}_config'
-    resolve_local_fn_name = f'resolve_local_{indicator}_root_path'
-    if not hasattr(cfg_module, get_cfg_fn_name):
-        raise AttributeError(f'Indicator config module missing {get_cfg_fn_name}')
-    if not hasattr(cfg_module, resolve_local_fn_name):
-        raise AttributeError(f'Indicator config module missing {resolve_local_fn_name}')
-
-    get_cfg_fn = getattr(cfg_module, get_cfg_fn_name)
-    resolve_local_fn = getattr(cfg_module, resolve_local_fn_name)
-    raw_config = get_cfg_fn()
-
-    # Default values (used when --download not provided)
-    raw_download_relative_path = getattr(raw_config, 'raw_download_relative_path', None)
-    source_url = getattr(raw_config, 'source_url', None)
-    request_timeout_seconds = getattr(raw_config, 'request_timeout_seconds', 120)
-    chunk_size_bytes = getattr(raw_config, 'chunk_size_bytes', 1048576)
-
-    # Determine the repo-level scripts root (runner lives in scripts/shared)
-    SCRIPTS_ROOT = SCRIPTS_DIR.parent
-
-    # If a download key was provided, validate it against the indicator JSON
-    # configuration (this mirrors the pm25_config.json structure).
-    json_cfg_path = SCRIPTS_ROOT / indicator / f'{indicator}_config.json'
-    indicator_raw = None
-    if json_cfg_path.exists():
-        import json
-        with json_cfg_path.open('r', encoding='utf-8') as fh:
-            indicator_raw = json.load(fh)
+    scripts_root = SCRIPTS_DIR.parent
 
     # If the user provided a --state value, validate it early and obtain the
     # canonical postal and fips values from the shared state config. Support
@@ -187,7 +276,6 @@ def get_config(argv=None) -> Config:
     validated_postal = None
     validated_fips = None
     state_all_requested = False
-    state_all_mode = False
     if getattr(args, 'state', None):
         if isinstance(args.state, str) and args.state.strip().lower() == 'all':
             state_all_requested = True
@@ -202,106 +290,103 @@ def get_config(argv=None) -> Config:
             except Exception as exc:
                 raise ValueError(f'Invalid --state value {args.state!r}: {exc}')
 
-    if args.download:
-        if not json_cfg_path.exists():
-            raise FileNotFoundError(f'Indicator JSON config not found for download validation: {json_cfg_path}')
-        import json
-        with json_cfg_path.open('r', encoding='utf-8') as fh:
-            indicator_raw = json.load(fh)
-        downloads_obj = indicator_raw.get('downloads')
-        if not isinstance(downloads_obj, dict) or not downloads_obj:
-            raise ValueError(f'{json_cfg_path.name} missing a non-empty "downloads" object')
-        # When the JSON includes top-level settings like request_timeout_seconds
-        # the actual entries live alongside them; collect entry keys.
-        # Accept either the flat layout used by pm25 (keys directly under
-        # downloads) or a nested `entries` object in future configs.
-        entries = {}
-        if 'entries' in downloads_obj and isinstance(downloads_obj['entries'], dict):
-            entries = downloads_obj['entries']
-        else:
-            # Treat other keys except known settings as entries
-            for k, v in downloads_obj.items():
-                if k in ('request_timeout_seconds', 'chunk_size_bytes'):
-                    continue
-                entries[k] = v
+    state_all_mode = False
 
-        if args.download not in entries:
-            raise ValueError(f'Unknown download key for indicator {indicator}: {args.download}')
+    if indicator == 'shared':
+        if not args.download:
+            raise ValueError('Shared fetch runs require --download to select a shared fetch output key')
 
-        selected = entries[args.download]
-        # If the entry is state-scoped, either expand templates for a single
-        # validated state or keep the templates when --state all is requested.
-        is_state_scoped = bool(selected.get('scope') == 'state' or 'relative_path_template' in selected or 'source_url_template' in selected)
-        if is_state_scoped:
-            rel_tmpl = selected.get('relative_path_template')
-            src_tmpl = selected.get('source_url_template')
-            if not rel_tmpl or not src_tmpl:
-                raise ValueError('State-scoped download entry must include "relative_path_template" and "source_url_template"')
-            if state_all_requested:
-                # keep templates un-expanded; main() will iterate over all states
-                raw_download_relative_path = rel_tmpl
-                source_url = src_tmpl
-                state_all_mode = True
-            else:
-                # require a validated single postal/fips for expansion
-                if not validated_postal or not validated_fips:
-                    raise ValueError('This download key requires a valid --state/-s two-letter postal code to expand state-scoped templates')
-                try:
-                    raw_download_relative_path = rel_tmpl.format(fips=validated_fips, postal=validated_postal)
-                    source_url = src_tmpl.format(fips=validated_fips, postal=validated_postal)
-                except Exception as exc:
-                    raise ValueError(f'Failed to expand state templates for download entry: {exc}')
-        else:
-            # Expect single-scope entry form
-            if 'relative_path' not in selected or 'source_url' not in selected:
-                raise ValueError('Download entry missing required "relative_path" or "source_url"')
+        shared_config = _load_json_object(SCRIPTS_DIR / 'shared_config.json', 'shared')
+        request_timeout_seconds, chunk_size_bytes = _get_download_settings(shared_config, 'shared')
+        asset_name, version, _ = _resolve_shared_fetch_target(shared_config, args.download, args.version)
+        # Build manifests for the requested environment as well as explicit
+        # local and remote manifests so we can obtain the canonical roots
+        # without reading `local_root_path`/`remote_root_path` from the config
+        manifest = build_manifest.get_stage_manifest(
+            target_type='shared',
+            name=asset_name,
+            stage='fetch',
+            version=version,
+            environment=args.storage_mode,
+        )
+        manifest_local = build_manifest.get_stage_manifest(
+            target_type='shared',
+            name=asset_name,
+            stage='fetch',
+            version=version,
+            environment='local',
+        )
+        manifest_remote = build_manifest.get_stage_manifest(
+            target_type='shared',
+            name=asset_name,
+            stage='fetch',
+            version=version,
+            environment='remote',
+        )
 
-            raw_download_relative_path = selected['relative_path']
-            source_url = selected['source_url']
+        output_key = _resolve_fetch_output_key(manifest['outputs'], args.download, f'shared asset {asset_name}')
+        manifest_output = manifest['outputs'][output_key]
+        raw_download_relative_path, source_url, state_all_mode = _resolve_fetch_source_and_relative(
+            manifest_output,
+            manifest_output['relative'],
+            validated_postal,
+            validated_fips,
+            state_all_requested,
+        )
 
-        # Override timeout/chunk when supplied at the downloads level
-        if isinstance(downloads_obj.get('request_timeout_seconds'), int):
-            request_timeout_seconds = downloads_obj['request_timeout_seconds']
-        if isinstance(downloads_obj.get('chunk_size_bytes'), int):
-            chunk_size_bytes = downloads_obj['chunk_size_bytes']
-
-    # If --download not provided, attempt to provide a clearer error message
-    if raw_download_relative_path is None or source_url is None:
-        # If an indicator JSON exists, inspect its downloads entries to give a helpful error.
-        if indicator_raw and isinstance(indicator_raw, dict) and isinstance(indicator_raw.get('downloads'), dict):
-            downloads_obj = indicator_raw['downloads']
-            entries = {}
-            if 'entries' in downloads_obj and isinstance(downloads_obj['entries'], dict):
-                entries = downloads_obj['entries']
-            else:
-                for k, v in downloads_obj.items():
-                    if k in ('request_timeout_seconds', 'chunk_size_bytes'):
-                        continue
-                    entries[k] = v
-
-            if entries:
-                # If any entry is state-scoped, suggest using --download and --state
-                state_scoped = [k for k, v in entries.items() if (isinstance(v, dict) and (v.get('scope') == 'state' or 'relative_path_template' in v or 'source_url_template' in v))]
-                if state_scoped:
-                    raise ValueError(f'Indicator {indicator!r} requires a download key and state for state-scoped entries. Try: --download {state_scoped[0]} --state <FIPS or postal>')
-                # Otherwise suggest available download keys
-                available = ', '.join(sorted(entries.keys()))
-                raise ValueError(f'Indicator {indicator!r} requires a --download key. Available keys: {available}')
-
-        raise ValueError('Loaded indicator config does not expose expected download metadata for this slice')
-
-    # The runner now lives in scripts/shared; resolve indicator folders
-    # relative to the repository `scripts/` directory (one level up).
-    SCRIPTS_ROOT = SCRIPTS_DIR.parent
-    if indicator != 'shared':
-        local_root = resolve_local_fn(SCRIPTS_ROOT / indicator)
+        # Obtain canonical roots from the resolver accessors instead of
+        # reading them from the JSON config directly.
+        local_root = resolve_path.get_shared_root(asset_name, version, 'local')
+        remote_root = resolve_path.get_shared_root(asset_name, version, 'remote')
     else:
-        local_root = resolve_local_fn(SCRIPTS_ROOT)
+        indicator_config = _load_json_object(scripts_root / indicator / f'{indicator}_config.json', f'indicator {indicator}')
+        versions = _require_mapping(indicator_config.get('versions'), f'{indicator}.versions')
+        version = _resolve_version(versions, f'indicator {indicator}', args.version)
+        request_timeout_seconds, chunk_size_bytes = _get_download_settings(indicator_config, indicator)
+        version_block = _require_mapping(versions.get(version), f'{indicator}.versions.{version}')
+        stages = _require_mapping(version_block.get('stages'), f'{indicator}.versions.{version}.stages')
+        fetch_stage = _require_mapping(stages.get('fetch'), f'{indicator}.versions.{version}.stages.fetch')
+        # fetch_outputs no longer needed here; manifest provides source metadata
+        # Obtain manifests for each environment so we can use the manifest
+        # roots instead of reading roots from the indicator config.
+        manifest = build_manifest.get_stage_manifest(
+            target_type='indicator',
+            name=indicator,
+            stage='fetch',
+            version=version,
+            environment=args.storage_mode,
+        )
+        manifest_local = build_manifest.get_stage_manifest(
+            target_type='indicator',
+            name=indicator,
+            stage='fetch',
+            version=version,
+            environment='local',
+        )
+        manifest_remote = build_manifest.get_stage_manifest(
+            target_type='indicator',
+            name=indicator,
+            stage='fetch',
+            version=version,
+            environment='remote',
+        )
 
-    remote_root = getattr(raw_config, 'remote_root_path')
+        output_key = _resolve_fetch_output_key(manifest['outputs'], args.download, f'indicator {indicator}')
+        manifest_output = manifest['outputs'][output_key]
+        raw_download_relative_path, source_url, state_all_mode = _resolve_fetch_source_and_relative(
+            manifest_output,
+            manifest_output['relative'],
+            validated_postal,
+            validated_fips,
+            state_all_requested,
+        )
+
+        local_root = resolve_path.get_indicator_root(indicator, version, 'local')
+        remote_root = resolve_path.get_indicator_root(indicator, version, 'remote')
 
     return Config(
         indicator=indicator,
+        version=version,
         storage_mode=args.storage_mode,
         local_root_path=local_root,
         remote_root_path=remote_root,
@@ -580,6 +665,7 @@ def main(argv=None) -> int:
                 try:
                     temp_cfg = Config(
                         indicator=cfg.indicator,
+                        version=cfg.version,
                         storage_mode=cfg.storage_mode,
                         local_root_path=cfg.local_root_path,
                         remote_root_path=cfg.remote_root_path,

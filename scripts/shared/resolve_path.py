@@ -215,3 +215,40 @@ def get_shared_asset_path(
     environment: str = "local",
 ) -> dict[str, str]:
     return _get_resolver().get_shared_asset_path(asset, version, category, asset_key, environment)
+
+
+def get_indicator_root(indicator: str, version: str, environment: str = "local") -> str:
+    """Return the configured root path for an indicator.
+
+    For `environment=='local'` this returns an absolute path resolved
+    against the project root. For `environment=='remote'` it returns
+    the raw remote root string from the config (e.g. an S3 URI).
+    """
+    resolver = _get_resolver()
+    config = resolver._load_indicator_config(indicator)
+    # validate version exists
+    _ = resolver._get_indicator_version_block(config, indicator, version)
+    root = resolver._get_root(config, environment, f"indicator {indicator}")
+    if environment == "local":
+        # Resolve relative local roots against the project root (scripts parent)
+        project_root = SCRIPTS_ROOT.parent
+        return str((project_root / root).resolve())
+    return root
+
+
+def get_shared_root(asset: str, version: str, environment: str = "local") -> str:
+    """Return the configured root path for a shared asset.
+
+    For `environment=='local'` this returns an absolute path resolved
+    against the project root. For `environment=='remote'` it returns
+    the raw remote root string from the shared config.
+    """
+    resolver = _get_resolver()
+    config = resolver._load_shared_config()
+    # validate asset/version exist
+    _ = resolver._get_shared_version_block(config, asset, version)
+    root = resolver._get_root(config, environment, "shared")
+    if environment == "local":
+        project_root = SCRIPTS_ROOT.parent
+        return str((project_root / root).resolve())
+    return root

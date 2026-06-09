@@ -1,4 +1,12 @@
-"""Dry-run harness for the shared build_manifest module."""
+"""Dry-run harness for the shared build_manifest module.
+
+Examples (run from the `scripts/` folder):
+
+    python3 test_harness/test_build_manifest.py --environment local --target-type indicator --name o3 --stage preprocess --version 1.0
+    python3 test_harness/test_build_manifest.py --environment remote --target-type indicator --name o3 --stage score --version 1.0
+    python3 test_harness/test_build_manifest.py --environment local --target-type shared --name tiger_bg --stage fetch --version 2020
+    python3 test_harness/test_build_manifest.py --environment local --target-type shared --name census_block_weights --stage preprocess --version 1.0
+"""
 
 from __future__ import annotations
 

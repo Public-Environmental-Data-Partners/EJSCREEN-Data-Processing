@@ -260,12 +260,9 @@ class _ManifestBuilder:
         asset_name: str,
         version: str,
     ) -> dict[str, object]:
-        assets = self._require_mapping(config.get("assets"), "shared.assets")
-        asset_versions = self._require_mapping(assets.get(asset_name), f"shared.assets.{asset_name}")
-        version_block = asset_versions.get(version)
-        if version_block is None:
-            self._fail(f"Version {version!r} not found for shared asset {asset_name}")
-        return self._require_mapping(version_block, f"shared.assets.{asset_name}.{version}")
+        # Delegate shared-version validation to the centralized resolver
+        # to avoid duplicating lookup logic and error messages.
+        return resolve_path.get_shared_version_block(config, asset_name, version)
 
     def _get_shared_stage_block(
         self,

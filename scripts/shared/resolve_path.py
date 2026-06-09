@@ -151,6 +151,19 @@ class _PathResolver:
         versions = self._require_mapping(config.get("versions"), f"{indicator}.versions")
         return self._require_mapping(versions.get(version), f"{indicator}.versions.{version}")
 
+    def _get_shared_version_block(
+        self,
+        config: dict[str, object],
+        asset_name: str,
+        version: str,
+    ) -> dict[str, object]:
+        assets = self._require_mapping(config.get("assets"), "shared.assets")
+        asset_versions = self._require_mapping(assets.get(asset_name), f"shared.assets.{asset_name}")
+        version_block = asset_versions.get(version)
+        if version_block is None:
+            self._fail(f"Version {version!r} not found for shared asset {asset_name}")
+        return self._require_mapping(version_block, f"shared.assets.{asset_name}.{version}")
+
     def _get_stage_outputs(
         self,
         version_block: dict[str, object],
@@ -252,3 +265,13 @@ def get_shared_root(asset: str, version: str, environment: str = "local") -> str
         project_root = SCRIPTS_ROOT.parent
         return str((project_root / root).resolve())
     return root
+
+
+def get_shared_version_block(config: dict[str, object], asset_name: str, version: str) -> dict[str, object]:
+    """Public helper to validate and return a shared asset's version block.
+
+    This delegates to the internal resolver implementation so callers can
+    rely on a single authoritative implementation for shared-version
+    validation and error messages.
+    """
+    return _get_resolver()._get_shared_version_block(config, asset_name, version)

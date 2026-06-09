@@ -2,10 +2,10 @@
 
 Examples (run from the `scripts/` folder):
 
-    python3 test_harness/test_resolver.py --environment local --type indicator --name o3 --version 1.0 --key raw_o3
-    python3 test_harness/test_resolver.py --environment remote --type indicator --name o3 --version 1.0 --key raw_o3
-    python3 test_harness/test_resolver.py --environment local --type shared --name tiger_bg --version 2020 --category downloads --key tiger_bg_2020
-    python3 test_harness/test_resolver.py --environment remote --type shared --name census_block_weights --version 1.0 --category preprocessed_input
+    python3 test_harness/test_resolve_path.py --environment local --type indicator --name o3 --version 1.0 --key raw_o3
+    python3 test_harness/test_resolve_path.py --environment remote --type indicator --name o3 --version 1.0 --key raw_o3
+    python3 test_harness/test_resolve_path.py --environment local --type shared --name tiger_bg --version 2020 --category downloads --key tiger_bg_2020
+    python3 test_harness/test_resolve_path.py --environment remote --type shared --name census_block_weights --version 1.0 --category preprocessed_input
 """
 
 from __future__ import annotations

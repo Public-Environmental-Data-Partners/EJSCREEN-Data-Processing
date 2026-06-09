@@ -51,7 +51,6 @@ import build_manifest
 import resolve_path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPTS_DIR.parent.parent
 PROCESS_NAME = 'fetch_raw'
 DEFAULT_LOG_FILENAME = 'fetch_raw.log'
 DEFAULT_AUDIT_FILENAME = 'fetch_audit.csv'
@@ -183,7 +182,7 @@ def _resolve_fetch_output_key(outputs: dict[str, dict[str, str]], requested_key:
     return next(iter(outputs))
 
 
-def _resolve_shared_fetch_target(shared_config: dict[str, object], download_key: str, requested_version: str | None) -> tuple[str, str, dict[str, object]]:
+def _resolve_shared_fetch_target(shared_config: dict[str, object], download_key: str, requested_version: str | None) -> tuple[str, str]:
     assets = _require_mapping(shared_config.get('assets'), 'shared.assets')
     matches: list[tuple[str, str, dict[str, object]]] = []
 
@@ -219,7 +218,11 @@ def _resolve_shared_fetch_target(shared_config: dict[str, object], download_key:
             f'Shared fetch output key {download_key!r} is ambiguous across targets: {joined}. Supply --version.'
         )
 
-    return matches[0]
+    # Return only the asset name and version; callers should look up the
+    # specific output entry from the manifest rather than relying on raw
+    # config objects.
+    asset_name, version, _ = matches[0]
+    return asset_name, version
 
 
 def _resolve_fetch_source_and_relative(
@@ -298,30 +301,15 @@ def get_config(argv=None) -> Config:
 
         shared_config = _load_json_object(SCRIPTS_DIR / 'shared_config.json', 'shared')
         request_timeout_seconds, chunk_size_bytes = _get_download_settings(shared_config, 'shared')
-        asset_name, version, _ = _resolve_shared_fetch_target(shared_config, args.download, args.version)
-        # Build manifests for the requested environment as well as explicit
-        # local and remote manifests so we can obtain the canonical roots
-        # without reading `local_root_path`/`remote_root_path` from the config
+        asset_name, version = _resolve_shared_fetch_target(shared_config, args.download, args.version)
+        # Build manifest for the requested environment; resolver accessors
+        # provide canonical roots so we don't need local/remote manifests here.
         manifest = build_manifest.get_stage_manifest(
             target_type='shared',
             name=asset_name,
             stage='fetch',
             version=version,
             environment=args.storage_mode,
-        )
-        manifest_local = build_manifest.get_stage_manifest(
-            target_type='shared',
-            name=asset_name,
-            stage='fetch',
-            version=version,
-            environment='local',
-        )
-        manifest_remote = build_manifest.get_stage_manifest(
-            target_type='shared',
-            name=asset_name,
-            stage='fetch',
-            version=version,
-            environment='remote',
         )
 
         output_key = _resolve_fetch_output_key(manifest['outputs'], args.download, f'shared asset {asset_name}')
@@ -355,20 +343,6 @@ def get_config(argv=None) -> Config:
             stage='fetch',
             version=version,
             environment=args.storage_mode,
-        )
-        manifest_local = build_manifest.get_stage_manifest(
-            target_type='indicator',
-            name=indicator,
-            stage='fetch',
-            version=version,
-            environment='local',
-        )
-        manifest_remote = build_manifest.get_stage_manifest(
-            target_type='indicator',
-            name=indicator,
-            stage='fetch',
-            version=version,
-            environment='remote',
         )
 
         output_key = _resolve_fetch_output_key(manifest['outputs'], args.download, f'indicator {indicator}')

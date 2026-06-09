@@ -63,14 +63,14 @@ The module must parse configurations from two known locations based on the input
 
 ---
 
-## Section 2: Command-Line Test Harness (`test_resolver.py`)
+## Section 2: Command-Line Test Harness (`test_resolve_path.py`)
 
 **Target Audience:** System Validator / Integration Tester
 **Objective:** Provide a command-line script that executes a "dry-run" configuration check against the path resolver. It prints out parsed results so that engineers can verify paths instantly without spinning up a full processing run.
 
 ### 1. Interface Requirements
 
-The harness must be a standalone executable Python script located at `./scripts/test_harness/test_resolver.py` that implements Python’s standard `argparse` library. It must accept **4 core named arguments**, alongside contextual switches for sub-keys.
+The harness must be a standalone executable Python script located at `./scripts/test_harness/test_resolve_path.py` that implements Python’s standard `argparse` library. It must accept **4 core named arguments**, alongside contextual switches for sub-keys.
 
 ### 2. Command-Line Arguments
 
@@ -91,7 +91,7 @@ The optional `"status"` field shown in the examples below belongs to the harness
 #### Example Command 1 (Indicator Verification):
 
 ```bash
-python ./scripts/test_harness/test_resolver.py --environment remote --type indicator --name o3 --version 1.0 --key raw_o3
+python ./scripts/test_harness/test_resolve_path.py --environment remote --type indicator --name o3 --version 1.0 --key raw_o3
 
 ```
 
@@ -109,7 +109,7 @@ python ./scripts/test_harness/test_resolver.py --environment remote --type indic
 #### Example Command 2 (Shared Preprocessed Asset Verification):
 
 ```bash
-python ./scripts/test_harness/test_resolver.py --environment local --type shared --name census_block_weights --version 1.0 --category preprocessed_input
+python ./scripts/test_harness/test_resolve_path.py --environment local --type shared --name census_block_weights --version 1.0 --category preprocessed_input
 
 ```
 

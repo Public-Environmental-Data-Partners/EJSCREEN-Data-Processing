@@ -8,16 +8,16 @@ Purpose:
 Usage examples:
 
     # Simple indicator with a default download
-    python scripts/fetch_raw.py --indicator pm25 --location local
+    python shared/fetch_raw.py --indicator pm25 --storage-mode local
 
     # Remote fetch for ozone
-    python scripts/fetch_raw.py --indicator o3 --location remote
+    python shared/fetch_raw.py --indicator o3 --storage-mode remote
 
     # Shared tiger BG download for Vermont (postal code). --state uses two-letter postal codes.
-    python scripts/fetch_raw.py --indicator shared --download tiger_bg_2020 --state VT --location local
+    python shared/fetch_raw.py --indicator shared --download tiger_bg_2020 --state VT --storage-mode local
 
 Notes:
-    - `--location`/`-l` is required and must be either `local` or `remote`.
+    - `--storage-mode`/`-l` is required and must be either `local` or `remote`.
     - `--download` selects a fetch-stage output key. It is required when the selected target has
         multiple fetch outputs, and for shared fetches.
     - `--version` is optional only when the selected target has exactly one configured version.
@@ -259,7 +259,7 @@ def get_config(argv=None) -> Config:
     parser = argparse.ArgumentParser(description='Centralized raw data fetch utility.')
     # Required arguments (listed first)
     parser.add_argument('-i', '--indicator', required=True, help='Required: Indicator key such as pm25 or shared')
-    parser.add_argument('-l', '--location', dest='storage_mode', choices=('local', 'remote'), required=True, help='Required: Select storage location (local or remote)')
+    parser.add_argument('-l', '--location', '--storage-mode', dest='storage_mode', choices=('local', 'remote'), required=True, help='Required: Select storage location (local or remote)')
 
     # Optional arguments
     parser.add_argument('-d', '--download', help='Optional: Fetch-stage output key from the stage-based config')

@@ -1,14 +1,67 @@
 {
-  "local_root_path": "./pipeline/",
-  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/pm25/pipeline/",
-  "preprocessed_tract_output_relative_path": "preprocessed_input/pm25_tract_annual_average.csv",
-  "indicator_output_relative_path_template": "output/indicators/{postal}",
-  "downloads": {
+  "local_root_path": "./pipeline/pm25",
+  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/pipeline/pm25/",
+  "download_settings": {
     "request_timeout_seconds": 120,
-    "chunk_size_bytes": 1048576,
-    "raw_pm25_2020": {
-      "relative_path": "downloads/2020/2020_pm25_daily_average.txt.gz",
-      "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2020_pm25_daily_average.txt.gz"
+    "chunk_size_bytes": 1048576
+  },
+  "versions": {
+    "1.0": {
+      "required_shared_assets": {
+        "census_block_weights": "1.0"
+      },
+      "stages": {
+        "fetch": {
+          "outputs": {
+            "raw_pm25": {
+              "type": "download",
+              "relative_path": "v1.0/downloads/2020/2020_pm25_daily_average.txt.gz",
+              "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2020_pm25_daily_average.txt.gz"
+            }
+          }
+        },
+        "preprocess": {
+          "inputs": {
+            "primary_pm25": {
+              "type": "indicator_download",
+              "key": "raw_pm25"
+            },
+            "weights": {
+              "type": "shared_asset",
+              "key": "census_block_weights",
+              "category": "preprocessed_input"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v1.0/preprocessed_input/"
+            },
+            "main_tract_averages": {
+              "type": "file",
+              "relative_path": "v1.0/preprocessed_input/pm25_tract_annual_average.csv"
+            }
+          }
+        },
+        "score": {
+          "inputs": {
+            "preprocessed_tracts": {
+              "type": "file",
+              "relative_path": "v1.0/preprocessed_input/pm25_tract_annual_average.csv"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v1.0/output/indicators/"
+            },
+            "indicator_output_template": {
+              "type": "template",
+              "relative_path": "v1.0/output/indicators/{postal}/"
+            }
+          }
+        }
+      }
     }
   }
 }

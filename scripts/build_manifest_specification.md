@@ -143,36 +143,37 @@ Shared-target example:
 
 ### Command-Line Dry-Run Validation Set
 
+
 Assuming the current working directory is `scripts/`, the following harness commands should validate the current implementation surface:
 
 ```bash
-python3 test_harness/test_build_manifest.py --environment local --target-type indicator --name o3 --stage preprocess --version 1.0
+python3 test_harness/test_build_manifest.py --storage-mode local --target-type indicator --name o3 --stage preprocess --version 1.0
 ```
 
 ```bash
-python3 test_harness/test_build_manifest.py --environment remote --target-type indicator --name o3 --stage score --version 1.0
+python3 test_harness/test_build_manifest.py --storage-mode remote --target-type indicator --name o3 --stage score --version 1.0
 ```
 
 ```bash
-python3 test_harness/test_build_manifest.py --environment local --target-type indicator --name o3 --stage fetch --version 1.0
+python3 test_harness/test_build_manifest.py --storage-mode local --target-type indicator --name o3 --stage fetch --version 1.0
 ```
 
 ```bash
-python3 test_harness/test_build_manifest.py --environment local --target-type shared --name tiger_bg --stage fetch --version 2020
+python3 test_harness/test_build_manifest.py --storage-mode local --target-type shared --name tiger_bg --stage fetch --version 2020
 ```
 
 ```bash
-python3 test_harness/test_build_manifest.py --environment local --target-type shared --name census_block_weights --stage preprocess --version 1.0
+python3 test_harness/test_build_manifest.py --storage-mode local --target-type shared --name census_block_weights --stage preprocess --version 1.0
 ```
 
 Negative fast-fail checks:
 
 ```bash
-python3 test_harness/test_build_manifest.py --environment staging --target-type indicator --name o3 --stage preprocess --version 1.0
+python3 test_harness/test_build_manifest.py --storage-mode staging --target-type indicator --name o3 --stage preprocess --version 1.0
 ```
 
 ```bash
-python3 test_harness/test_build_manifest.py --environment local --target-type nonsense --name o3 --stage preprocess --version 1.0
+python3 test_harness/test_build_manifest.py --storage-mode local --target-type nonsense --name o3 --stage preprocess --version 1.0
 ```
 
 ## 6. Current Strictness Decision

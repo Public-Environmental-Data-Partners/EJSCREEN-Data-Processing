@@ -74,13 +74,13 @@ The harness must be a standalone executable Python script located at `./scripts/
 
 ### 2. Command-Line Arguments
 
-* `--environment` (Required): String matching either `local` or `remote`.
+* `--storage-mode` (Required): String matching either `local` or `remote`.
 * `--type` (Required): String matching either `indicator` or `shared`. Determines which underlying resolver mechanics to trigger.
 * `--name` (Required): String name of the asset domain (e.g., `o3`, `pm25`, `tiger_bg`, `census_block_weights`).
 * `--version` (Required): String version identifier (e.g., `1.0`, `2020.1`).
 * `--key` (Optional): String key name representing an item's sub-asset key (e.g., `raw_o3` for indicators, or `raw_weight_crosswalks` for shared downloads).
 * `--category` (Optional): String matching either `downloads` or `preprocessed_input` (used strictly when `--type` is `shared`).
-* **Validation Rule:** The harness should validate command shape, but invalid `--environment` and invalid shared `--category` values must be passed through so the resolver module itself performs the fast-fail semantic validation.
+* **Validation Rule:** The harness should validate command shape, but invalid `--storage-mode` and invalid shared `--category` values must be passed through so the resolver module itself performs the fast-fail semantic validation.
 
 ### 3. Execution Behavior & Sample Output
 
@@ -91,7 +91,7 @@ The optional `"status"` field shown in the examples below belongs to the harness
 #### Example Command 1 (Indicator Verification):
 
 ```bash
-python ./scripts/test_harness/test_resolve_path.py --environment remote --type indicator --name o3 --version 1.0 --key raw_o3
+python ./scripts/test_harness/test_resolve_path.py --storage-mode remote --type indicator --name o3 --version 1.0 --key raw_o3
 
 ```
 
@@ -109,7 +109,7 @@ python ./scripts/test_harness/test_resolve_path.py --environment remote --type i
 #### Example Command 2 (Shared Preprocessed Asset Verification):
 
 ```bash
-python ./scripts/test_harness/test_resolve_path.py --environment local --type shared --name census_block_weights --version 1.0 --category preprocessed_input
+python ./scripts/test_harness/test_resolve_path.py --storage-mode local --type shared --name census_block_weights --version 1.0 --category preprocessed_input
 
 ```
 

@@ -2,10 +2,10 @@
 
 Examples (run from the `scripts/` folder):
 
-    python3 test_harness/test_resolve_path.py --environment local --type indicator --name o3 --version 1.0 --key raw_o3
-    python3 test_harness/test_resolve_path.py --environment remote --type indicator --name o3 --version 1.0 --key raw_o3
-    python3 test_harness/test_resolve_path.py --environment local --type shared --name tiger_bg --version 2020 --category downloads --key tiger_bg_2020
-    python3 test_harness/test_resolve_path.py --environment remote --type shared --name census_block_weights --version 1.0 --category preprocessed_input
+    python3 test_harness/test_resolve_path.py --storage-mode local --type indicator --name o3 --version 1.0 --key raw_o3
+    python3 test_harness/test_resolve_path.py --storage-mode remote --type indicator --name o3 --version 1.0 --key raw_o3
+    python3 test_harness/test_resolve_path.py --storage-mode local --type shared --name tiger_bg --version 2020 --category downloads --key tiger_bg_2020
+    python3 test_harness/test_resolve_path.py --storage-mode remote --type shared --name census_block_weights --version 1.0 --category preprocessed_input
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import resolve_path  # type: ignore[import-not-found]
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Dry-run path resolution for indicator and shared assets.")
-    parser.add_argument("--environment", required=True)
+    parser.add_argument("--storage-mode", dest="storage_mode", required=True, choices=("local","remote"))
     parser.add_argument("--type", required=True, choices=["indicator", "shared"])
     parser.add_argument("--name", required=True)
     parser.add_argument("--version", required=True)
@@ -43,7 +43,7 @@ def _resolve_from_args(args: argparse.Namespace) -> dict[str, str]:
             raise ValueError("--key is required when --type indicator")
         if args.category is not None:
             raise ValueError("--category is not valid when --type indicator")
-        return resolve_path.get_download_path(args.name, args.version, args.key, args.environment)
+        return resolve_path.get_download_path(args.name, args.version, args.key, args.storage_mode)
 
     if args.category is None:
         raise ValueError("--category is required when --type shared")
@@ -57,7 +57,7 @@ def _resolve_from_args(args: argparse.Namespace) -> dict[str, str]:
         version=args.version,
         category=args.category,
         asset_key=args.key,
-        environment=args.environment,
+        environment=args.storage_mode,
     )
 
 

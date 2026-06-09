@@ -2,10 +2,10 @@
 
 Examples (run from the `scripts/` folder):
 
-    python3 test_harness/test_build_manifest.py --environment local --target-type indicator --name o3 --stage preprocess --version 1.0
-    python3 test_harness/test_build_manifest.py --environment remote --target-type indicator --name o3 --stage score --version 1.0
-    python3 test_harness/test_build_manifest.py --environment local --target-type shared --name tiger_bg --stage fetch --version 2020
-    python3 test_harness/test_build_manifest.py --environment local --target-type shared --name census_block_weights --stage preprocess --version 1.0
+    python3 test_harness/test_build_manifest.py --storage-mode local --target-type indicator --name o3 --stage preprocess --version 1.0
+    python3 test_harness/test_build_manifest.py --storage-mode remote --target-type indicator --name o3 --stage score --version 1.0
+    python3 test_harness/test_build_manifest.py --storage-mode local --target-type shared --name tiger_bg --stage fetch --version 2020
+    python3 test_harness/test_build_manifest.py --storage-mode local --target-type shared --name census_block_weights --stage preprocess --version 1.0
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import build_manifest  # type: ignore[import-not-found]
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Dry-run stage manifest build for an indicator or shared asset.")
-    parser.add_argument("--environment", required=True)
+    parser.add_argument("--storage-mode", dest="storage_mode", required=True, choices=("local","remote"))
     parser.add_argument("--target-type", required=True)
     parser.add_argument("--name", required=True)
     parser.add_argument("--stage", required=True)
@@ -47,7 +47,7 @@ def main() -> int:
             name=args.name,
             stage=args.stage,
             version=args.version,
-            environment=args.environment,
+            environment=args.storage_mode,
         )
     except Exception as exc:
         LOGGER.error("Manifest dry-run failed: %s", exc)

@@ -7,18 +7,19 @@
   },
   "assets": {
     "census_block_weights": {
-      "1.0": {
+      "0.5": {
         "stages": {
           "preprocess": {
             "outputs": {
               "census_block_weights": {
                 "type": "shared_asset",
                 "scope": "postal",
-                "relative_path_template": "census_block_weights/1.0/preprocessed_input/census_block_weights_2020_{postal}.csv"
+                "relative_path_template": "census_block_weights/0.5/preprocessed_input/census_block_weights_2020_{postal}.csv"
               }
-            }
           }
         }
+      },
+      "notes": "These were EmmaLi's original weights, used up through her fix for issues #15 and #16."
       }
     },
     "tiger_bg": {

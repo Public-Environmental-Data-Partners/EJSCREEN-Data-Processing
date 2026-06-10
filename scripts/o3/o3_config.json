@@ -8,7 +8,7 @@
   "versions": {
     "1.0": {
       "required_shared_assets": {
-        "census_block_weights": "1.0"
+        "census_block_weights": "0.5"
       },
       "stages": {
         "fetch": {

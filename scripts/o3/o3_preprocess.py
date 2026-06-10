@@ -13,17 +13,26 @@ Process summary:
 	- Aggregate to one annual average concentration per tract.
 	- Write the tract-level CSV and log the output range.
 
-Runtime arguments:
-	- storage_mode
-		Required. Either local or remote.
-	- --version / -v
-		Optional. Config version to use (default: 1.0).
-	- --dry-run
-		Optional. Validate manifest and headers, then exit without processing or writing outputs.
+Runtime arguments (current defaults shown):
+		- storage_mode (positional): one of `local` or `remote`.
+		- -v/--version: optional config version to use. Default: `1.0`.
+		- --dry-run: long-only flag. When present the script validates the preprocess manifest
+			and source file headers, then exits without reading or writing full outputs.
 
 Outputs:
-	- preprocessed_input/o3_tract_annual_average.csv under the active Ozone root.
-	- o3_preprocess.log in scripts/o3.
+		- v1.0/preprocessed_input/o3_tract_annual_average.csv under the active Ozone root (versioned by manifest).
+		- o3_preprocess.log in scripts/o3.
+
+Examples (run from the `scripts` folder):
+		- Dry-run (local):
+			python3 o3/o3_preprocess.py local --dry-run
+
+		- Full run (local, explicit version):
+			python3 o3/o3_preprocess.py local -v 1.0
+
+		- Full run (remote):
+			python3 o3/o3_preprocess.py remote -v 1.0
+
 """
 
 from __future__ import annotations

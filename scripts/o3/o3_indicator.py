@@ -5,6 +5,10 @@ Purpose:
 	census block weights inputs, apply the zero-population null rule, and write
 	per-state final_bg_scores.csv outputs.
 
+Notes:
+	- The final block-group output filename is fixed to ``final_bg_scores.csv``
+	  and is not configurable via the CLI.
+
 Process summary:
 	- Resolve the Ozone and shared roots for local or remote mode.
 	- Read the tract-level preprocess output.
@@ -14,29 +18,41 @@ Process summary:
 	- Set o3_score to null for zero-population block groups.
 	- Write per-state final_bg_scores.csv files and state summary logs.
 
-Runtime arguments:
-	- storage_mode
-		Required. Either local or remote.
-	- --state
-		Optional two-letter state filter. If omitted, process all configured states.
+Runtime arguments (current defaults shown):
+		- -l/--location: required one of `local` or `remote`.
+		- --state: optional two-letter state code (e.g. `WY`). If omitted, the script processes the full
+			configured set (the code calls `get_state_config_list('conus')`).
+		- --output-dir: optional explicit output directory (local path or S3 URI). Default: none (uses indicator output template).
+		- -v/--version: optional config version to use. Default: `1.0`.
+		- --dry-run: long-only flag. When present the script validates manifests and prints resolved paths
+			without performing any I/O.
 
 Outputs:
-	- output/indicators/{postal}/final_bg_scores.csv under the active Ozone root.
-	- o3_indicator.log in scripts/o3.
-"""
+		- output/indicators/{postal}/final_bg_scores.csv under the active Ozone root (filename is fixed to
+			`final_bg_scores.csv`).
+		- o3_indicator.log in scripts/o3.
 
+Examples (run from the `scripts` folder):
+		- Dry-run for Wyoming (local):
+			python3 o3/o3_indicator.py --location local --state WY --dry-run
+
+		- Full run for all configured states (local):
+			python3 o3/o3_indicator.py --location local
+
+		- Full run for a specific version (remote):
+			python3 o3/o3_indicator.py --location remote -v 1.0 --state CA
+
+"""
+ 
 from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
 from datetime import datetime
 import importlib
-import importlib.util
-import json
 import logging
 from pathlib import Path
 import sys
-from typing import Any
 
 import pandas as pd
 
@@ -82,13 +98,6 @@ except Exception as exc:
 		'that the repository root (containing the scripts directory) is on PYTHONPATH.'
 	) from exc
 
-try:
-	from shared.shared_config import get_shared_config, resolve_local_shared_root_path
-except Exception as exc:
-	raise RuntimeError(
-		'Failed to import shared.shared_config. Ensure scripts/shared/shared_config.py is present and '
-		'that the repository root (containing the scripts directory) is on PYTHONPATH.'
-	) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +106,6 @@ class Config:
 	state: str | None
 	version: str = '1.0'
 	output_dir: str | None = None
-	final_bg_scores_filename: str = DEFAULT_FINAL_BG_SCORES_FILENAME
 	dry_run: bool = False
 
 
@@ -128,8 +136,8 @@ def get_config(argv=None) -> Config:
 	parser.add_argument(
 		'--state',
 		dest='state',
-		default=defaults.state,
-		help='Optional two-letter state code to process a single state.',
+		required=True,
+		help="Specify a two-letter state code (e.g. 'WY') or 'all' to process the full configured set.",
 	)
 	parser.add_argument(
 		'--output-dir',
@@ -137,12 +145,7 @@ def get_config(argv=None) -> Config:
 		default=defaults.output_dir,
 		help='Optional explicit local path or S3 URI for the state output directory.',
 	)
-	parser.add_argument(
-		'--final-bg-scores-filename',
-		dest='final_bg_scores_filename',
-		default=defaults.final_bg_scores_filename,
-		help=f'Output filename for final state scores (default: {defaults.final_bg_scores_filename})',
-	)
+
 	parser.add_argument(
 		'-v', '--version',
 		dest='version',
@@ -158,9 +161,13 @@ def get_config(argv=None) -> Config:
 	)
 	args = parser.parse_args(argv)
 
+	# Accept explicit 'all' (case-insensitive) to indicate processing the full set.
 	state = None
 	if args.state:
-		state = normalize_state_code(args.state)
+		if isinstance(args.state, str) and args.state.strip().lower() == 'all':
+			state = None  # This value gets interpreted by load_state_targets as "load all states"
+		else:
+			state = normalize_state_code(args.state)
 
 	return Config(
 		storage_mode=args.storage_mode,
@@ -168,7 +175,6 @@ def get_config(argv=None) -> Config:
 		version=args.version,
 		output_dir=args.output_dir,
 		dry_run=bool(args.dry_run),
-		final_bg_scores_filename=args.final_bg_scores_filename,
 	)
 
 
@@ -267,23 +273,14 @@ def write_df_s3_or_local(df: pd.DataFrame, out_path: str) -> None:
 	df.to_csv(out_path, index=False)
 
 
-def get_active_o3_root_path(storage_mode: str) -> str:
-	raise RuntimeError('get_active_o3_root_path should not be used in manifest-driven mode')
 
 
-def get_active_shared_root_path(storage_mode: str) -> str:
-	raise RuntimeError('get_active_shared_root_path should not be used in manifest-driven mode')
+def resolve_paths(cfg: Config, state_config: StateConfig, manifest: dict) -> ResolvedPaths:
+	"""Resolve the tract input, shared block-weight input, and state output paths.
 
-
-def resolve_paths(cfg: Config, state_config: StateConfig) -> ResolvedPaths:
-	"""Resolve the tract input, shared block-weight input, and state output paths."""
-	manifest = build_manifest.get_stage_manifest(
-		target_type='indicator',
-		name='o3',
-		stage='score',
-		version=cfg.version,
-		environment=cfg.storage_mode,
-	)
+	The manifest must be provided by the caller to avoid duplicate manifest
+	lookups; callers should request the stage manifest once and pass it through.
+	"""
 	inputs = manifest.get('inputs', {})
 	outputs = manifest.get('outputs', {})
 
@@ -321,7 +318,7 @@ def resolve_paths(cfg: Config, state_config: StateConfig) -> ResolvedPaths:
 		tract_scores_path=tract_scores_path,
 		census_block_weights_path=census_block_weights_path,
 		output_dir=output_dir,
-		final_bg_scores_path=join_path_and_file(output_dir, cfg.final_bg_scores_filename),
+		final_bg_scores_path=join_path_and_file(output_dir, DEFAULT_FINAL_BG_SCORES_FILENAME),
 	)
 
 
@@ -441,9 +438,9 @@ def log_state_summary(
 	)
 
 
-def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataFrame) -> None:
+def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataFrame, manifest: dict) -> None:
 	"""Build and write one state's final Ozone block-group score file."""
-	paths = resolve_paths(cfg, state_config)
+	paths = resolve_paths(cfg, state_config, manifest)
 	log_resolved_paths(paths, cfg)
 	block_weights_df = read_csv_s3_or_local(paths.census_block_weights_path, dtype={BLOCK_GROUP_GEOID_COLUMN: 'string'})
 	block_group_population = prepare_block_group_population(block_weights_df)
@@ -469,7 +466,7 @@ def main(argv=None) -> int:
 	cfg = get_config(argv)
 	initialize_runtime_dependencies(cfg)
 	state_targets = load_state_targets(cfg.state)
-	# Derive the tract scores path from the manifest (score stage input)
+	# Load the score-stage manifest once and reuse it for all path resolution
 	manifest = build_manifest.get_stage_manifest(
 		target_type='indicator',
 		name='o3',
@@ -494,7 +491,7 @@ def main(argv=None) -> int:
 		print(f'tract_scores_path={tract_scores_path}')
 		logging.info('DRY RUN tract_scores_path=%s', tract_scores_path)
 		for state_config in state_targets:
-			paths = resolve_paths(cfg, state_config)
+			paths = resolve_paths(cfg, state_config, manifest)
 			print(f'state={state_config.postal}')
 			print(f'  census_block_weights_path={paths.census_block_weights_path}')
 			print(f'  final_bg_scores_path={paths.final_bg_scores_path}')
@@ -507,7 +504,8 @@ def main(argv=None) -> int:
 	logging.info('Prepared %d tract-level Ozone scores', len(prepared_tract_scores))
 
 	for state_config in state_targets:
-		process_state(cfg, state_config, prepared_tract_scores)
+		# pass manifest into process_state via resolve_paths to avoid duplicate lookups
+		process_state(cfg, state_config, prepared_tract_scores, manifest)
 
 	state_count = len(state_targets)
 	msg = f"Completed Ozone block-group indicator generation"

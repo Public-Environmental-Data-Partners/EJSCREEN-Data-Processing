@@ -40,8 +40,6 @@ from typing import Any
 
 import pandas as pd
 
-from o3_config import get_o3_config, resolve_local_o3_root_path
-
 
 O3_DIR = Path(__file__).resolve().parent
 DEFAULT_LOG_FILENAME = 'o3_indicator.log'
@@ -66,6 +64,16 @@ SCRIPTS_DIR = _resolve_scripts_dir()
 if str(SCRIPTS_DIR) not in sys.path:
 	sys.path.insert(0, str(SCRIPTS_DIR))
 
+# Ensure the `scripts/shared` folder is importable so modules in that
+# folder (e.g. build_manifest.py, resolve_path.py) can be imported as
+# top-level modules when running this script directly.
+SHARED_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "shared"
+if str(SHARED_SCRIPTS_DIR) not in sys.path:
+	sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
+
+import build_manifest
+import resolve_path
+
 try:
 	from shared.state_config import StateConfig, get_state_config, get_state_config_list
 except Exception as exc:
@@ -87,8 +95,10 @@ except Exception as exc:
 class Config:
 	storage_mode: str
 	state: str | None
+	version: str = '1.0'
 	output_dir: str | None = None
 	final_bg_scores_filename: str = DEFAULT_FINAL_BG_SCORES_FILENAME
+	dry_run: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,8 +119,10 @@ def get_config(argv=None) -> Config:
 		description='Read tract-level Ozone scores and produce per-state block-group final scores.'
 	)
 	parser.add_argument(
-		'storage_mode',
+		'-l', '--location',
+		dest='storage_mode',
 		choices=O3_STORAGE_MODES,
+		required=True,
 		help='Select whether the script reads and writes through the local root path or remote S3 root path.',
 	)
 	parser.add_argument(
@@ -131,6 +143,19 @@ def get_config(argv=None) -> Config:
 		default=defaults.final_bg_scores_filename,
 		help=f'Output filename for final state scores (default: {defaults.final_bg_scores_filename})',
 	)
+	parser.add_argument(
+		'-v', '--version',
+		dest='version',
+		default=defaults.version,
+		help='Optional: config version to base processing on (current default: 1.0)'
+	)
+	# Long-only dry-run flag (no short alias)
+	parser.add_argument(
+		'--dry-run',
+		dest='dry_run',
+		action='store_true',
+		help='Dry run: validate manifest and paths but do not read or write any files.',
+	)
 	args = parser.parse_args(argv)
 
 	state = None
@@ -140,7 +165,9 @@ def get_config(argv=None) -> Config:
 	return Config(
 		storage_mode=args.storage_mode,
 		state=state,
+		version=args.version,
 		output_dir=args.output_dir,
+		dry_run=bool(args.dry_run),
 		final_bg_scores_filename=args.final_bg_scores_filename,
 	)
 
@@ -241,50 +268,56 @@ def write_df_s3_or_local(df: pd.DataFrame, out_path: str) -> None:
 
 
 def get_active_o3_root_path(storage_mode: str) -> str:
-	if storage_mode == 'local':
-		return resolve_local_o3_root_path(O3_DIR)
-	if storage_mode == 'remote':
-		return get_o3_config().remote_root_path
-	raise ValueError(f'Unsupported storage mode: {storage_mode}')
+	raise RuntimeError('get_active_o3_root_path should not be used in manifest-driven mode')
 
 
 def get_active_shared_root_path(storage_mode: str) -> str:
-	if storage_mode == 'local':
-		# 12 May 2026, not adopting Eric's change for this chunk of
-		# code. I don't think that hard-coding "shared" here is or should
-		# be needed. 
-		return resolve_local_shared_root_path(SCRIPTS_DIR)
-	if storage_mode == 'remote':
-		return get_shared_config().remote_root_path
-	raise ValueError(f'Unsupported storage mode: {storage_mode}')
+	raise RuntimeError('get_active_shared_root_path should not be used in manifest-driven mode')
 
 
 def resolve_paths(cfg: Config, state_config: StateConfig) -> ResolvedPaths:
 	"""Resolve the tract input, shared block-weight input, and state output paths."""
-	o3_config = get_o3_config()
-	shared_cfg = get_shared_config()
-	o3_root_path = get_active_o3_root_path(cfg.storage_mode)
-	shared_root_path = get_active_shared_root_path(cfg.storage_mode)
+	manifest = build_manifest.get_stage_manifest(
+		target_type='indicator',
+		name='o3',
+		stage='score',
+		version=cfg.version,
+		environment=cfg.storage_mode,
+	)
+	inputs = manifest.get('inputs', {})
+	outputs = manifest.get('outputs', {})
 
-	tract_scores_path = join_root_and_relative_path(
-		o3_root_path,
-		o3_config.preprocessed_tract_output_relative_path,
-	)
-	census_block_weights_relative_path = shared_cfg.census_block_weights_relative_path_template.format(
-		postal=state_config.postal,
-	)
+	# preprocessed_tracts should be a plain file input (relative to indicator root)
+	tract_entry = inputs.get('preprocessed_tracts')
+	if not tract_entry:
+		raise RuntimeError('Score manifest missing required input: preprocessed_tracts')
+	indicator_root = resolve_path.get_indicator_root('o3', cfg.version, cfg.storage_mode)
+	tract_scores_path = join_root_and_relative_path(indicator_root, tract_entry['relative'])
+
+	# weights is a shared asset; resolve shared version and root via resolver
+	weights_entry = inputs.get('weights')
+	if not weights_entry:
+		raise RuntimeError('Score manifest missing required input: weights')
+	shared_version = resolve_path.get_dependency_version('o3', cfg.version, 'census_block_weights')
+	shared_root = resolve_path.get_shared_root('census_block_weights', shared_version, cfg.storage_mode)
 	census_block_weights_path = join_root_and_relative_path(
-		shared_root_path,
-		census_block_weights_relative_path,
+		shared_root,
+		weights_entry['relative'].format(postal=state_config.postal),
 	)
+
+	# output directory/template (indicator outputs are relative to indicator root)
+	output_dir_entry = outputs.get('indicator_output_template')
+	if not output_dir_entry:
+		raise RuntimeError('Score manifest missing required output: indicator_output_template')
 	output_dir = cfg.output_dir or join_root_and_relative_path(
-		o3_root_path,
-		o3_config.indicator_output_relative_path_template.format(postal=state_config.postal),
+		indicator_root,
+		output_dir_entry['relative'].format(postal=state_config.postal),
 	)
+
 	return ResolvedPaths(
 		state_config=state_config,
-		o3_root_path=o3_root_path,
-		shared_root_path=shared_root_path,
+		o3_root_path=indicator_root,
+		shared_root_path=shared_root,
 		tract_scores_path=tract_scores_path,
 		census_block_weights_path=census_block_weights_path,
 		output_dir=output_dir,
@@ -436,13 +469,39 @@ def main(argv=None) -> int:
 	cfg = get_config(argv)
 	initialize_runtime_dependencies(cfg)
 	state_targets = load_state_targets(cfg.state)
-	tract_scores_path = join_root_and_relative_path(
-		get_active_o3_root_path(cfg.storage_mode),
-		get_o3_config().preprocessed_tract_output_relative_path,
+	# Derive the tract scores path from the manifest (score stage input)
+	manifest = build_manifest.get_stage_manifest(
+		target_type='indicator',
+		name='o3',
+		stage='score',
+		version=cfg.version,
+		environment=cfg.storage_mode,
 	)
+	tract_entry = manifest.get('inputs', {}).get('preprocessed_tracts')
+	if not tract_entry:
+		raise RuntimeError('Score manifest missing required input: preprocessed_tracts')
+	# Use the resolver to get an absolute indicator root (local) or raw remote root
+	indicator_root = resolve_path.get_indicator_root('o3', cfg.version, cfg.storage_mode)
+	tract_scores_path = join_root_and_relative_path(indicator_root, tract_entry['relative'])
 	logging.info('Logging to %s', log_path)
 	logging.info('Selected state filter: %s', cfg.state or 'all configured states')
 	logging.info('Using tract scores path: %s', tract_scores_path)
+
+	# If dry-run was requested, print resolved paths for the tract scores and
+	# for each state's weights and outputs, then exit without reading/writing.
+	if cfg.dry_run:
+		print('DRY RUN: manifest and path resolution')
+		print(f'tract_scores_path={tract_scores_path}')
+		logging.info('DRY RUN tract_scores_path=%s', tract_scores_path)
+		for state_config in state_targets:
+			paths = resolve_paths(cfg, state_config)
+			print(f'state={state_config.postal}')
+			print(f'  census_block_weights_path={paths.census_block_weights_path}')
+			print(f'  final_bg_scores_path={paths.final_bg_scores_path}')
+			logging.info('DRY RUN state=%s', state_config.postal)
+			logging.info('DRY RUN census_block_weights_path=%s', paths.census_block_weights_path)
+			logging.info('DRY RUN final_bg_scores_path=%s', paths.final_bg_scores_path)
+		return 0
 	tract_scores_df = read_csv_s3_or_local(tract_scores_path, dtype={TRACT_GEOID_COLUMN: 'string'})
 	prepared_tract_scores = prepare_tract_scores(tract_scores_df)
 	logging.info('Prepared %d tract-level Ozone scores', len(prepared_tract_scores))

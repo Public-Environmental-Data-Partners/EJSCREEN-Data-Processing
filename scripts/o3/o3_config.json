@@ -25,11 +25,6 @@
             "primary_o3": {
               "type": "indicator_download",
               "key": "raw_o3"
-            },
-            "weights": {
-              "type": "shared_asset",
-              "key": "census_block_weights",
-              "category": "preprocessed_input"
             }
           },
           "outputs": {
@@ -48,6 +43,11 @@
             "preprocessed_tracts": {
               "type": "file",
               "relative_path": "v1.0/preprocessed_input/o3_tract_annual_average.csv"
+            },
+            "weights": {
+              "type": "shared_asset",
+              "key": "census_block_weights",
+              "category": "preprocessed_input"
             }
           },
           "outputs": {

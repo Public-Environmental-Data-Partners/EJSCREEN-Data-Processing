@@ -8,7 +8,7 @@
   "versions": {
     "1.0": {
       "required_shared_assets": {
-        "census_block_weights": "1.0"
+        "census_block_weights": "0.5"
       },
       "stages": {
         "fetch": {
@@ -25,11 +25,6 @@
             "primary_pm25": {
               "type": "indicator_download",
               "key": "raw_pm25"
-            },
-            "weights": {
-              "type": "shared_asset",
-              "key": "census_block_weights",
-              "category": "preprocessed_input"
             }
           },
           "outputs": {
@@ -48,6 +43,11 @@
             "preprocessed_tracts": {
               "type": "file",
               "relative_path": "v1.0/preprocessed_input/pm25_tract_annual_average.csv"
+            },
+            "weights": {
+              "type": "shared_asset",
+              "key": "census_block_weights",
+              "category": "preprocessed_input"
             }
           },
           "outputs": {

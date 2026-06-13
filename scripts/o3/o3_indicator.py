@@ -20,8 +20,9 @@ Process summary:
 
 Runtime arguments (current defaults shown):
 		- -l/--location: required one of `local` or `remote`.
-		- --state: optional two-letter state code (e.g. `WY`). If omitted, the script processes the full
-			configured set (the code calls `get_state_config_list('conus')`).
+		- --state: required two-letter state code (e.g. `WY`) or `all` (case-insensitive) to process the full
+			configured set. Use `--state all` to iterate across all configured states (the code maps this to
+			an internal `None` which `load_state_targets()` interprets as "all").
 		- --output-dir: optional explicit output directory (local path or S3 URI). Default: none (uses indicator output template).
 		- -v/--version: optional config version to use. Default: `1.0`.
 		- --dry-run: long-only flag. When present the script validates manifests and prints resolved paths
@@ -37,7 +38,7 @@ Examples (run from the `scripts` folder):
 			python3 o3/o3_indicator.py --location local --state WY --dry-run
 
 		- Full run for all configured states (local):
-			python3 o3/o3_indicator.py --location local
+			python3 o3/o3_indicator.py --location local --state all
 
 		- Full run for a specific version (remote):
 			python3 o3/o3_indicator.py --location remote -v 1.0 --state CA

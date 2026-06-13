@@ -1,4 +1,21 @@
-"""Strict stage manifest builder for indicator and shared workflows."""
+"""Strict stage manifest builder for indicator and shared workflows.
+
+Public API:
+- get_stage_manifest(target_type: str, name: str, stage: str, version: str, environment: str = "local") -> dict
+
+Behavior:
+- Compiles a stage-level manifest for an `indicator` or `shared` target and
+    returns a dictionary with `inputs` and `outputs`. Each entry is compiled to
+    include at minimum `root` and `relative` values; fetch entries may include
+    additional metadata such as `source_url`, `scope`, or `source_url_template`.
+- When `environment == 'local'` compiled `root` values are resolved against the
+    project root. `environment` accepts only 'local' or 'remote'.
+
+Notes:
+- The builder delegates shared-version validation to `resolve_path.get_shared_version_block`
+    to ensure one authoritative implementation for shared-asset lookups and error messages.
+- Exposes a flat function `get_stage_manifest` suitable for use from R via `reticulate`.
+"""
 
 from __future__ import annotations
 

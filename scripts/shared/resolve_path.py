@@ -1,4 +1,27 @@
-"""Strict configuration-backed path resolver for indicator and shared assets."""
+"""Centralized configuration-backed path resolver for indicators and shared assets.
+
+Public (flat) module-level functions:
+- get_download_path(indicator: str, version: str, asset_key: str, environment: str = "local") -> dict
+- get_dependency_version(indicator: str, version: str, dependency: str) -> str
+- get_shared_asset_path(asset: str, version: str, category: str, asset_key: str | None = None, environment: str = "local") -> dict
+- get_indicator_root(indicator: str, version: str, environment: str = "local") -> str
+- get_shared_root(asset: str, version: str, environment: str = "local") -> str
+- get_shared_version_block(config: dict, asset_name: str, version: str) -> dict
+
+Return contract:
+- Functions that resolve locations return a dictionary containing at least the keys
+    "root" and "relative".
+- When `environment == 'local'`, `root` is returned as an absolute path resolved
+    against the project root. When `environment == 'remote'`, `root` is the raw remote
+    root string (for example, an S3 URI).
+- `environment` accepts only the values 'local' or 'remote' and will raise on
+    invalid input.
+
+Notes:
+- The module exposes a flat functional interface suitable for use from R via
+    `reticulate` and from other callers. Internally a singleton `_PathResolver`
+    caches parsed JSON configs to minimize I/O.
+"""
 
 from __future__ import annotations
 

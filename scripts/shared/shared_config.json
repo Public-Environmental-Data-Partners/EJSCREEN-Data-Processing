@@ -7,6 +7,20 @@
   },
   "assets": {
     "census_block_weights": {
+      "0.6": {
+        "stages": {
+          "preprocess": {
+            "outputs": {
+              "census_block_weights": {
+                "type": "shared_asset",
+                "scope": "single",
+                "relative_path_template": "census_block_weights/0.6/preprocessed_input/census_block_weights_2020.csv"
+              }
+          }
+        }
+      },
+      "notes": "These are still EmmaLi's original weights, but we're going to read the whole-country file, not one postal code at a time."
+      },
       "0.5": {
         "stages": {
           "preprocess": {

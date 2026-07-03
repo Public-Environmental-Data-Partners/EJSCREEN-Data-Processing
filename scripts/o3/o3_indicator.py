@@ -443,8 +443,34 @@ def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataF
 	"""Build and write one state's final Ozone block-group score file."""
 	paths = resolve_paths(cfg, state_config, manifest)
 	log_resolved_paths(paths, cfg)
-	block_weights_df = read_csv_s3_or_local(paths.census_block_weights_path, dtype={BLOCK_GROUP_GEOID_COLUMN: 'string'})
-	block_group_population = prepare_block_group_population(block_weights_df)
+	
+	# Note that the code below was changed for processing our v0.6 configuration, where
+	# we use only the whole-nation census block weight csv. But, because
+	# the column names did not change, this code works equally well for the v0.5 configuration,
+	# where the input file is one state at a time.
+
+	# Read the national census block weights CSV but load only the needed columns
+	usecols = ['state_abb', BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_POP_COLUMN]
+	block_weights_df = read_csv_s3_or_local(
+		paths.census_block_weights_path,
+		usecols=usecols,
+		dtype={BLOCK_GROUP_GEOID_COLUMN: 'string'},
+	)
+
+	# Require the explicit state column to exist
+	if 'state_abb' not in block_weights_df.columns:
+		raise RuntimeError(
+			f"Census block weights CSV missing required column 'state_abb': {paths.census_block_weights_path}"
+		)
+
+	# Filter to rows for this state and fail if none found
+	state_block_weights = block_weights_df.loc[block_weights_df['state_abb'] == state_config.postal]
+	if state_block_weights.empty:
+		raise RuntimeError(
+			f'No census block weights found for state {state_config.postal} in {paths.census_block_weights_path}'
+		)
+
+	block_group_population = prepare_block_group_population(state_block_weights)
 	final_scores = build_final_scores(tract_scores, block_group_population)
 	zero_population_count = int(block_group_population[BLOCK_GROUP_POP_COLUMN].eq(0).sum())
 	logging.info(
@@ -465,6 +491,8 @@ def main(argv=None) -> int:
 	"""Run the Ozone tract-to-block-group indicator workflow."""
 	log_path = configure_logging()
 	cfg = get_config(argv)
+	logging.info('Runtime config: version=%s storage_mode=%s state=%s output_dir=%s',
+			 cfg.version, cfg.storage_mode, cfg.state or 'all', cfg.output_dir or 'None')
 	initialize_runtime_dependencies(cfg)
 	state_targets = load_state_targets(cfg.state)
 	# Load the score-stage manifest once and reuse it for all path resolution

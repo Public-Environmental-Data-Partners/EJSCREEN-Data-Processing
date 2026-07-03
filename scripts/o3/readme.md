@@ -15,7 +15,7 @@ This folder contains the Ozone (O3) indicator pipeline and its state-validation 
 
   ```
 2. `o3_preprocess.py` reads the compressed source directly and writes one annual average concentration per tract.
-3. `o3_indicator.py` expands tract scores to block groups, applies the zero-population null rule, and writes per-state `final_bg_scores.csv` outputs.
+3. `o3_score.py` expands tract scores to block groups, applies the zero-population null rule, and writes per-state `final_bg_scores.csv` outputs.
 4. `run_state_validation.sh` reruns one state and, in local mode, compares the result to an Ozone-oriented EJAM subset file.
 
 ## Key files
@@ -24,7 +24,7 @@ This folder contains the Ozone (O3) indicator pipeline and its state-validation 
 - `o3_config.json`: O3 local and remote roots plus raw-download settings.
 - `o3_config.py`: validated config loader shared by the O3 scripts.
 - `o3_preprocess.py`: tract-level annual averaging step.
-- `o3_indicator.py`: tract-to-block-group expansion and final state output step.
+- `o3_score.py`: tract-to-block-group expansion and final state output step.
 - `run_state_validation.sh`: one-state validation wrapper.
 
 ## Current local validation flow

@@ -23,8 +23,7 @@
 ## Phase 4: Tracer Bullet Integration (O3 Testing)
 - [x] Refactor the `fetch_raw` script to consume paths via `resolve_path.py`
 - [x] Refactor `scripts/o3/o3_preprocess.py` (Python) to pull its execution map via `build_manifest.py`
-- [x] Refactor `scripts/o3/o3_indicator.py` (Python or R) to pull its execution map via `build_manifest.py`
-- [x] Run a full end-to-end integration test of the `o3` indicator pipeline:
+- [x] Refactor `scripts/o3/o3_score.py` (Python or R) to pull its execution map via `build_manifest.py`
     - [x] Verify full run locally
     - [x] Verify full run remotely (dry-run or execution on S3 via `fsspec`/R cloud tools)
 

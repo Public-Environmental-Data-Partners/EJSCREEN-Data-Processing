@@ -1,4 +1,4 @@
-"""o3_indicator.py
+"""o3_score.py
 
 Purpose:
 	Read tract-level Ozone averages, expand them to block groups with the shared
@@ -31,17 +31,17 @@ Runtime arguments (current defaults shown):
 Outputs:
 		- output/indicators/{postal}/final_bg_scores.csv under the active Ozone root (filename is fixed to
 			`final_bg_scores.csv`).
-		- o3_indicator.log in scripts/o3.
+		- o3_score.log in scripts/o3.
 
 Examples (run from the `scripts` folder):
 		- Dry-run for Wyoming (local):
-			python3 o3/o3_indicator.py --location local --state WY --dry-run
+			python3 o3/o3_score.py --location local --state WY --dry-run
 
 		- Full run for all configured states (local):
-			python3 o3/o3_indicator.py --location local --state all
+			python3 o3/o3_score.py --location local --state all
 
 		- Full run for a specific version (remote):
-			python3 o3/o3_indicator.py --location remote -v 1.0 --state CA
+			python3 o3/o3_score.py --location remote -v 1.0 --state CA
 
 """
  
@@ -59,7 +59,7 @@ import pandas as pd
 
 
 O3_DIR = Path(__file__).resolve().parent
-DEFAULT_LOG_FILENAME = 'o3_indicator.log'
+DEFAULT_LOG_FILENAME = 'o3_score.log'
 DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
 TRACT_GEOID_COLUMN = 'tract_geoid'
 ANNUAL_AVERAGE_COLUMN = 'annual_average_ten_highest_MDA8'
@@ -135,7 +135,7 @@ def get_config(argv=None) -> Config:
 		help='Select whether the script reads and writes through the local root path or remote S3 root path.',
 	)
 	parser.add_argument(
-		'--state',
+		'-s', '--state',
 		dest='state',
 		required=True,
 		help="Specify a two-letter state code (e.g. 'WY') or 'all' to process the full configured set.",

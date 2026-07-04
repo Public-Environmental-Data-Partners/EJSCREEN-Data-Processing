@@ -16,6 +16,13 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import math
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import textwrap
+
 
 REQUIRED_FIELDS = (
     'indicator',
@@ -131,6 +138,72 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def read_csv_coerce(path: str, id_col: str, score_col: str) -> pd.DataFrame:
+    df = pd.read_csv(path, dtype=str)
+    if id_col not in df.columns:
+        raise KeyError(f"ID column '{id_col}' not found in {path}")
+    if score_col not in df.columns:
+        raise KeyError(f"Score column '{score_col}' not found in {path}")
+    df[id_col] = df[id_col].astype(str).str.strip()
+    df[score_col] = pd.to_numeric(df[score_col], errors='coerce')
+    return df[[id_col, score_col]].copy()
+
+
+def compute_stats(df: pd.DataFrame, score_a: str, score_b: str) -> Dict[str, float]:
+    valid = df[[score_a, score_b]].dropna()
+    diffs = (valid[score_a] - valid[score_b]).astype(float)
+    abs_diffs = diffs.abs()
+    mean_abs = float(abs_diffs.mean()) if len(abs_diffs) > 0 else float('nan')
+    median_abs = float(abs_diffs.median()) if len(abs_diffs) > 0 else float('nan')
+    rmse = float(np.sqrt(np.nanmean((valid[score_a] - valid[score_b]) ** 2))) if len(valid) > 0 else float('nan')
+    try:
+        pearson = float(valid[score_a].corr(valid[score_b])) if len(valid) > 1 else float('nan')
+    except Exception:
+        pearson = float('nan')
+    return {
+        'matched_rows': int(len(df)),
+        'rows_used': int(len(valid)),
+        'dropped': int(len(df) - len(valid)),
+        'mean_abs_diff': mean_abs,
+        'median_abs_diff': median_abs,
+        'rmse': rmse,
+        'pearson': pearson,
+    }
+
+
+def plot_scatter(df: pd.DataFrame, score_a: str, score_b: str, out_path: Path, stats: Dict[str, float], title: str) -> None:
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ax.scatter(df[score_a], df[score_b], alpha=0.6, s=20, edgecolors='none')
+    if not df.empty:
+        mins = np.nanmin([df[score_a].min(), df[score_b].min()])
+        maxs = np.nanmax([df[score_a].max(), df[score_b].max()])
+    else:
+        mins, maxs = 0.0, 1.0
+    pad = (maxs - mins) * 0.02 if maxs != mins else 0.5
+    ax.plot([mins - pad, maxs + pad], [mins - pad, maxs + pad], color='red', linestyle='--', linewidth=1)
+    ax.set_xlabel(score_a)
+    ax.set_ylabel(score_b)
+    ax.set_title(title)
+    ax.set_aspect('equal', adjustable='box')
+
+    stats_txt = textwrap.dedent(f"""
+        Matched rows: {stats['matched_rows']}
+        Rows used: {stats['rows_used']}
+        Dropped: {stats['dropped']}
+        Mean abs diff: {stats['mean_abs_diff']:.6g}
+        Median abs diff: {stats['median_abs_diff']:.6g}
+        RMSE: {stats['rmse']:.6g}
+        Pearson r: {stats['pearson']:.6g}
+    """)
+    props = dict(boxstyle='round', facecolor='white', alpha=0.8)
+    ax.text(0.02, 0.98, stats_txt, transform=ax.transAxes, fontsize=9, va='top', ha='left', bbox=props)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
     script_dir = Path(__file__).resolve().parent
@@ -174,9 +247,67 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     # For slice 1 we stop after validation and reporting; later slices will perform reading and comparison.
-    print('Configuration validated. Ready to run comparator (not implemented in slice 1).')
-    pretty_print_config(merged)
-    logging.info('Validation-only run completed')
+    print('Configuration validated. Running comparator (slice 2)')
+
+    # Prepare output paths
+    out_dir = Path(merged['out_dir'])
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    matched_csv = out_dir / f"matched_rows_{merged['indicator']}_{merged['version_a']}_vs_{merged['version_b']}.csv"
+    scatter_png = out_dir / f"scatter_{merged['indicator']}_{merged['version_a']}_vs_{merged['version_b']}.png"
+    compare_log = out_dir / 'compare.log'
+
+    try:
+        # Read inputs
+        if not Path(merged['file_a']).exists():
+            raise FileNotFoundError(f"File A not found: {merged['file_a']}")
+        if not Path(merged['file_b']).exists():
+            raise FileNotFoundError(f"File B not found: {merged['file_b']}")
+
+        df_a = read_csv_coerce(merged['file_a'], merged['id_a'], merged['score_a'])
+        df_b = read_csv_coerce(merged['file_b'], merged['id_b'], merged['score_b'])
+
+        # Normalize join column name
+        df_a = df_a.rename(columns={merged['id_a']: 'id', merged['score_a']: 'score_a'})
+        df_b = df_b.rename(columns={merged['id_b']: 'id', merged['score_b']: 'score_b'})
+
+        # Inner join
+        merged_df = df_a.merge(df_b, on='id', how='inner')
+        merged_df['score_diff'] = merged_df['score_a'] - merged_df['score_b']
+
+        # Write matched CSV
+        merged_df.to_csv(matched_csv, index=False)
+
+        # Compute stats and plot scatter
+        stats = compute_stats(merged_df, 'score_a', 'score_b')
+        axis_label_a = f"{merged['score_a']} ({merged['version_a']})"
+        axis_label_b = f"{merged['score_b']} ({merged['version_b']})"
+        plot_title = f"{merged['indicator']}: {merged['version_a']} vs {merged['version_b']}"
+        # For plotting, use columns renamed to score_a/score_b but label axes with original names
+        plot_df = merged_df.rename(columns={'score_a': axis_label_a, 'score_b': axis_label_b})
+        plot_scatter(plot_df, axis_label_a, axis_label_b, scatter_png, stats, plot_title)
+
+        # Write compare summary log
+        with compare_log.open('w', encoding='utf-8') as fh:
+            fh.write('Comparison summary\n')
+            fh.write(f"matched_rows={stats['matched_rows']}\n")
+            fh.write(f"rows_used={stats['rows_used']}\n")
+            fh.write(f"dropped={stats['dropped']}\n")
+            fh.write(f"mean_abs_diff={stats['mean_abs_diff']:.6g}\n")
+            fh.write(f"median_abs_diff={stats['median_abs_diff']:.6g}\n")
+            fh.write(f"rmse={stats['rmse']:.6g}\n")
+            fh.write(f"pearson={stats['pearson']:.6g}\n")
+
+        logging.info('Comparison completed: matched=%d rows_used=%d', stats['matched_rows'], stats['rows_used'])
+        print(f'Wrote matched rows CSV: {matched_csv}')
+        print(f'Wrote scatter plot PNG: {scatter_png}')
+        print(f'Wrote compare summary: {compare_log}')
+
+    except Exception as exc:
+        print(f'ERROR: {exc}', file=sys.stderr)
+        logging.exception('Comparison failed')
+        return 5
+
     return 0
 
 

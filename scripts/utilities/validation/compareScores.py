@@ -22,6 +22,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import textwrap
+import geopandas as gpd
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize, TwoSlopeNorm
 
 
 REQUIRED_FIELDS = (
@@ -204,6 +207,111 @@ def plot_scatter(df: pd.DataFrame, score_a: str, score_b: str, out_path: Path, s
     plt.close(fig)
 
 
+def _resolve_scripts_dir() -> Path:
+    current_path = Path(__file__).resolve()
+    for parent in current_path.parents:
+        if parent.name == 'scripts':
+            return parent
+    raise RuntimeError(f'Unable to locate scripts directory from {current_path}')
+
+
+def _read_block_groups_geodataframe(tiger_zip_path: Path) -> gpd.GeoDataFrame:
+    candidates = [str(tiger_zip_path)]
+    if tiger_zip_path.suffix.lower() == '.zip':
+        candidates.append(f'zip://{tiger_zip_path.as_posix()}')
+
+    last_err = None
+    for candidate in dict.fromkeys(candidates):
+        try:
+            gdf = gpd.read_file(candidate)
+            return gdf
+        except Exception as exc:
+            last_err = exc
+    raise RuntimeError(f'Failed to read block-group data from {tiger_zip_path}: {last_err}')
+
+
+def prepare_map_and_plot(merged_df: pd.DataFrame, state: str, out_dir: Path, indicator: str, version_a: str, version_b: str) -> None:
+    # Derive FIPS from first matched geoid (first 2 digits)
+    if merged_df.empty:
+        raise RuntimeError('No matched rows to map')
+    sample_id = merged_df['id'].astype(str).iloc[0]
+    fips = sample_id[:2]
+
+    # Resolve TIGER path relative to scripts/shared/pipeline/downloads/...
+    scripts_dir = _resolve_scripts_dir()
+    tiger_rel = Path('downloads') / 'tiger_lines' / '2020' / 'bg' / f'tl_2020_{fips}_bg.zip'
+    tiger_path = scripts_dir / 'shared' / 'pipeline' / tiger_rel
+    if not tiger_path.exists():
+        raise FileNotFoundError(f'TIGER block-group ZIP not found: {tiger_path}')
+
+    bg_gdf = _read_block_groups_geodataframe(tiger_path)
+    if 'GEOID' not in bg_gdf.columns:
+        raise RuntimeError(f"Expected 'GEOID' column in TIGER block-group data: {tiger_path}")
+    if 'geometry' not in bg_gdf.columns:
+        raise RuntimeError(f"Expected 'geometry' column in TIGER block-group data: {tiger_path}")
+
+    map_df = merged_df.copy()
+    map_df['id'] = map_df['id'].astype(str).str.strip()
+
+    bg_gdf['GEOID'] = bg_gdf['GEOID'].astype(str).str.strip()
+    bg_plot = bg_gdf.merge(map_df[['id', 'score_a', 'score_b', 'score_diff']], left_on='GEOID', right_on='id', how='left')
+    state_outline = bg_gdf.dissolve()
+
+    # Compute scales
+    score_values = pd.concat([map_df['score_a'], map_df['score_b']], ignore_index=True).dropna()
+    diff_values = map_df['score_diff'].dropna()
+    score_scale_max = float(score_values.max()) if not score_values.empty else 0.0
+    diff_max_abs = float(diff_values.abs().max()) if not diff_values.empty else 0.0
+
+    score_scale_bound = score_scale_max if score_scale_max > 0 else 1.0
+    diff_scale_bound = diff_max_abs if diff_max_abs > 1.0 else 1.0
+    score_norm = Normalize(vmin=0.0, vmax=score_scale_bound)
+    diff_norm = TwoSlopeNorm(vmin=-diff_scale_bound, vcenter=0.0, vmax=diff_scale_bound)
+
+    fig = plt.figure(figsize=(15, 16), constrained_layout=True)
+    outer_grid = fig.add_gridspec(2, 1, height_ratios=[1, 1.12])
+    top_grid = outer_grid[0].subgridspec(1, 2, wspace=0.04)
+    bottom_grid = outer_grid[1].subgridspec(1, 3, width_ratios=[1, 1, 0.9], wspace=0.18)
+
+    ax_ejam = fig.add_subplot(top_grid[0, 0])
+    ax_new = fig.add_subplot(top_grid[0, 1])
+    ax_diff = fig.add_subplot(bottom_grid[0, :2])
+    ax_scatter = fig.add_subplot(bottom_grid[0, 2])
+
+    def _plot_map_panel(state_outline, bg_plot, column_name, cmap, norm, ax, title):
+        bg_plot.plot(
+            column=column_name,
+            cmap=cmap,
+            norm=norm,
+            linewidth=0.05,
+            edgecolor='#b8b8b8',
+            legend=False,
+            missing_kwds={'color': '#b3b3b3'},
+            ax=ax,
+        )
+        state_outline.boundary.plot(ax=ax, color='#4a4a4a', linewidth=0.5)
+        ax.set_title(title)
+        ax.set_axis_off()
+
+    _plot_map_panel(state_outline, bg_plot, 'score_a', 'Reds', score_norm, ax_ejam, f'{indicator} {version_a}')
+    _plot_map_panel(state_outline, bg_plot, 'score_b', 'Reds', score_norm, ax_new, f'{indicator} {version_b}')
+    _plot_map_panel(state_outline, bg_plot, 'score_diff', 'RdBu', diff_norm, ax_diff, 'Difference (A - B)')
+
+    # Scatter panel
+    plot_scatter(map_df.rename(columns={'score_a': 'score_a', 'score_b': 'score_b'}), 'score_a', 'score_b', out_dir / f'map_scatter_{indicator}_{version_a}_vs_{version_b}.png', compute_stats(map_df, 'score_a', 'score_b'), f'{indicator} scatter')
+
+    score_colorbar = fig.colorbar(ScalarMappable(norm=score_norm, cmap='Reds'), ax=[ax_ejam, ax_new], fraction=0.03, pad=0.02)
+    score_colorbar.set_label('Score value')
+    diff_colorbar = fig.colorbar(ScalarMappable(norm=diff_norm, cmap='RdBu'), ax=ax_diff, fraction=0.03, pad=0.02)
+    diff_colorbar.set_label('Score difference (A - B)')
+
+    fig.suptitle(f'{state}: Block-group score comparison', fontsize=15, y=0.98)
+    map_out = out_dir / f'{state}_map_{indicator}_{version_a}_vs_{version_b}.png'
+    fig.savefig(map_out, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    logging.info('Map written to %s', map_out)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
     script_dir = Path(__file__).resolve().parent
@@ -302,6 +410,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f'Wrote matched rows CSV: {matched_csv}')
         print(f'Wrote scatter plot PNG: {scatter_png}')
         print(f'Wrote compare summary: {compare_log}')
+
+        # Attempt to produce the four-panel map (slice 3). If TIGER data is missing
+        # or plotting fails, log the error but do not fail the whole run.
+        try:
+            prepare_map_and_plot(merged_df, merged['state'], out_dir, merged['indicator'], merged['version_a'], merged['version_b'])
+        except FileNotFoundError as fnf:
+            print(f'Map not produced: {fnf}')
+            logging.warning('Map not produced: %s', fnf)
+        except Exception as exc_map:
+            print(f'Warning: map generation failed: {exc_map}')
+            logging.exception('Map generation failed')
 
     except Exception as exc:
         print(f'ERROR: {exc}', file=sys.stderr)

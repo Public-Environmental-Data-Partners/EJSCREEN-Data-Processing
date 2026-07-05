@@ -48,8 +48,9 @@ Examples (run from the `scripts` folder):
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 import importlib
 import logging
 from pathlib import Path
@@ -66,6 +67,7 @@ ANNUAL_AVERAGE_COLUMN = 'annual_average_ten_highest_MDA8'
 FINAL_SCORE_COLUMN = 'o3_score'  #Edit this to match EJAM/EJSCREEN e.g. o3
 BLOCK_GROUP_GEOID_COLUMN = 'block_group_geoid'
 BLOCK_GROUP_POP_COLUMN = 'block_group_pop'
+BLOCK_GROUP_ACS_2022_POP_COLUMN = 'acs_2022_bg_pop'
 O3_STORAGE_MODES = ('local', 'remote')
 
 
@@ -88,6 +90,13 @@ SHARED_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "shared"
 if str(SHARED_SCRIPTS_DIR) not in sys.path:
 	sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
 
+
+def parse_version_decimal(version_str: str) -> Decimal:
+	try:
+		return Decimal(str(version_str))
+	except (InvalidOperation, TypeError) as exc:
+		raise RuntimeError(f'Invalid version string: {version_str}') from exc
+
 import build_manifest
 import resolve_path
 
@@ -106,6 +115,7 @@ class Config:
 	storage_mode: str
 	state: str | None
 	version: str = '1.0'
+	version_decimal: Decimal | None = None
 	output_dir: str | None = None
 	dry_run: bool = False
 
@@ -350,7 +360,7 @@ def prepare_tract_scores(df: pd.DataFrame) -> pd.DataFrame:
 	return prepared.sort_values(TRACT_GEOID_COLUMN).reset_index(drop=True)
 
 
-def prepare_block_group_population(df: pd.DataFrame) -> pd.DataFrame:
+def prepare_block_group_population_v0(df: pd.DataFrame) -> pd.DataFrame:
 	"""Reduce the shared block-weight input to one population row per block group."""
 	require_columns(df, (BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_POP_COLUMN), 'Census block weights CSV')
 	prepared = df[[BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_POP_COLUMN]].copy()
@@ -379,10 +389,59 @@ def prepare_block_group_population(df: pd.DataFrame) -> pd.DataFrame:
 	return group_population.sort_values(BLOCK_GROUP_GEOID_COLUMN).reset_index(drop=True)
 
 
-def build_final_scores(tract_scores: pd.DataFrame, block_group_population: pd.DataFrame) -> pd.DataFrame:
+def prepare_block_group_population_v1(df: pd.DataFrame) -> pd.DataFrame:
+	"""Prepare block-group population for version 1.0+: require acs_2022_bg_pop.
+
+	Returns a DataFrame containing at minimum the block group geoid, the
+	existing `block_group_pop` (if present) and the `acs_2022_bg_pop` column,
+	plus the derived tract geoid.
+	"""
+	required = (BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_ACS_2022_POP_COLUMN, BLOCK_GROUP_POP_COLUMN)
+	require_columns(df, required, 'Census block weights CSV (v1)')
+
+	prepared = df[[BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_POP_COLUMN, BLOCK_GROUP_ACS_2022_POP_COLUMN]].copy()
+	prepared[BLOCK_GROUP_GEOID_COLUMN] = prepared[BLOCK_GROUP_GEOID_COLUMN].astype('string').str.strip()
+	invalid_bg_mask = prepared[BLOCK_GROUP_GEOID_COLUMN].isna() | ~prepared[BLOCK_GROUP_GEOID_COLUMN].str.fullmatch(r'\d{12}')
+	if invalid_bg_mask.any():
+		invalid_samples = prepared.loc[invalid_bg_mask, BLOCK_GROUP_GEOID_COLUMN].drop_duplicates().astype(str).head(5).tolist()
+		raise RuntimeError(f'Census block weights CSV contains invalid block group GEOIDs. Sample invalid values: {invalid_samples}')
+
+	prepared[BLOCK_GROUP_POP_COLUMN] = pd.to_numeric(prepared[BLOCK_GROUP_POP_COLUMN], errors='raise')
+	if prepared[BLOCK_GROUP_POP_COLUMN].isna().any():
+		raise RuntimeError('Census block weights CSV contains null block_group_pop values')
+	if (prepared[BLOCK_GROUP_POP_COLUMN] < 0).any():
+		raise RuntimeError('Census block weights CSV contains negative block_group_pop values')
+
+	# Validate ACS population column
+	prepared[BLOCK_GROUP_ACS_2022_POP_COLUMN] = pd.to_numeric(prepared[BLOCK_GROUP_ACS_2022_POP_COLUMN], errors='raise')
+	if prepared[BLOCK_GROUP_ACS_2022_POP_COLUMN].isna().any():
+		raise RuntimeError('Census block weights CSV contains null BLOCK_GROUP_ACS_2022_POP_COLUMN values')
+	if (prepared[BLOCK_GROUP_ACS_2022_POP_COLUMN] < 0).any():
+		raise RuntimeError('Census block weights CSV contains negative BLOCK_GROUP_ACS_2022_POP_COLUMN values')
+
+	population_variants = prepared.groupby(BLOCK_GROUP_GEOID_COLUMN, dropna=False)[BLOCK_GROUP_POP_COLUMN].nunique(dropna=False)
+	inconsistent_geoids = population_variants[population_variants > 1].index.tolist()
+	if inconsistent_geoids:
+		raise RuntimeError(
+			'Census block weights CSV contains inconsistent block_group_pop values for some block groups. '
+			f'Sample GEOIDs: {inconsistent_geoids[:5]}'
+		)
+
+	group_population = prepared.drop_duplicates(subset=[BLOCK_GROUP_GEOID_COLUMN]).copy()
+	group_population[TRACT_GEOID_COLUMN] = group_population[BLOCK_GROUP_GEOID_COLUMN].str.slice(0, 11)
+	return group_population.sort_values(BLOCK_GROUP_GEOID_COLUMN).reset_index(drop=True)
+
+
+def build_final_scores(tract_scores: pd.DataFrame, block_group_population: pd.DataFrame, version: Decimal | None = None) -> pd.DataFrame:
 	"""Join tract scores to block groups and apply the zero-population null rule."""
 	merged = block_group_population.merge(tract_scores, on=TRACT_GEOID_COLUMN, how='left')
-	positive_population_mask = merged[BLOCK_GROUP_POP_COLUMN] > 0
+	# As of version 1.0, we use ACS-based population for enforcing the zero population rule,
+	# so we need that column from the input block group weights file.
+	if version >= Decimal('1.0'):
+		pop_col = BLOCK_GROUP_ACS_2022_POP_COLUMN
+	else:
+		pop_col = BLOCK_GROUP_POP_COLUMN
+	positive_population_mask = merged[pop_col] > 0
 	missing_positive_mask = positive_population_mask & merged[ANNUAL_AVERAGE_COLUMN].isna()
 	if missing_positive_mask.any():
 		missing_samples = merged.loc[missing_positive_mask, BLOCK_GROUP_GEOID_COLUMN].astype(str).head(5).tolist()
@@ -444,13 +503,16 @@ def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataF
 	paths = resolve_paths(cfg, state_config, manifest)
 	log_resolved_paths(paths, cfg)
 	
-	# Note that the code below was changed for processing our v0.6 configuration, where
+	# Note that some code below was changed for processing our v0.6 configuration, where
 	# we use only the whole-nation census block weight csv. But, because
 	# the column names did not change, this code works equally well for the v0.5 configuration,
 	# where the input file is one state at a time.
-
-	# Read the national census block weights CSV but load only the needed columns
 	usecols = ['state_abb', BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_POP_COLUMN]
+
+	# As of version 1.0, we require the ACS 2022 population column to be present in the block weights CSV.
+	if cfg.version_decimal >= Decimal('1.0'):
+		usecols.append(BLOCK_GROUP_ACS_2022_POP_COLUMN)
+
 	block_weights_df = read_csv_s3_or_local(
 		paths.census_block_weights_path,
 		usecols=usecols,
@@ -470,8 +532,13 @@ def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataF
 			f'No census block weights found for state {state_config.postal} in {paths.census_block_weights_path}'
 		)
 
-	block_group_population = prepare_block_group_population(state_block_weights)
-	final_scores = build_final_scores(tract_scores, block_group_population)
+	# Prepare block-group population according to version
+	if cfg.version_decimal >= Decimal('1.0'):
+		block_group_population = prepare_block_group_population_v1(state_block_weights)
+	else:
+		block_group_population = prepare_block_group_population_v0(state_block_weights)
+
+	final_scores = build_final_scores(tract_scores, block_group_population, version=cfg.version_decimal)
 	zero_population_count = int(block_group_population[BLOCK_GROUP_POP_COLUMN].eq(0).sum())
 	logging.info(
 		'Writing final Ozone scores to %s (rows=%d, zero_population_groups=%d)',
@@ -491,8 +558,19 @@ def main(argv=None) -> int:
 	"""Run the Ozone tract-to-block-group indicator workflow."""
 	log_path = configure_logging()
 	cfg = get_config(argv)
+
+	# Parse and validate version early; fail fast for versions we don't support yet.
+	version_decimal = parse_version_decimal(cfg.version)
+	cfg = replace(cfg, version_decimal=version_decimal)
+	# Note that the following line should be updated every time the major version
+	# number is incremented. The design plan is that minor version increments (e.g. 1.0 -> 1.1)
+	# should happen when we have new data files but not new columns. 
+	manifest_version_unsupported = Decimal('2.0')
+	if cfg.version_decimal is not None and cfg.version_decimal >= manifest_version_unsupported:
+		raise RuntimeError('Configured manifest version >= %s is not yet supported by this module' % manifest_version_unsupported)
+	
 	logging.info('Runtime config: version=%s storage_mode=%s state=%s output_dir=%s',
-			 cfg.version, cfg.storage_mode, cfg.state or 'all', cfg.output_dir or 'None')
+			 cfg.version_decimal, cfg.storage_mode, cfg.state or 'all', cfg.output_dir or 'None')
 	initialize_runtime_dependencies(cfg)
 	state_targets = load_state_targets(cfg.state)
 	# Load the score-stage manifest once and reuse it for all path resolution

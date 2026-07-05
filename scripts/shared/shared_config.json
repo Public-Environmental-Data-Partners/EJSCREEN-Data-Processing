@@ -7,6 +7,20 @@
   },
   "assets": {
     "census_block_weights": {
+      "1.0": {
+        "stages": {
+          "preprocess": {
+            "outputs": {
+              "census_block_weights": {
+                "type": "shared_asset",
+                "scope": "single",
+                "relative_path_template": "census_block_weights/1.0/preprocessed_input/census_block_weights_2020_w2022pops.csv"
+              }
+          }
+        }
+      },
+      "notes": "These are EmmaLi's new-improved weights that include the acs_2022_bg_pop column to use for identifying zero-population block groups."
+      },
       "0.6": {
         "stages": {
           "preprocess": {

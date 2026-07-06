@@ -297,8 +297,25 @@ def prepare_map_and_plot(merged_df: pd.DataFrame, state: str, out_dir: Path, ind
     _plot_map_panel(state_outline, bg_plot, 'score_b', 'Reds', score_norm, ax_new, f'{indicator} {version_b}')
     _plot_map_panel(state_outline, bg_plot, 'score_diff', 'RdBu', diff_norm, ax_diff, 'Difference (A - B)')
 
-    # Scatter panel
-    plot_scatter(map_df.rename(columns={'score_a': 'score_a', 'score_b': 'score_b'}), 'score_a', 'score_b', out_dir / f'map_scatter_{indicator}_{version_a}_vs_{version_b}.png', compute_stats(map_df, 'score_a', 'score_b'), f'{indicator} scatter')
+    # Scatter panel: reuse the short-named standalone scatter PNG (created
+    # earlier as `scatter_{indicator}_{version_a}_vs_{version_b}.png`). If it
+    # doesn't exist yet, create it; then embed into the four-panel figure.
+    scatter_path = out_dir / f'scatter_{indicator}_{version_a}_vs_{version_b}.png'
+    if not scatter_path.exists():
+        plot_scatter(
+            map_df.rename(columns={'score_a': 'score_a', 'score_b': 'score_b'}),
+            'score_a',
+            'score_b',
+            scatter_path,
+            compute_stats(map_df, 'score_a', 'score_b'),
+            f'{indicator} scatter',
+        )
+    try:
+        img = plt.imread(scatter_path)
+        ax_scatter.imshow(img)
+        ax_scatter.set_axis_off()
+    except Exception as exc_img:
+        logging.warning('Failed to embed scatter image into map figure: %s', exc_img)
 
     score_colorbar = fig.colorbar(ScalarMappable(norm=score_norm, cmap='Reds'), ax=[ax_ejam, ax_new], fraction=0.03, pad=0.02)
     score_colorbar.set_label('Score value')
@@ -363,7 +380,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     matched_csv = out_dir / f"matched_rows_{merged['indicator']}_{merged['version_a']}_vs_{merged['version_b']}.csv"
     scatter_png = out_dir / f"scatter_{merged['indicator']}_{merged['version_a']}_vs_{merged['version_b']}.png"
-    compare_log = out_dir / 'compare.log'
+    compare_summary = out_dir / 'compare_summary.txt'
 
     try:
         # Read inputs
@@ -395,8 +412,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         plot_df = merged_df.rename(columns={'score_a': axis_label_a, 'score_b': axis_label_b})
         plot_scatter(plot_df, axis_label_a, axis_label_b, scatter_png, stats, plot_title)
 
-        # Write compare summary log
-        with compare_log.open('w', encoding='utf-8') as fh:
+        # Compute extreme differences for reporting (file only)
+        diffs = merged_df['score_diff'].dropna().astype(float)
+        greatest_positive = float(diffs[diffs > 0].max()) if not diffs[diffs > 0].empty else float('nan')
+        smallest_negative = float(diffs[diffs < 0].min()) if not diffs[diffs < 0].empty else float('nan')
+
+        # Write compare summary (additional extremes included)
+        with compare_summary.open('w', encoding='utf-8') as fh:
             fh.write('Comparison summary\n')
             fh.write(f"matched_rows={stats['matched_rows']}\n")
             fh.write(f"rows_used={stats['rows_used']}\n")
@@ -405,11 +427,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             fh.write(f"median_abs_diff={stats['median_abs_diff']:.6g}\n")
             fh.write(f"rmse={stats['rmse']:.6g}\n")
             fh.write(f"pearson={stats['pearson']:.6g}\n")
+            fh.write(f"greatest_positive_diff={greatest_positive:.6g}\n")
+            fh.write(f"smallest_negative_diff={smallest_negative:.6g}\n")
 
         logging.info('Comparison completed: matched=%d rows_used=%d', stats['matched_rows'], stats['rows_used'])
         print(f'Wrote matched rows CSV: {matched_csv}')
         print(f'Wrote scatter plot PNG: {scatter_png}')
-        print(f'Wrote compare summary: {compare_log}')
+        print(f'Wrote compare summary: {compare_summary}')
 
         # Attempt to produce the four-panel map (slice 3). If TIGER data is missing
         # or plotting fails, log the error but do not fail the whole run.

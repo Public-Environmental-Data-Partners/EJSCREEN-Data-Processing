@@ -355,6 +355,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         if merged.get('state') and merged.get('indicator') and merged.get('version_a') and merged.get('version_b'):
             merged['out_dir'] = default_out_dir(merged['state'], merged['indicator'], merged['version_a'], merged['version_b'])
 
+    # Allow file/out paths in config to be templates using {state} so a single
+    # config file can be reused for different states via the --state override.
+    if merged.get('state'):
+        for key in ('file_a', 'file_b', 'out_dir'):
+            val = merged.get(key)
+            if isinstance(val, str):
+                try:
+                    merged[key] = val.format(state=merged['state'])
+                except Exception as exc:
+                    logging.warning('Failed to format %s with state=%s: %s', key, merged['state'], exc)
+
     valid, missing = validate_config(merged)
     if not valid:
         print('ERROR: missing required configuration values:', file=sys.stderr)

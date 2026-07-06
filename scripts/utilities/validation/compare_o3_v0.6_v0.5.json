@@ -1,13 +1,13 @@
 {
   "indicator": "o3",
   "state": "MT",
-  "file_a": "../../../pipeline/o3/v0.6/output/indicators/MT/final_bg_scores.csv",
+  "file_a": "../../../pipeline/o3/v0.6/output/indicators/{state}/final_bg_scores.csv",
   "id_a": "block_group_geoid",
   "score_a": "o3_score",
   "version_a": "v0.6",
-  "file_b": "../../../pipeline/o3/v0.5/output/indicators/MT/final_bg_scores.csv",
+  "file_b": "../../../pipeline/o3/v0.5/output/indicators/{state}/final_bg_scores.csv",
   "id_b": "block_group_geoid",
   "score_b": "o3_score",
   "version_b": "v0.5",
-  "out_dir": "./output/MT/compare/o3_v0.6_vs_v0.5/"
+  "out_dir": "./output/{state}/compare/o3_v0.6_vs_v0.5/"
 }

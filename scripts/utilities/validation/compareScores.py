@@ -1,11 +1,57 @@
 #!/usr/bin/env python3
 """compareScores.py
 
-Slice 1 implementation: config + CLI merge, validation, --dry-run, and logging.
+Purpose:
+    Compare two indicator score CSVs and produce matched rows, a scatter plot,
+    summary metrics, and (optionally) a four-panel map. Intended for quick
+    validation and reporting of differences between two versions or sources.
 
-This script intentionally implements only the configuration handling and validation
-for the first slice. The actual comparison and plotting are implemented in later
-slices.
+Process summary:
+    - Merge configuration from a JSON file and CLI args (CLI overrides file).
+    - Validate required fields and optionally perform a dry-run to print merged
+        configuration.
+    - Read CSVs for A and B, coerce types, inner-join on ID, and compute per-row
+        differences and summary statistics.
+    - Write matched rows CSV, a standalone scatter PNG, and a compare summary
+        text file containing metrics and extreme differences.
+    - Attempt to produce a four-panel PNG map using TIGER block-group geometries;
+        mapping errors are logged but do not fail the run.
+
+Runtime arguments (select):
+    --config       Path to JSON config file (optional but recommended, see samples provided)
+    --indicator    Indicator slug (used for labels and filenames)
+    --state        Two-letter state postal code
+    --file-a       Path to CSV file A
+    --id-a         ID column name in file A
+    --score-a      Score column name in file A
+    --version-a    Version label for file A
+    --file-b       Path to CSV file B
+    --id-b         ID column name in file B
+    --score-b      Score column name in file B
+    --version-b    Version label for file B
+    --out-dir      Optional output directory (defaults to output/{state}/compare/{indicator}_{version_a}_vs_{version_b})
+    --dry-run      Validate and print merged config without reading or writing files
+
+Inputs:
+    - Two CSVs containing ID and score columns. IDs are treated as strings and
+        scores are coerced to numeric; rows with non-numeric scores are excluded
+        from statistical calculations.
+
+Outputs:
+    - matched_rows_{indicator}_{version_a}_vs_{version_b}.csv — matched rows after inner join
+    - scatter_{indicator}_{version_a}_vs_{version_b}.png — standalone scatter plot
+    - compare_summary.txt — text file with summary metrics and extremes
+    - {state}_map_{indicator}_{version_a}_vs_{version_b}.png — optional four-panel map (if TIGER data available)
+
+Examples:
+    - Dry-run using a config file:
+            python scripts/utilities/validation/compareScores.py --config compare_o3_NJ_v0.6_ejam.json --state NJ --dry-run
+
+    - Full run specifying files:
+            python scripts/utilities/validation/compareScores.py --indicator o3 --state NJ \
+                --file-a ../../../pipeline/o3/v0.6/output/indicators/NJ/final_bg_scores.csv --id-a id --score-a score --version-a v0.6 \
+                --file-b ./output/NJ/ejam_o3_subset.csv --id-b id --score-b score --version-b ejam \
+                --out-dir ./output/NJ/compare/o3_v0.6_vs_ejam/
 """
 from __future__ import annotations
 

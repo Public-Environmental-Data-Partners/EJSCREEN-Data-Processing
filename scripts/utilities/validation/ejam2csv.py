@@ -47,6 +47,15 @@ Outputs:
 Credits:
         Designed by Anne Gunn.
         Coded by GitHub Copilot (GPT-5.4) and Anne Gunn.
+
+Examples (run from the `scripts/utilities/validation` folder):
+    - Get EJAM O3 data for New Jersey (writes to `./output/NJ/`):
+        python3 ejam2csv.py --state NJ -p ./output --data-type o3
+
+Warning:
+    The EJAM API call used by this script relatively slow; the
+    request may take several minutes to complete. Use `--dry-run` for a
+    quick validation of arguments without making the network request.
 """
 
 # Inputs: none required (hardcoded API request), optional CLI `-n/--limit` to limit rows

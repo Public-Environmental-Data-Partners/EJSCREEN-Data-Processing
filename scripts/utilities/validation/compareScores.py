@@ -165,7 +165,7 @@ def default_out_dir(state: str, indicator: str, version_a: str, version_b: str) 
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Compare two indicator score CSVs (slice 1: config/dry-run)')
+    parser = argparse.ArgumentParser(description='Compare two indicator score CSVs')
     parser.add_argument('--config', type=str, default=None, help='Path to JSON config file (optional)')
 
     parser.add_argument('--indicator', type=str, help='Indicator slug (used for labels and filenames)')
@@ -373,6 +373,7 @@ def prepare_map_and_plot(merged_df: pd.DataFrame, state: str, out_dir: Path, ind
     fig.savefig(map_out, dpi=150, bbox_inches='tight')
     plt.close(fig)
     logging.info('Map written to %s', map_out)
+    print(f'Generated four panel map: {map_out}')
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -428,8 +429,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         logging.info('Dry-run completed')
         return 0
 
-    # For slice 1 we stop after validation and reporting; later slices will perform reading and comparison.
-    print('Configuration validated. Running comparator (slice 2)')
+    print('Configuration validated. Running comparator.')
 
     # Prepare output paths
     out_dir = Path(merged['out_dir'])
@@ -492,7 +492,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f'Wrote scatter plot PNG: {scatter_png}')
         print(f'Wrote compare summary: {compare_summary}')
 
-        # Attempt to produce the four-panel map (slice 3). If TIGER data is missing
+        # Attempt to produce the four-panel map. If TIGER data is missing
         # or plotting fails, log the error but do not fail the whole run.
         try:
             prepare_map_and_plot(merged_df, merged['state'], out_dir, merged['indicator'], merged['version_a'], merged['version_b'])

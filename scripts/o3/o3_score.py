@@ -65,9 +65,16 @@ DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
 TRACT_GEOID_COLUMN = 'tract_geoid'
 ANNUAL_AVERAGE_COLUMN = 'annual_average_ten_highest_MDA8'
 FINAL_SCORE_COLUMN = 'o3_score'  #Edit this to match EJAM/EJSCREEN e.g. o3
-BLOCK_GROUP_GEOID_COLUMN = 'block_group_geoid'
-BLOCK_GROUP_POP_COLUMN = 'block_group_pop'
-BLOCK_GROUP_ACS_2022_POP_COLUMN = 'acs_2022_bg_pop'
+# Column name defaults (lower_snake_case variables). Default to V1 names.
+# These are selected per-version at read time and then mapped to the canonical
+# names used throughout the downstream code.
+block_group_geoid_col = 'block_group_geoid_2022'
+block_group_pop_col = 'acs_2022_bg_pop'
+state_abb_col = 'state_abb'
+
+# Canonical column names used downstream after normalization
+canonical_block_group_geoid = 'block_group_geoid'
+canonical_block_group_pop = 'block_group_pop'
 O3_STORAGE_MODES = ('local', 'remote')
 
 
@@ -360,66 +367,38 @@ def prepare_tract_scores(df: pd.DataFrame) -> pd.DataFrame:
 	return prepared.sort_values(TRACT_GEOID_COLUMN).reset_index(drop=True)
 
 
-def prepare_block_group_population_v0(df: pd.DataFrame) -> pd.DataFrame:
-	"""Reduce the shared block-weight input to one population row per block group."""
-	require_columns(df, (BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_POP_COLUMN), 'Census block weights CSV')
-	prepared = df[[BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_POP_COLUMN]].copy()
-	prepared[BLOCK_GROUP_GEOID_COLUMN] = prepared[BLOCK_GROUP_GEOID_COLUMN].astype('string').str.strip()
-	invalid_bg_mask = prepared[BLOCK_GROUP_GEOID_COLUMN].isna() | ~prepared[BLOCK_GROUP_GEOID_COLUMN].str.fullmatch(r'\d{12}')
-	if invalid_bg_mask.any():
-		invalid_samples = prepared.loc[invalid_bg_mask, BLOCK_GROUP_GEOID_COLUMN].drop_duplicates().astype(str).head(5).tolist()
-		raise RuntimeError(f'Census block weights CSV contains invalid block group GEOIDs. Sample invalid values: {invalid_samples}')
+def prepare_block_group_population(df: pd.DataFrame) -> pd.DataFrame:
+	"""Validate and reduce the shared block-weight input to one population row per block group.
 
-	prepared[BLOCK_GROUP_POP_COLUMN] = pd.to_numeric(prepared[BLOCK_GROUP_POP_COLUMN], errors='raise')
-	if prepared[BLOCK_GROUP_POP_COLUMN].isna().any():
-		raise RuntimeError('Census block weights CSV contains null block_group_pop values')
-	if (prepared[BLOCK_GROUP_POP_COLUMN] < 0).any():
-		raise RuntimeError('Census block weights CSV contains negative block_group_pop values')
-
-	population_variants = prepared.groupby(BLOCK_GROUP_GEOID_COLUMN, dropna=False)[BLOCK_GROUP_POP_COLUMN].nunique(dropna=False)
-	inconsistent_geoids = population_variants[population_variants > 1].index.tolist()
-	if inconsistent_geoids:
-		raise RuntimeError(
-			'Census block weights CSV contains inconsistent block_group_pop values for some block groups. '
-			f'Sample GEOIDs: {inconsistent_geoids[:5]}'
-		)
-
-	group_population = prepared.drop_duplicates(subset=[BLOCK_GROUP_GEOID_COLUMN]).copy()
-	group_population[TRACT_GEOID_COLUMN] = group_population[BLOCK_GROUP_GEOID_COLUMN].str.slice(0, 11)
-	return group_population.sort_values(BLOCK_GROUP_GEOID_COLUMN).reset_index(drop=True)
-
-
-def prepare_block_group_population_v1(df: pd.DataFrame) -> pd.DataFrame:
-	"""Prepare block-group population for version 1.0+: require acs_2022_bg_pop.
-
-	Returns a DataFrame containing at minimum the block group geoid, the
-	existing `block_group_pop` (if present) and the `acs_2022_bg_pop` column,
-	plus the derived tract geoid.
+	Expects the DataFrame to contain the canonical columns
+	`canonical_block_group_geoid` and `canonical_block_group_pop` (and
+	`state_abb` where present). Returns a DataFrame with one row per block
+	group and a derived `tract_geoid` column.
 	"""
-	required = (BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_ACS_2022_POP_COLUMN, BLOCK_GROUP_POP_COLUMN)
-	require_columns(df, required, 'Census block weights CSV (v1)')
+	require_columns(df, (canonical_block_group_geoid, canonical_block_group_pop), 'Census block weights CSV')
+	prepared = df[[canonical_block_group_geoid, canonical_block_group_pop]].copy()
+	prepared[canonical_block_group_geoid] = prepared[canonical_block_group_geoid].astype('string').str.strip()
 
-	prepared = df[[BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_POP_COLUMN, BLOCK_GROUP_ACS_2022_POP_COLUMN]].copy()
-	prepared[BLOCK_GROUP_GEOID_COLUMN] = prepared[BLOCK_GROUP_GEOID_COLUMN].astype('string').str.strip()
-	invalid_bg_mask = prepared[BLOCK_GROUP_GEOID_COLUMN].isna() | ~prepared[BLOCK_GROUP_GEOID_COLUMN].str.fullmatch(r'\d{12}')
+	# Drop rows with missing or placeholder GEOIDs (e.g., NA) before validation
+	geoid_upper = prepared[canonical_block_group_geoid].fillna('').str.upper()
+	missing_geoid_mask = geoid_upper.isin(['', 'NA', '<NA>'])
+	if missing_geoid_mask.any():
+		logging.info('Dropping %d rows with missing block-group GEOID values', int(missing_geoid_mask.sum()))
+		prepared = prepared.loc[~missing_geoid_mask].copy()
+
+	invalid_bg_mask = prepared[canonical_block_group_geoid].isna() | ~prepared[canonical_block_group_geoid].str.fullmatch(r'\d{12}')
 	if invalid_bg_mask.any():
-		invalid_samples = prepared.loc[invalid_bg_mask, BLOCK_GROUP_GEOID_COLUMN].drop_duplicates().astype(str).head(5).tolist()
+		invalid_samples = prepared.loc[invalid_bg_mask, canonical_block_group_geoid].drop_duplicates().astype(str).head(5).tolist()
 		raise RuntimeError(f'Census block weights CSV contains invalid block group GEOIDs. Sample invalid values: {invalid_samples}')
 
-	prepared[BLOCK_GROUP_POP_COLUMN] = pd.to_numeric(prepared[BLOCK_GROUP_POP_COLUMN], errors='raise')
-	if prepared[BLOCK_GROUP_POP_COLUMN].isna().any():
-		raise RuntimeError('Census block weights CSV contains null block_group_pop values')
-	if (prepared[BLOCK_GROUP_POP_COLUMN] < 0).any():
+	# Coerce population to numeric; treat missing (NA) as zero to tolerate
+	# upstream files that encode zero fractions as NA.
+	prepared[canonical_block_group_pop] = pd.to_numeric(prepared[canonical_block_group_pop], errors='coerce')
+	prepared[canonical_block_group_pop] = prepared[canonical_block_group_pop].fillna(0)
+	if (prepared[canonical_block_group_pop] < 0).any():
 		raise RuntimeError('Census block weights CSV contains negative block_group_pop values')
 
-	# Validate ACS population column
-	prepared[BLOCK_GROUP_ACS_2022_POP_COLUMN] = pd.to_numeric(prepared[BLOCK_GROUP_ACS_2022_POP_COLUMN], errors='raise')
-	if prepared[BLOCK_GROUP_ACS_2022_POP_COLUMN].isna().any():
-		raise RuntimeError('Census block weights CSV contains null BLOCK_GROUP_ACS_2022_POP_COLUMN values')
-	if (prepared[BLOCK_GROUP_ACS_2022_POP_COLUMN] < 0).any():
-		raise RuntimeError('Census block weights CSV contains negative BLOCK_GROUP_ACS_2022_POP_COLUMN values')
-
-	population_variants = prepared.groupby(BLOCK_GROUP_GEOID_COLUMN, dropna=False)[BLOCK_GROUP_POP_COLUMN].nunique(dropna=False)
+	population_variants = prepared.groupby(canonical_block_group_geoid, dropna=False)[canonical_block_group_pop].nunique(dropna=False)
 	inconsistent_geoids = population_variants[population_variants > 1].index.tolist()
 	if inconsistent_geoids:
 		raise RuntimeError(
@@ -427,33 +406,30 @@ def prepare_block_group_population_v1(df: pd.DataFrame) -> pd.DataFrame:
 			f'Sample GEOIDs: {inconsistent_geoids[:5]}'
 		)
 
-	group_population = prepared.drop_duplicates(subset=[BLOCK_GROUP_GEOID_COLUMN]).copy()
-	group_population[TRACT_GEOID_COLUMN] = group_population[BLOCK_GROUP_GEOID_COLUMN].str.slice(0, 11)
-	return group_population.sort_values(BLOCK_GROUP_GEOID_COLUMN).reset_index(drop=True)
+	group_population = prepared.drop_duplicates(subset=[canonical_block_group_geoid]).copy()
+	group_population[TRACT_GEOID_COLUMN] = group_population[canonical_block_group_geoid].str.slice(0, 11)
+	return group_population.sort_values(canonical_block_group_geoid).reset_index(drop=True)
 
 
-def build_final_scores(tract_scores: pd.DataFrame, block_group_population: pd.DataFrame, version: Decimal | None = None) -> pd.DataFrame:
-	"""Join tract scores to block groups and apply the zero-population null rule."""
+def build_final_scores(tract_scores: pd.DataFrame, block_group_population: pd.DataFrame) -> pd.DataFrame:
+	"""Join tract scores to block groups and apply the zero-population null rule.
+
+	Assumes `block_group_population` contains canonical columns produced by
+	`prepare_block_group_population()`.
+	"""
 	merged = block_group_population.merge(tract_scores, on=TRACT_GEOID_COLUMN, how='left')
-	# As of version 1.0, we use ACS-based population for enforcing the zero population rule,
-	# so we need that column from the input block group weights file.
-	if version >= Decimal('1.0'):
-		pop_col = BLOCK_GROUP_ACS_2022_POP_COLUMN
-	else:
-		pop_col = BLOCK_GROUP_POP_COLUMN
-	positive_population_mask = merged[pop_col] > 0
+	positive_population_mask = merged[canonical_block_group_pop] > 0
 	missing_positive_mask = positive_population_mask & merged[ANNUAL_AVERAGE_COLUMN].isna()
 	if missing_positive_mask.any():
-		missing_samples = merged.loc[missing_positive_mask, BLOCK_GROUP_GEOID_COLUMN].astype(str).head(5).tolist()
+		missing_samples = merged.loc[missing_positive_mask, canonical_block_group_geoid].astype(str).head(5).tolist()
 		raise RuntimeError(
 			'Positive-population block groups are missing tract-level Ozone scores. '
 			f'Sample block groups: {missing_samples}'
 		)
 
-
 	merged[FINAL_SCORE_COLUMN] = merged[ANNUAL_AVERAGE_COLUMN].astype('Float64')
 	merged.loc[~positive_population_mask, FINAL_SCORE_COLUMN] = pd.NA
-	return merged[[BLOCK_GROUP_GEOID_COLUMN, FINAL_SCORE_COLUMN]].copy()
+	return merged[[canonical_block_group_geoid, FINAL_SCORE_COLUMN]].copy()
 
 
 def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
@@ -474,8 +450,8 @@ def log_state_summary(
 ) -> None:
 	total_tract_count = int(block_group_population[TRACT_GEOID_COLUMN].nunique(dropna=True))
 	total_block_group_count = int(len(block_group_population))
-	non_zero_block_group_count = int(block_group_population[BLOCK_GROUP_POP_COLUMN].gt(0).sum())
-	zero_population_block_group_count = int(block_group_population[BLOCK_GROUP_POP_COLUMN].eq(0).sum())
+	non_zero_block_group_count = int(block_group_population[canonical_block_group_pop].gt(0).sum())
+	zero_population_block_group_count = int(block_group_population[canonical_block_group_pop].eq(0).sum())
 	non_null_scores = final_scores[FINAL_SCORE_COLUMN].dropna()
 	minimum_score = None if non_null_scores.empty else float(non_null_scores.min())
 	maximum_score = None if non_null_scores.empty else float(non_null_scores.max())
@@ -507,16 +483,20 @@ def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataF
 	# we use only the whole-nation census block weight csv. But, because
 	# the column names did not change, this code works equally well for the v0.5 configuration,
 	# where the input file is one state at a time.
-	usecols = ['state_abb', BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_POP_COLUMN]
+	# Choose per-version input column names (defaults are V1 names set above).
+	bg_geoid_col = block_group_geoid_col
+	bg_pop_col = block_group_pop_col
+	if cfg.version_decimal is not None and cfg.version_decimal < Decimal('1.0'):
+		# Older manifests use the original column names
+		bg_geoid_col = 'block_group_geoid'
+		bg_pop_col = 'block_group_pop'
 
-	# As of version 1.0, we require the ACS 2022 population column to be present in the block weights CSV.
-	if cfg.version_decimal >= Decimal('1.0'):
-		usecols.append(BLOCK_GROUP_ACS_2022_POP_COLUMN)
+	usecols = [state_abb_col, bg_geoid_col, bg_pop_col]
 
 	block_weights_df = read_csv_s3_or_local(
 		paths.census_block_weights_path,
 		usecols=usecols,
-		dtype={BLOCK_GROUP_GEOID_COLUMN: 'string'},
+		dtype={bg_geoid_col: 'string'},
 	)
 
 	# Require the explicit state column to exist
@@ -526,20 +506,20 @@ def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataF
 		)
 
 	# Filter to rows for this state and fail if none found
-	state_block_weights = block_weights_df.loc[block_weights_df['state_abb'] == state_config.postal]
+	state_block_weights = block_weights_df.loc[block_weights_df[state_abb_col] == state_config.postal]
 	if state_block_weights.empty:
 		raise RuntimeError(
 			f'No census block weights found for state {state_config.postal} in {paths.census_block_weights_path}'
 		)
 
-	# Prepare block-group population according to version
-	if cfg.version_decimal >= Decimal('1.0'):
-		block_group_population = prepare_block_group_population_v1(state_block_weights)
-	else:
-		block_group_population = prepare_block_group_population_v0(state_block_weights)
+	# Normalize column names to canonical names used downstream
+	state_block_weights = state_block_weights.rename(columns={bg_geoid_col: canonical_block_group_geoid, bg_pop_col: canonical_block_group_pop})
 
-	final_scores = build_final_scores(tract_scores, block_group_population, version=cfg.version_decimal)
-	zero_population_count = int(block_group_population[BLOCK_GROUP_POP_COLUMN].eq(0).sum())
+	# Prepare block-group population (single validator for all versions)
+	block_group_population = prepare_block_group_population(state_block_weights)
+
+	final_scores = build_final_scores(tract_scores, block_group_population)
+	zero_population_count = int(block_group_population[canonical_block_group_pop].eq(0).sum())
 	logging.info(
 		'Writing final Ozone scores to %s (rows=%d, zero_population_groups=%d)',
 		paths.final_bg_scores_path,

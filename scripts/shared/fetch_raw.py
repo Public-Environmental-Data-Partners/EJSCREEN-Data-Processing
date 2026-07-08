@@ -47,8 +47,20 @@ import uuid
 
 import requests
 
-import build_manifest
-import resolve_path
+# All of our project-specific imports must be relative to the 
+# `scripts` folder which we assume is at the first level of the
+# repository. 
+# NB: ***If `scripts` moves, this code will have to change.***
+# Walk up our current working directory tree until you find the
+# repository root, then add the scripts directory to sys.path
+REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
+if REPO_ROOT is None:
+	# This is a running-from-docker or other non-git environment cry for help.
+    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+import shared.build_manifest as build_manifest
+import shared.resolve_path as resolve_path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 PROCESS_NAME = 'fetch_raw'

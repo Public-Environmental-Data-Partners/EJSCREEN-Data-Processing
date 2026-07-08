@@ -58,6 +58,21 @@ import sys
 
 import pandas as pd
 
+# All of our project-specific imports must be relative to the 
+# `scripts` folder which we assume is at the first level of the
+# repository. 
+# NB: ***If `scripts` moves, this code will have to change.***
+# Walk up our current working directory tree until you find the
+# repository root, then add the scripts directory to sys.path
+REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
+if REPO_ROOT is None:
+	# This is a running-from-docker or other non-git environment cry for help.
+    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+import shared.build_manifest as build_manifest
+import shared.resolve_path as resolve_path
+
 
 O3_DIR = Path(__file__).resolve().parent
 DEFAULT_LOG_FILENAME = 'o3_score.log'
@@ -78,34 +93,11 @@ canonical_block_group_pop = 'block_group_pop'
 O3_STORAGE_MODES = ('local', 'remote')
 
 
-def _resolve_scripts_dir() -> Path:
-	current_path = Path(__file__).resolve()
-	for parent in current_path.parents:
-		if parent.name == 'scripts':
-			return parent
-	raise RuntimeError(f'Unable to locate scripts directory from {current_path}')
-
-
-SCRIPTS_DIR = _resolve_scripts_dir()
-if str(SCRIPTS_DIR) not in sys.path:
-	sys.path.insert(0, str(SCRIPTS_DIR))
-
-# Ensure the `scripts/shared` folder is importable so modules in that
-# folder (e.g. build_manifest.py, resolve_path.py) can be imported as
-# top-level modules when running this script directly.
-SHARED_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "shared"
-if str(SHARED_SCRIPTS_DIR) not in sys.path:
-	sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
-
-
 def parse_version_decimal(version_str: str) -> Decimal:
 	try:
 		return Decimal(str(version_str))
 	except (InvalidOperation, TypeError) as exc:
 		raise RuntimeError(f'Invalid version string: {version_str}') from exc
-
-import build_manifest
-import resolve_path
 
 try:
 	from shared.state_config import StateConfig, get_state_config, get_state_config_list
@@ -114,7 +106,6 @@ except Exception as exc:
 		'Failed to import shared.state_config. Ensure scripts/shared/state_config.py is present and '
 		'that the repository root (containing the scripts directory) is on PYTHONPATH.'
 	) from exc
-
 
 
 @dataclass(frozen=True, slots=True)

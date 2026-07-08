@@ -22,18 +22,29 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+import sys
 
-import resolve_path
+# All of our project-specific imports must be relative to the 
+# `scripts` folder which we assume is at the first level of the
+# repository. 
+# NB: ***If `scripts` moves, this code will have to change.***
+# Walk up our current working directory tree until you find the
+# repository root, then add the scripts directory to sys.path
+REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
+if REPO_ROOT is None:
+	# This is a running-from-docker or other non-git environment cry for help.
+    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS_ROOT))
 
+import shared.resolve_path as resolve_path
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.addHandler(logging.NullHandler())
 
-SCRIPTS_ROOT = Path(__file__).resolve().parent.parent
 VALID_ENVIRONMENTS = {"local", "remote"}
 VALID_TARGET_TYPES = {"indicator", "shared"}
 SHARED_CONFIG_PATH = Path(__file__).with_name("shared_config.json")
-
 
 class _ManifestBuilder:
     def __init__(self) -> None:

@@ -69,8 +69,8 @@ if REPO_ROOT is None:
 	# This is a running-from-docker or other non-git environment cry for help.
     # Undone: Handle non-git environments more gracefully when needed.
     raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
-SCRIPTS_ROOT = REPO_ROOT / "scripts"
-sys.path.insert(0, str(SCRIPTS_ROOT))
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
 
 import shared.build_manifest as build_manifest
 import shared.resolve_path as resolve_path

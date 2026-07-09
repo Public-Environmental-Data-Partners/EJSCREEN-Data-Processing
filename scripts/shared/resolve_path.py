@@ -146,6 +146,7 @@ class _PathResolver:
         return {"root": root, "relative": relative}
 
     def _load_indicator_config(self, indicator: str) -> dict[str, object]:
+        logging.info("Loading indicator config for %s, SCRIPTS_ROOT: %s", indicator, SCRIPTS_ROOT)
         if indicator in self._indicator_config_cache:
             return self._indicator_config_cache[indicator]
 

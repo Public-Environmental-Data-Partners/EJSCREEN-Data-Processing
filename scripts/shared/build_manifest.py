@@ -33,6 +33,7 @@ import sys
 REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
 if REPO_ROOT is None:
 	# This is a running-from-docker or other non-git environment cry for help.
+    # Undone: Handle non-git environments more gracefully when needed.
     raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
 SCRIPTS_ROOT = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_ROOT))

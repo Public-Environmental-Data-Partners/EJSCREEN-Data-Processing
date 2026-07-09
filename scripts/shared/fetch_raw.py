@@ -59,7 +59,12 @@ if REPO_ROOT is None:
     # Undone: Handle non-git environments more gracefully when needed.
     raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
 SCRIPTS_DIR = REPO_ROOT / "scripts"
+logging.info("REPO_ROOT: %s", REPO_ROOT)
+logging.info("SCRIPTS_DIR: %s", SCRIPTS_DIR)
 sys.path.insert(0, str(SCRIPTS_DIR))
+
+import shared.build_manifest as build_manifest
+import shared.resolve_path as resolve_path
 
 PROCESS_NAME = 'fetch_raw'
 DEFAULT_LOG_FILENAME = 'fetch_raw.log'
@@ -278,9 +283,7 @@ def get_config(argv=None) -> Config:
     parser.add_argument('--dry-run', action='store_true', help='Optional: Print expanded source URL and destination path and exit')
  
     args = parser.parse_args(argv)
-
     indicator = args.indicator
-    scripts_root = SCRIPTS_DIR.parent
 
     # If the user provided a --state value, validate it early and obtain the
     # canonical postal and fips values from the shared state config. Support
@@ -337,7 +340,7 @@ def get_config(argv=None) -> Config:
         local_root = resolve_path.get_shared_root(asset_name, version, 'local')
         remote_root = resolve_path.get_shared_root(asset_name, version, 'remote')
     else:
-        indicator_config = _load_json_object(scripts_root / indicator / f'{indicator}_config.json', f'indicator {indicator}')
+        indicator_config = _load_json_object(SCRIPTS_DIR / indicator / f'{indicator}_config.json', f'indicator {indicator}')
         versions = _require_mapping(indicator_config.get('versions'), f'{indicator}.versions')
         version = _resolve_version(versions, f'indicator {indicator}', args.version)
         request_timeout_seconds, chunk_size_bytes = _get_download_settings(indicator_config, indicator)
@@ -814,6 +817,8 @@ def main(argv=None) -> int:
 
 
 if __name__ == '__main__':
+    logging.info("Starting fetch_raw script")
+    logging.info("SCRIPTS_DIR: %s", SCRIPTS_DIR)
     try:
         raise SystemExit(main())
     except FileNotFoundError as exc:

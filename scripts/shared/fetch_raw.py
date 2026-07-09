@@ -56,13 +56,11 @@ import requests
 REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
 if REPO_ROOT is None:
 	# This is a running-from-docker or other non-git environment cry for help.
+    # Undone: Handle non-git environments more gracefully when needed.
     raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
 
-import shared.build_manifest as build_manifest
-import shared.resolve_path as resolve_path
-
-SCRIPTS_DIR = Path(__file__).resolve().parent
 PROCESS_NAME = 'fetch_raw'
 DEFAULT_LOG_FILENAME = 'fetch_raw.log'
 DEFAULT_AUDIT_FILENAME = 'fetch_audit.csv'

@@ -29,11 +29,19 @@ import json
 import logging
 from pathlib import Path
 
+# For any local paths that we need to resolve, we want them to
+# consistently be resolved relative to the project root, no matter 
+# where this code is executed from.
+REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
+if REPO_ROOT is None:
+	# This is a running-from-docker or other non-git environment cry for help.
+    # Undone: Handle non-git environments more gracefully when needed.
+    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.addHandler(logging.NullHandler())
 
-SCRIPTS_ROOT = Path(__file__).resolve().parent.parent
 SHARED_CONFIG_PATH = Path(__file__).with_name("shared_config.json")
 VALID_ENVIRONMENTS = {"local", "remote"}
 VALID_SHARED_CATEGORIES = {"downloads", "preprocessed_input"}
@@ -266,9 +274,7 @@ def get_indicator_root(indicator: str, version: str, environment: str = "local")
     _ = resolver._get_indicator_version_block(config, indicator, version)
     root = resolver._get_root(config, environment, f"indicator {indicator}")
     if environment == "local":
-        # Resolve relative local roots against the project root (scripts parent)
-        project_root = SCRIPTS_ROOT.parent
-        return str((project_root / root).resolve())
+        return str((REPO_ROOT / root).resolve())
     return root
 
 
@@ -285,8 +291,7 @@ def get_shared_root(asset: str, version: str, environment: str = "local") -> str
     _ = resolver._get_shared_version_block(config, asset, version)
     root = resolver._get_root(config, environment, "shared")
     if environment == "local":
-        project_root = SCRIPTS_ROOT.parent
-        return str((project_root / root).resolve())
+        return str((REPO_ROOT / root).resolve())
     return root
 
 

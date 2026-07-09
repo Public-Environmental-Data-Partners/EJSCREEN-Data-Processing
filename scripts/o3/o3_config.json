@@ -1,5 +1,5 @@
 {
-  "local_root_path": "./pipeline/o3/",
+  "local_root_path": "pipeline/o3/",
   "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/pipeline/o3/",
   "download_settings": {
     "request_timeout_seconds": 120,

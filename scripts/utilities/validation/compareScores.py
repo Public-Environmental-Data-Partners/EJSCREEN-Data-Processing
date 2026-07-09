@@ -62,8 +62,6 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import math
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -72,6 +70,19 @@ import geopandas as gpd
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize, TwoSlopeNorm
 
+# All of our project-specific imports must be relative to the 
+# `scripts` folder which we assume is at the first level of the
+# repository. 
+# NB: ***If `scripts` moves, this code will have to change.***
+# Walk up our current working directory tree until you find the
+# repository root, then add the scripts directory to sys.path
+REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
+if REPO_ROOT is None:
+	# This is a running-from-docker or other non-git environment cry for help.
+    # Undone: Handle non-git environments more gracefully when needed.
+    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS_ROOT))
 
 REQUIRED_FIELDS = (
     'indicator',

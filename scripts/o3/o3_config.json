@@ -16,7 +16,7 @@
           "outputs": {
             "raw_o3": {
               "type": "download",
-              "relative_path": "v1.2/downloads/2022/2022_ozone_daily_8hour_maximum.txt.gz",
+              "relative_path": "v{version}/downloads/2022/2022_ozone_daily_8hour_maximum.txt.gz",
               "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2022_ozone_daily_8hour_maximum.txt.gz",
               "notes": "Check for updates at: https://www.epa.gov/hesc/rsig-related-downloadable-data-files?#output"
             }
@@ -32,11 +32,11 @@
           "outputs": {
             "output_directory": {
               "type": "directory",
-              "relative_path": "v1.2/preprocessed_input/"
+              "relative_path": "v{version}/preprocessed_input/"
             },
             "main_tract_averages": {
               "type": "file",
-              "relative_path": "v1.2/preprocessed_input/o3_tract_annual_average.csv"
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
             }
           }
         },
@@ -44,7 +44,7 @@
           "inputs": {
             "preprocessed_tracts": {
               "type": "file",
-              "relative_path": "v1.2/preprocessed_input/o3_tract_annual_average.csv"
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
             },
             "weights": {
               "type": "shared_asset",
@@ -55,11 +55,11 @@
           "outputs": {
             "output_directory": {
               "type": "directory",
-              "relative_path": "v1.2/output/indicators/"
+              "relative_path": "v{version}/score_output/"
             },
             "indicator_output_template": {
               "type": "template",
-              "relative_path": "v1.2/output/indicators/{postal}/"
+              "relative_path": "v{version}/score_output/{postal}/"
             }
           }
         }
@@ -75,7 +75,7 @@
           "outputs": {
             "raw_o3": {
               "type": "download",
-              "relative_path": "v1.1/downloads/2021/2021_ozone_daily_8hour_maximum.txt.gz",
+              "relative_path": "v{version}/downloads/2021/2021_ozone_daily_8hour_maximum.txt.gz",
               "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2021_ozone_daily_8hour_maximum.txt.gz",
               "notes": "Check for updates at: https://www.epa.gov/hesc/rsig-related-downloadable-data-files?#output"
             }
@@ -91,11 +91,11 @@
           "outputs": {
             "output_directory": {
               "type": "directory",
-              "relative_path": "v1.1/preprocessed_input/"
+              "relative_path": "v{version}/preprocessed_input/"
             },
             "main_tract_averages": {
               "type": "file",
-              "relative_path": "v1.1/preprocessed_input/o3_tract_annual_average.csv"
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
             }
           }
         },
@@ -103,7 +103,7 @@
           "inputs": {
             "preprocessed_tracts": {
               "type": "file",
-              "relative_path": "v1.1/preprocessed_input/o3_tract_annual_average.csv"
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
             },
             "weights": {
               "type": "shared_asset",
@@ -114,11 +114,11 @@
           "outputs": {
             "output_directory": {
               "type": "directory",
-              "relative_path": "v1.1/output/indicators/"
+              "relative_path": "v{version}/score_output/"
             },
             "indicator_output_template": {
               "type": "template",
-              "relative_path": "v1.1/output/indicators/{postal}/"
+              "relative_path": "v{version}/score_output/{postal}/"
             }
           }
         }
@@ -134,7 +134,7 @@
           "outputs": {
             "raw_o3": {
               "type": "download",
-              "relative_path": "v1.0/downloads/2020/2020_ozone_daily_8hour_maximum.txt.gz",
+              "relative_path": "v{version}/downloads/2020/2020_ozone_daily_8hour_maximum.txt.gz",
               "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2020_ozone_daily_8hour_maximum.txt.gz",
               "notes": "Check for updates at: https://www.epa.gov/hesc/rsig-related-downloadable-data-files?#output"
             }
@@ -150,11 +150,11 @@
           "outputs": {
             "output_directory": {
               "type": "directory",
-              "relative_path": "v1.0/preprocessed_input/"
+              "relative_path": "v{version}/preprocessed_input/"
             },
             "main_tract_averages": {
               "type": "file",
-              "relative_path": "v1.0/preprocessed_input/o3_tract_annual_average.csv"
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
             }
           }
         },
@@ -162,7 +162,7 @@
           "inputs": {
             "preprocessed_tracts": {
               "type": "file",
-              "relative_path": "v1.0/preprocessed_input/o3_tract_annual_average.csv"
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
             },
             "weights": {
               "type": "shared_asset",
@@ -173,11 +173,11 @@
           "outputs": {
             "output_directory": {
               "type": "directory",
-              "relative_path": "v1.0/output/indicators/"
+              "relative_path": "v{version}/score_output/"
             },
             "indicator_output_template": {
               "type": "template",
-              "relative_path": "v1.0/output/indicators/{postal}/"
+              "relative_path": "v{version}/score_output/{postal}/"
             }
           }
         }
@@ -231,11 +231,11 @@
           "outputs": {
             "output_directory": {
               "type": "directory",
-              "relative_path": "v0.6/output/indicators/"
+              "relative_path": "v0.6/output/"
             },
             "indicator_output_template": {
               "type": "template",
-              "relative_path": "v0.6/output/indicators/{postal}/"
+              "relative_path": "v0.6/output/{postal}/"
             }
           }
         }
@@ -289,11 +289,11 @@
           "outputs": {
             "output_directory": {
               "type": "directory",
-              "relative_path": "v0.5/output/indicators/"
+              "relative_path": "v0.5/output/"
             },
             "indicator_output_template": {
               "type": "template",
-              "relative_path": "v0.5/output/indicators/{postal}/"
+              "relative_path": "v0.5/output/{postal}/"
             }
           }
         }

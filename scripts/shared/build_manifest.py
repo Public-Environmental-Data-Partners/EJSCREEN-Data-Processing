@@ -74,6 +74,7 @@ class _ManifestBuilder:
                     stage_block,
                     f"{name}.versions.{version}.stages.{stage}",
                     environment,
+                    version,
                 ),
             }
 
@@ -87,6 +88,7 @@ class _ManifestBuilder:
                 stage_block,
                 f"shared.assets.{name}.{version}.stages.{stage}",
                 environment,
+                version,
             ),
         }
         return manifest
@@ -137,6 +139,7 @@ class _ManifestBuilder:
                     entry_mapping,
                     field_prefix,
                     environment,
+                    version,
                 )
                 continue
 
@@ -150,10 +153,11 @@ class _ManifestBuilder:
         entry_mapping: dict[str, object],
         field_prefix: str,
         environment: str,
+        version: str,
     ) -> dict[str, str]:
         # Indicator inputs that reference local files/directories/templates
         # reuse the same relative entry compilation used for outputs.
-        return self._compile_relative_entry(config, entry_mapping, field_prefix, environment)
+        return self._compile_relative_entry(config, entry_mapping, field_prefix, environment, version)
 
     def _compile_shared_inputs(
         self,
@@ -179,6 +183,7 @@ class _ManifestBuilder:
         stage_block: dict[str, object],
         field_prefix: str,
         environment: str,
+        version: str,
     ) -> dict[str, dict[str, str]]:
         outputs = self._optional_mapping(stage_block.get("outputs"), "outputs")
         compiled: dict[str, dict[str, str]] = {}
@@ -191,6 +196,7 @@ class _ManifestBuilder:
                 entry_mapping,
                 output_prefix,
                 environment,
+                version,
             )
 
         return compiled
@@ -201,9 +207,11 @@ class _ManifestBuilder:
         entry_mapping: dict[str, object],
         field_prefix: str,
         environment: str,
+        version: str,
     ) -> dict[str, str]:
         root = self._get_root(config, environment, "target")
         relative = self._extract_relative_value(entry_mapping, field_prefix)
+        relative = resolve_path.substitute_version_placeholder(relative, version)
         compiled: dict[str, str] = {"root": root, "relative": relative}
 
         # Optionally copy fetch/source metadata when present (fetch outputs

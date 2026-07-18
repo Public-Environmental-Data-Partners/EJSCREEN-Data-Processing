@@ -4,7 +4,8 @@
 Purpose:
     Compare two indicator score CSVs and produce matched rows, a scatter plot,
     summary metrics, and (optionally) a four-panel map. Intended for quick
-    validation and reporting of differences between two versions or sources.
+    validation and reporting of differences between scores either based
+    on different raw input or computed with different versions of the processing pipeline.
 
 Process summary:
     - Merge configuration from a JSON file and CLI args (CLI overrides file).
@@ -83,6 +84,9 @@ if REPO_ROOT is None:
     raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
 SCRIPTS_ROOT = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_ROOT))
+
+import shared.build_manifest as build_manifest
+import shared.resolve_path as resolve_path
 
 REQUIRED_FIELDS = (
     'indicator',

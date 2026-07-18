@@ -82,10 +82,16 @@ DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
 TRACT_GEOID_COLUMN = 'tract_geoid'
 ANNUAL_AVERAGE_COLUMN = 'annual_average_ten_highest_MDA8'
 FINAL_SCORE_COLUMN = 'o3_score'  #Edit this to match EJAM/EJSCREEN e.g. o3
+
 # Column name defaults (lower_snake_case variables). Default to V1 names.
 # These are selected per-version at read time and then mapped to the canonical
 # names used throughout the downstream code.
-block_group_geoid_col = 'block_group_geoid_2022'
+# Note that the 2020, 2021, and 2022 raw o3 data files all use
+# the 2020 block_group_geoid values, not the block_group_geoid_2022 values
+# (which are only different for CT anyway). 
+block_group_geoid_col = 'block_group_geoid'
+# But, from version 1.0 onward, the population column that we use
+# for assigning nulls to zero-population block groups is the ACS 2022 population column.
 block_group_pop_col = 'acs_2022_bg_pop'
 state_abb_col = 'state_abb'
 
@@ -480,8 +486,9 @@ def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataF
 	bg_geoid_col = block_group_geoid_col
 	bg_pop_col = block_group_pop_col
 	if cfg.version_decimal is not None and cfg.version_decimal < Decimal('1.0'):
-		# Older manifests use the original column names
-		bg_geoid_col = 'block_group_geoid'
+		# Before version 1.0, we used the block_group_pop column for 
+		# determining null scores.
+		#bg_geoid_col = 'block_group_geoid'
 		bg_pop_col = 'block_group_pop'
 
 	usecols = [state_abb_col, bg_geoid_col, bg_pop_col]

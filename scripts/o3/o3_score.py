@@ -20,7 +20,7 @@ Process summary:
 
 Runtime arguments (current defaults shown):
 		- -l/--location: required one of `local` or `remote`.
-		- --state: required two-letter state code (e.g. `WY`) or `all` (case-insensitive) to process the full
+		- -s/--state: required two-letter state code (e.g. `WY`) or `all` (case-insensitive) to process the full
 			configured set. Use `--state all` to iterate across all configured states (the code maps this to
 			an internal `None` which `load_state_targets()` interprets as "all").
 		- --output-dir: optional explicit output directory (local path or S3 URI). Default: none (uses indicator output template).

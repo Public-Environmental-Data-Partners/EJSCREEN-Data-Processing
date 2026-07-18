@@ -5,29 +5,45 @@ Purpose:
     scores. It depends on the stage-based indicator and shared config .json files
     to specify fetch outputs, source locations, and destination paths.
 
-Usage examples:
+Process summary:
+    - Resolve the indicator or shared config, stage manifest, and canonical local/remote
+        root paths for the requested target.
+    - Validate `--state` (or expand the source/destination templates for every configured
+        state when `--state all` is requested).
+    - Skip the download if the destination file already exists.
+    - Stream the source URL to the destination, logging heartbeat progress periodically.
+    - Append one row per attempted download to fetch_audit.csv.
+    - Print and log a run summary (succeeded/failed/skipped counts).
 
-    # Simple indicator with a default download
-    python shared/fetch_raw.py --indicator pm25 --storage-mode local
+Runtime arguments (current defaults shown):
+    - -i/--indicator: required. Indicator key such as `pm25`, `o3`, or `shared`.
+    - -l/--location: required one of `local` or `remote`.
+    - -d/--download: optional fetch-stage output key. Required when the selected target has
+        multiple fetch outputs, and always required for shared fetches.
+    - -v/--version: optional; required only when the selected target has more than one
+        configured version.
+    - -s/--state: optional two-letter postal code (e.g. `VT`) for state-scoped downloads.
+        Validated against `scripts/shared/state_config.json` and translated to the FIPS code
+        used in filenames and URLs. The postal code (uppercased) is stored in the audit. The
+        special value `all` (case-insensitive) iterates across all configured states.
+    - --dry-run: long-only flag. Prints the expanded source URL and destination path without
+        downloading.
 
-    # Remote fetch for ozone
-    python shared/fetch_raw.py --indicator o3 --storage-mode remote
+Outputs:
+    - The downloaded raw file at the resolved local path or S3 URI.
+    - One appended row per attempted download in fetch_audit.csv (scripts/shared), recording
+        run id, timing, status (`uploaded`/`skipped`/`failed`), and bytes downloaded.
+    - fetch_raw.log in scripts/shared.
 
-    # Shared tiger BG download for Vermont (postal code). --state uses two-letter postal codes.
-    python shared/fetch_raw.py --indicator shared --download tiger_bg_2020 --state VT --storage-mode local
+Examples (run from the `scripts` folder):
+    - Simple indicator with a default download:
+        python3 shared/fetch_raw.py --indicator pm25 -l local
 
-Notes:
-    - `--storage-mode`/`-l` is required and must be either `local` or `remote`.
-    - `--download` selects a fetch-stage output key. It is required when the selected target has
-        multiple fetch outputs, and for shared fetches.
-    - `--version` is optional only when the selected target has exactly one configured version.
-    - `--state`
-        - For state-scoped downloads use `--state` with a two-letter postal code which will be
-            validated against `scripts/shared/state_config.json` and translated to the FIPS code
-            used in filenames and URLs. The postal code (uppercased) is stored in the audit.
-        - The special value `all` is supported for `--state` (case-insensitive) to iterate across
-            all configured states.
-    - Use `--dry-run` to print the expanded source URL and destination path without downloading.
+    - Remote fetch for ozone:
+        python3 shared/fetch_raw.py --indicator o3 -l remote
+
+    - Shared tiger BG download for Vermont (postal code). --state uses two-letter postal codes:
+        python3 shared/fetch_raw.py --indicator shared --download tiger_bg_2020 --state VT -l local
 """
 
 from __future__ import annotations
@@ -274,7 +290,7 @@ def get_config(argv=None) -> Config:
     parser = argparse.ArgumentParser(description='Centralized raw data fetch utility.')
     # Required arguments (listed first)
     parser.add_argument('-i', '--indicator', required=True, help='Required: Indicator key such as pm25 or shared')
-    parser.add_argument('-l', '--location', '--storage-mode', dest='storage_mode', choices=('local', 'remote'), required=True, help='Required: Select storage location (local or remote)')
+    parser.add_argument('-l', '--location', dest='storage_mode', choices=('local', 'remote'), required=True, help='Required: Select storage location (local or remote)')
 
     # Optional arguments
     parser.add_argument('-d', '--download', help='Optional: Fetch-stage output key from the stage-based config')

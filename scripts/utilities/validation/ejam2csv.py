@@ -75,8 +75,10 @@ from typing import Optional
 class Config:
     # State code (USPS or FIPS-style short code); user must supply on CLI
     state_code: str = ""
-    # destination path for the csv file
-    path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
+    # `location` determines which root to use (local or remote)
+    location: str = "local"
+    # destination path for the csv file (kept for backward compatibility; unused in Slice 1)
+    path: str = ""
     # number of rows to process; <=0 or None means process all rows
     number_rows: Optional[int] = 0
     dry_run: bool = False
@@ -93,8 +95,9 @@ def get_config(argv=None) -> Config:
     # Order: state_code, path, number_rows, dry_run, then others
     parser.add_argument('--state', '--state-code', dest='state_code', type=str, required=True,
                         help='State code (e.g. RI); will be upper-cased and used for API request and as output folder')
-    parser.add_argument('-p', '--path', type=str, default=Config.path,
-                        help='S3 path prefix or local folder for output (default local example: ./output/)')
+    parser.add_argument('-l', '--location', dest='location', type=str, required=True,
+                        choices=['local', 'remote'],
+                        help='Where to write outputs; must be "local" or "remote"')
     parser.add_argument('--data-type', '--type', dest='data_type', type=str, default=Config.data_type,
                         choices=['superfund', 'traffic', 'hazardous_waste', 'pm25', 'o3'],
                         help='indicator to extract from the EJAM response (default: traffic)')
@@ -308,11 +311,16 @@ def main(argv=None) -> None:
     # Use simplified config/CLI parsing
     config = get_config(argv)
 
-    print(f"Will be writing to path: {config.path}")
+    # Determine validation root based on requested location
+    from validation_paths import get_validation_root, join_root_and_relative_path
 
-    # write into a state-specific folder and use a short filename
+    root = get_validation_root(config.location)
+
+    # write into a state-specific folder under pipeline/compare/ejamOG/{STATE}/
     output_file = f"ejam_{config.data_type}_subset.csv"
-    out_path = join_path_and_file(config.path, f"{config.state_code}/{output_file}")
+    out_rel = f"compare/ejamOG/{config.state_code}/{output_file}"
+    out_path = join_root_and_relative_path(root, out_rel)
+
     limit = config.number_rows
     dry_run = config.dry_run
 
@@ -320,14 +328,19 @@ def main(argv=None) -> None:
     url = "https://ejamapi-84652557241.us-central1.run.app/data"
     # Use configured state code (uppercased)
     request_data = {"buffer": 0, "fips": config.state_code, "scale": "blockgroup"}
+    # If dry-run, don't make the API call — just report resolved path and exit.
+    if dry_run:
+        print(f"--dry-run: no files will be written. Would write to: {out_path}")
+        return
 
     resp = requests.post(url, json=request_data)
     resp.raise_for_status()
     print("HTTP status:", resp.status_code)
 
     data = resp.json()
-    # dump the raw JSON response to a file for inspection (limited)
-    dumpRequestJson(data, path=config.path, state_code=config.state_code, limit=limit)
+    # dump the raw JSON response to the same compare folder (alongside the CSV)
+    dump_dir = join_root_and_relative_path(root, f"compare/ejamOG/{config.state_code}")
+    dumpRequestJson(data, filename='ejam_response.json', path=dump_dir, state_code=None, limit=limit)
     print("response type:", type(data))
 
     # The API returns a list-of-dicts; construct DataFrame directly

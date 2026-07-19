@@ -128,6 +128,7 @@ def merge_config(file_config: Optional[Dict[str, Any]], cli_args: argparse.Names
         'score_b': 'score_b',
         'version_b': 'version_b',
         'out_dir': 'out_dir',
+        'location': 'location',
     }
 
     for arg_name, key in cli_to_key.items():
@@ -197,6 +198,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument('--version-b', type=str, help='Version label for file B')
 
     parser.add_argument('--out-dir', type=str, default=None, help='Optional output directory')
+    parser.add_argument('-l', '--location', dest='location', type=str, required=True, choices=['local', 'remote'],
+                        help='Where to read/write files: "local" or "remote"')
     parser.add_argument('--dry-run', action='store_true', help='Validate and print merged config; do not run')
 
     return parser.parse_args(argv)

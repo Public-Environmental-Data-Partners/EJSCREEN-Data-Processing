@@ -11,6 +11,15 @@ This is intentionally minimal for Slice 1: it provides
 from pathlib import Path
 import json
 import os
+import io
+import pandas as pd
+
+try:
+    import boto3
+    from botocore.exceptions import ClientError
+except Exception:
+    boto3 = None
+    ClientError = Exception
 
 # Determine repository root (look for .git like resolve_path.py does)
 REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
@@ -55,3 +64,57 @@ def join_root_and_relative_path(root: str, relative: str) -> str:
     if is_s3_uri(root):
         return root.rstrip('/') + '/' + str(relative).lstrip('/')
     return str(Path(root) / relative)
+
+
+def exists_s3_or_local(path: str) -> bool:
+    """Return True if the given path exists locally or in S3."""
+    if is_s3_uri(path):
+        if boto3 is None:
+            raise RuntimeError("boto3 required to check S3 URIs but is not installed")
+        tail = path[5:]
+        parts = tail.split('/', 1)
+        if len(parts) != 2:
+            return False
+        bucket, key = parts[0], parts[1]
+        s3 = boto3.client('s3')
+        try:
+            s3.head_object(Bucket=bucket, Key=key)
+            return True
+        except ClientError:
+            return False
+        except Exception:
+            return False
+    # local path
+    try:
+        return Path(path).exists()
+    except Exception:
+        return False
+
+
+def read_csv_s3_or_local(path: str, **pd_kwargs) -> pd.DataFrame:
+    """Read CSV from local filesystem or S3 and return a pandas DataFrame.
+
+    Uses `boto3` for S3 reads; raises informative errors when boto3 is missing
+    or the S3 object cannot be found.
+    """
+    if is_s3_uri(path):
+        if boto3 is None:
+            raise RuntimeError("boto3 required to read S3 URIs but is not installed")
+        tail = path[5:]
+        parts = tail.split('/', 1)
+        if len(parts) != 2:
+            raise ValueError(f"Invalid S3 URI: {path}")
+        bucket, key = parts[0], parts[1]
+        s3 = boto3.client('s3')
+        try:
+            resp = s3.get_object(Bucket=bucket, Key=key)
+            body = resp['Body'].read()
+            # let pandas infer text/binary; use BytesIO
+            return pd.read_csv(io.BytesIO(body), **pd_kwargs)
+        except ClientError as exc:
+            raise FileNotFoundError(f"S3 object not found: {path}: {exc}")
+        except Exception as exc:
+            raise RuntimeError(f"Failed to read S3 object {path}: {exc}")
+
+    # local file: delegate to pandas
+    return pd.read_csv(path, **pd_kwargs)

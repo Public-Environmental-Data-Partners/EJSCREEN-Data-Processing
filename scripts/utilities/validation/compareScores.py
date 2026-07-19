@@ -87,6 +87,7 @@ sys.path.insert(0, str(SCRIPTS_ROOT))
 
 import shared.build_manifest as build_manifest
 import shared.resolve_path as resolve_path
+import utilities.validation.validation_paths as validation_paths
 
 REQUIRED_FIELDS = (
     'indicator',
@@ -206,7 +207,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
 
 def read_csv_coerce(path: str, id_col: str, score_col: str) -> pd.DataFrame:
-    df = pd.read_csv(path, dtype=str)
+    # Use validation_paths helper to read from local or s3 transparently
+    df = validation_paths.read_csv_s3_or_local(path, dtype=str)
     if id_col not in df.columns:
         raise KeyError(f"ID column '{id_col}' not found in {path}")
     if score_col not in df.columns:
@@ -449,23 +451,82 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     print('Configuration validated. Running comparator.')
 
-    # Prepare output paths
-    out_dir = Path(merged['out_dir'])
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Prepare output paths: resolve relative out_dir against the validation root for the selected location
+    out_dir_raw = merged.get('out_dir')
+    if out_dir_raw is None:
+        raise RuntimeError('out_dir must be set at this point')
 
-    matched_csv = out_dir / f"matched_rows_{merged['indicator']}_{merged['version_a']}_vs_{merged['version_b']}.csv"
-    scatter_png = out_dir / f"scatter_{merged['indicator']}_{merged['version_a']}_vs_{merged['version_b']}.png"
-    compare_summary = out_dir / 'compare_summary.txt'
+    # If out_dir is an absolute local path or an S3 URI, leave it as-is.
+    # Otherwise join against validation root. If the user already wrote a
+    # root-relative value like 'pipeline/...' strip that prefix to avoid
+    # duplicating 'pipeline/pipeline' when joining.
+    if validation_paths.is_s3_uri(out_dir_raw):
+        resolved_out_dir = out_dir_raw
+    else:
+        p = Path(out_dir_raw)
+        if p.is_absolute():
+            resolved_out_dir = str(p)
+        else:
+            root = validation_paths.get_validation_root(merged['location'])
+            # determine the root basename (works for both local absolute roots and remote s3 roots)
+            root_basename = str(root).rstrip('/').split('/')[-1]
+            if out_dir_raw == root_basename:
+                # user wants the root itself
+                resolved_out_dir = root
+            elif out_dir_raw.startswith(root_basename + '/'):
+                # strip the leading 'pipeline/' (or other root name) and join remainder
+                remainder = out_dir_raw[len(root_basename) + 1 :]
+                resolved_out_dir = validation_paths.join_root_and_relative_path(root, remainder)
+            else:
+                resolved_out_dir = validation_paths.join_root_and_relative_path(root, out_dir_raw)
+
+    # If local path, create directory. For S3, do not attempt to create.
+    if validation_paths.is_s3_uri(resolved_out_dir):
+        logging.info('Using remote out_dir (no local mkdir): %s', resolved_out_dir)
+        out_dir = resolved_out_dir
+    else:
+        out_dir = Path(resolved_out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build file paths (strings for remote, Path for local)
+    def _join_out(name: str):
+        if isinstance(out_dir, str) and validation_paths.is_s3_uri(out_dir):
+            return out_dir.rstrip('/') + '/' + name
+        return out_dir / name
+
+    matched_csv = _join_out(f"matched_rows_{merged['indicator']}_{merged['version_a']}_vs_{merged['version_b']}.csv")
+    scatter_png = _join_out(f"scatter_{merged['indicator']}_{merged['version_a']}_vs_{merged['version_b']}.png")
+    compare_summary = _join_out('compare_summary.txt')
 
     try:
-        # Read inputs
-        if not Path(merged['file_a']).exists():
-            raise FileNotFoundError(f"File A not found: {merged['file_a']}")
-        if not Path(merged['file_b']).exists():
-            raise FileNotFoundError(f"File B not found: {merged['file_b']}")
+        # Resolve and log the full paths we are about to open for easier debugging
+        try:
+            if validation_paths.is_s3_uri(merged['file_a']):
+                resolved_a = merged['file_a']
+            else:
+                resolved_a = str((REPO_ROOT / merged['file_a']).resolve())
+        except Exception:
+            resolved_a = merged['file_a']
+        try:
+            if validation_paths.is_s3_uri(merged['file_b']):
+                resolved_b = merged['file_b']
+            else:
+                resolved_b = str((REPO_ROOT / merged['file_b']).resolve())
+        except Exception:
+            resolved_b = merged['file_b']
 
-        df_a = read_csv_coerce(merged['file_a'], merged['id_a'], merged['score_a'])
-        df_b = read_csv_coerce(merged['file_b'], merged['id_b'], merged['score_b'])
+        logging.info('Opening File A: raw=%s resolved=%s', merged['file_a'], resolved_a)
+        logging.info('Opening File B: raw=%s resolved=%s', merged['file_b'], resolved_b)
+
+        # Check existence against the resolved paths (S3 URIs remain unchanged)
+        if not validation_paths.exists_s3_or_local(resolved_a):
+            raise FileNotFoundError(f"File A not found: {resolved_a}")
+        if not validation_paths.exists_s3_or_local(resolved_b):
+            raise FileNotFoundError(f"File B not found: {resolved_b}")
+
+        # Read inputs (use resolved paths so local relative paths are absolute)
+        df_a = read_csv_coerce(resolved_a, merged['id_a'], merged['score_a'])
+        df_b = read_csv_coerce(resolved_b, merged['id_b'], merged['score_b'])
 
         # Normalize join column name
         df_a = df_a.rename(columns={merged['id_a']: 'id', merged['score_a']: 'score_a'})

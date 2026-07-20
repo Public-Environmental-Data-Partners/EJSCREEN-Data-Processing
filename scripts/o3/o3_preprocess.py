@@ -2,36 +2,37 @@
 
 Purpose:
 	Read the raw national Ozone .txt.gz file directly, validate the tract-keyed
-	input columns, compute one annual average concentration per tract, and write
-	the tract-level intermediate CSV used by the indicator step.
+	input columns, compute one annual average of the ten highest daily 8-hour
+	maximum concentrations per tract, and write the tract-level intermediate CSV
+	used by the indicator step.
 
 Process summary:
 	- Resolve local or remote Ozone storage from the manifest + resolver.
 	- Validate the compressed file header before performing the full read.
 	- Read only the required columns from the raw source.
 	- Validate tract GEOIDs, dates, and numeric Ozone values.
-	- Aggregate to one annual average concentration per tract.
+	- Aggregate to the average of the ten highest daily 8-hour maximum values per tract.
 	- Write the tract-level CSV and log the output range.
 
 Runtime arguments (current defaults shown):
-		- storage_mode (positional): one of `local` or `remote`.
+		- -l/--location: required one of `local` or `remote` (assigned to internal `storage_mode`).
 		- -v/--version: optional config version to use. Default: `1.0`.
 		- --dry-run: long-only flag. When present the script validates the preprocess manifest
 			and source file headers, then exits without reading or writing full outputs.
 
 Outputs:
-		- v1.0/preprocessed_input/o3_tract_annual_average.csv under the active Ozone root (versioned by manifest).
+		- vn.m/preprocessed_input/o3_tract_annual_average.csv, version controlled by manifest.
 		- o3_preprocess.log in scripts/o3.
 
-Examples (run from the `scripts` folder):
+	Examples (run from the `scripts` folder):
 		- Dry-run (local):
-			python3 o3/o3_preprocess.py local --dry-run
+			python3 o3/o3_preprocess.py -l local --dry-run
 
 		- Full run (local, explicit version):
-			python3 o3/o3_preprocess.py local -v 1.0
+			python3 o3/o3_preprocess.py -l local -v 1.0
 
 		- Full run (remote):
-			python3 o3/o3_preprocess.py remote -v 1.0
+			python3 o3/o3_preprocess.py -l remote -v 1.0
 
 """
 
@@ -56,8 +57,10 @@ import sys
 REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
 if REPO_ROOT is None:
 	# This is a running-from-docker or other non-git environment cry for help.
+    # Undone: Handle non-git environments more gracefully when needed.
     raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS_ROOT))
 
 import shared.build_manifest as build_manifest
 import shared.resolve_path as resolve_path
@@ -98,8 +101,10 @@ def get_config(argv=None) -> Config:
 		description='Read the raw national Ozone .txt.gz file, compute tract-level annual average concentration, and write the preprocessed tract CSV.'
 	)
 	parser.add_argument(
-		'storage_mode',
+		'-l', '--location',
+		dest='storage_mode',
 		choices=('local', 'remote'),
+		required=True,
 		help='Select whether the script reads and writes through the configured local root path or remote S3 root path.',
 	)
 	parser.add_argument(

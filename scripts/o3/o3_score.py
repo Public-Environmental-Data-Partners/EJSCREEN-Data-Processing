@@ -20,7 +20,7 @@ Process summary:
 
 Runtime arguments (current defaults shown):
 		- -l/--location: required one of `local` or `remote`.
-		- --state: required two-letter state code (e.g. `WY`) or `all` (case-insensitive) to process the full
+		- -s/--state: required two-letter state code (e.g. `WY`) or `all` (case-insensitive) to process the full
 			configured set. Use `--state all` to iterate across all configured states (the code maps this to
 			an internal `None` which `load_state_targets()` interprets as "all").
 		- --output-dir: optional explicit output directory (local path or S3 URI). Default: none (uses indicator output template).
@@ -67,8 +67,10 @@ import pandas as pd
 REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
 if REPO_ROOT is None:
 	# This is a running-from-docker or other non-git environment cry for help.
+    # Undone: Handle non-git environments more gracefully when needed.
     raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
 
 import shared.build_manifest as build_manifest
 import shared.resolve_path as resolve_path
@@ -80,10 +82,16 @@ DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
 TRACT_GEOID_COLUMN = 'tract_geoid'
 ANNUAL_AVERAGE_COLUMN = 'annual_average_ten_highest_MDA8'
 FINAL_SCORE_COLUMN = 'o3_score'  #Edit this to match EJAM/EJSCREEN e.g. o3
+
 # Column name defaults (lower_snake_case variables). Default to V1 names.
 # These are selected per-version at read time and then mapped to the canonical
 # names used throughout the downstream code.
-block_group_geoid_col = 'block_group_geoid_2022'
+# Note that the 2020, 2021, and 2022 raw o3 data files all use
+# the 2020 block_group_geoid values, not the block_group_geoid_2022 values
+# (which are only different for CT anyway). 
+block_group_geoid_col = 'block_group_geoid'
+# But, from version 1.0 onward, the population column that we use
+# for assigning nulls to zero-population block groups is the ACS 2022 population column.
 block_group_pop_col = 'acs_2022_bg_pop'
 state_abb_col = 'state_abb'
 
@@ -478,8 +486,9 @@ def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataF
 	bg_geoid_col = block_group_geoid_col
 	bg_pop_col = block_group_pop_col
 	if cfg.version_decimal is not None and cfg.version_decimal < Decimal('1.0'):
-		# Older manifests use the original column names
-		bg_geoid_col = 'block_group_geoid'
+		# Before version 1.0, we used the block_group_pop column for 
+		# determining null scores.
+		#bg_geoid_col = 'block_group_geoid'
 		bg_pop_col = 'block_group_pop'
 
 	usecols = [state_abb_col, bg_geoid_col, bg_pop_col]

@@ -7,6 +7,7 @@ Public (flat) module-level functions:
 - get_indicator_root(indicator: str, version: str, environment: str = "local") -> str
 - get_shared_root(asset: str, version: str, environment: str = "local") -> str
 - get_shared_version_block(config: dict, asset_name: str, version: str) -> dict
+- substitute_version_placeholder(template: str, version: str) -> str
 
 Return contract:
 - Functions that resolve locations return a dictionary containing at least the keys
@@ -29,14 +30,34 @@ import json
 import logging
 from pathlib import Path
 
+# For any local paths that we need to resolve, we want them to
+# consistently be resolved relative to the project root, no matter 
+# where this code is executed from.
+REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
+if REPO_ROOT is None:
+	# This is a running-from-docker or other non-git environment cry for help.
+    # Undone: Handle non-git environments more gracefully when needed.
+    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.addHandler(logging.NullHandler())
 
-SCRIPTS_ROOT = Path(__file__).resolve().parent.parent
 SHARED_CONFIG_PATH = Path(__file__).with_name("shared_config.json")
 VALID_ENVIRONMENTS = {"local", "remote"}
 VALID_SHARED_CATEGORIES = {"downloads", "preprocessed_input"}
+
+
+def substitute_version_placeholder(template: str, version: str) -> str:
+    """Replace a literal `{version}` placeholder with the resolved version string.
+
+    This lets config authors write version-scoped relative paths (e.g.
+    `v{version}/downloads/...`) that automatically track the `versions`/`assets.*`
+    dict key instead of requiring a manually maintained duplicate field. Other
+    unresolved placeholders (e.g. `{postal}`, `{fips}`) are left intact for
+    later substitution by the caller.
+    """
+    return template.replace("{version}", version)
 
 
 class _PathResolver:
@@ -67,6 +88,7 @@ class _PathResolver:
             asset.get("relative_path"),
             f"{indicator}.versions.{version}.stages.fetch.outputs.{asset_key}.relative_path",
         )
+        relative = substitute_version_placeholder(relative, version)
         root = self._get_root(config, environment, f"indicator {indicator}")
         return {"root": root, "relative": relative}
 
@@ -115,6 +137,7 @@ class _PathResolver:
                 preprocess_asset.get("relative_path_template"),
                 f"shared.assets.{asset}.{version}.stages.preprocess.outputs.{asset}.relative_path_template",
             )
+            relative = substitute_version_placeholder(relative, version)
         else:
             if not asset_key:
                 self._fail(
@@ -133,11 +156,13 @@ class _PathResolver:
                 download_asset.get("relative_path_template"),
                 f"shared.assets.{asset}.{version}.stages.fetch.outputs.{asset_key}.relative_path_template",
             )
+            relative = substitute_version_placeholder(relative, version)
 
         root = self._get_root(config, environment, "shared")
         return {"root": root, "relative": relative}
 
     def _load_indicator_config(self, indicator: str) -> dict[str, object]:
+        logging.info("Loading indicator config for %s, SCRIPTS_ROOT: %s", indicator, SCRIPTS_ROOT)
         if indicator in self._indicator_config_cache:
             return self._indicator_config_cache[indicator]
 
@@ -266,9 +291,7 @@ def get_indicator_root(indicator: str, version: str, environment: str = "local")
     _ = resolver._get_indicator_version_block(config, indicator, version)
     root = resolver._get_root(config, environment, f"indicator {indicator}")
     if environment == "local":
-        # Resolve relative local roots against the project root (scripts parent)
-        project_root = SCRIPTS_ROOT.parent
-        return str((project_root / root).resolve())
+        return str((REPO_ROOT / root).resolve())
     return root
 
 
@@ -285,8 +308,7 @@ def get_shared_root(asset: str, version: str, environment: str = "local") -> str
     _ = resolver._get_shared_version_block(config, asset, version)
     root = resolver._get_root(config, environment, "shared")
     if environment == "local":
-        project_root = SCRIPTS_ROOT.parent
-        return str((project_root / root).resolve())
+        return str((REPO_ROOT / root).resolve())
     return root
 
 

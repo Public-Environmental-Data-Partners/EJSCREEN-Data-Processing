@@ -84,8 +84,10 @@ def get_config(argv=None) -> Config:
 		description='Read the raw national PM2.5 .txt.gz file, compute tract-level annual average concentration, and write the preprocessed tract CSV.'
 	)
 	parser.add_argument(
-		'storage_mode',
+		'-l', '--location',
+		dest='storage_mode',
 		choices=('local', 'remote'),
+		required=True,
 		help='Select whether the script reads and writes through the configured local root path or remote S3 root path.',
 	)
 	parser.add_argument(
@@ -359,6 +361,22 @@ def main(argv=None) -> int:
 	grouped = build_tract_annual_average_table(prepared)
 	write_df_s3_or_local(grouped, output_path)
 	log_summary(prepared, grouped, output_path)
+	# Print a concise summary similar to o3_preprocess for single-run clarity
+	try:
+		total = 1
+		succeeded = 1
+		skipped = 0
+		failed = 0
+	except Exception:
+		total = succeeded = skipped = failed = 0
+
+	print('SUMMARY:')
+	print(f'  total: {total}')
+	print(f'  succeeded: {succeeded}')
+	print(f'  failed: {failed}')
+	print(f'  skipped: {skipped}')
+	print(f'  filename: {Path(cfg.preprocessed_tract_output_relative_path).name}')
+	print(f'  destination: {output_path}')
 	return 0
 
 

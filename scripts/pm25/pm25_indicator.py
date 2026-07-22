@@ -14,15 +14,15 @@ Process summary:
 	- Set pm25_score to null for zero-population block groups.
 	- Write per-state final_bg_scores.csv files and state summary logs.
 
-Runtime arguments:
-	- `storage_mode`
-		Required. Either `local` or `remote`.
-	- `--state`
-		Optional two-letter state filter. If omitted, process all configured states.
-	- `--output-dir`
-		Optional explicit local path or S3 URI for the state output directory.
-	- `--final-bg-scores-filename`
-		Optional override for the output filename (default: final_bg_scores.csv).
+Runtime arguments (current defaults shown):
+		- -l/--location: required one of `local` or `remote`.
+		- -s/--state: required two-letter state code (e.g. `WY`) or `all` (case-insensitive) to process the full
+			configured set. Use `--state all` to iterate across all configured states (the code maps this to
+			an internal `None` which `load_state_targets()` interprets as "all").
+		- --output-dir: optional explicit output directory (local path or S3 URI). Default: none (uses indicator output template).
+		- -v/--version: optional config version to use. Default: `1.0`.
+		- --dry-run: long-only flag. When present the script validates manifests and prints resolved paths
+			without performing any I/O.
 
 Outputs:
 	- output/indicators/{postal}/final_bg_scores.csv under the active PM2.5 root.
@@ -43,8 +43,21 @@ import sys
 from typing import Any
 
 import pandas as pd
-
-from pm25_config import get_pm25_config, resolve_local_pm25_root_path
+# All of our project-specific imports must be relative to the 
+# `scripts` folder which we assume is at the first level of the
+# repository. 
+# NB: ***If `scripts` moves, this code will have to change.***
+# Walk up our current working directory tree until you find the
+# repository root, then add the scripts directory to sys.path
+REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
+if REPO_ROOT is None:
+	# This is a running-from-docker or other non-git environment cry for help.
+    # Undone: Handle non-git environments more gracefully when needed.
+    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+import shared.build_manifest as build_manifest
+import shared.resolve_path as resolve_path
 
 
 PM25_DIR = Path(__file__).resolve().parent
@@ -90,8 +103,9 @@ except Exception as exc:
 class Config:
 	storage_mode: str
 	state: str | None
+	version: str = '1.0'
 	output_dir: str | None = None
-	final_bg_scores_filename: str = DEFAULT_FINAL_BG_SCORES_FILENAME
+	dry_run: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,20 +121,22 @@ class ResolvedPaths:
 
 def get_config(argv=None) -> Config:
 	"""Parse runtime arguments for the PM2.5 indicator step."""
-	defaults = Config(storage_mode='local', state=None)
+	defaults = Config(storage_mode='local', state=None, version='1.0', dry_run=False)
 	parser = argparse.ArgumentParser(
 		description='Read tract-level PM2.5 scores and produce per-state block-group final scores.'
 	)
 	parser.add_argument(
-		'storage_mode',
+		'-l', '--location',
+		dest='storage_mode',
 		choices=PM25_STORAGE_MODES,
+		required=True,
 		help='Select whether the script reads and writes through the local root path or remote S3 root path.',
 	)
 	parser.add_argument(
-		'--state',
+		'-s', '--state',
 		dest='state',
 		default=defaults.state,
-		help='Optional two-letter state code to process a single state.',
+		help="Specify a two-letter state code (e.g. 'WY') or 'all' to process the full configured set.",
 	)
 	parser.add_argument(
 		'--output-dir',
@@ -128,23 +144,35 @@ def get_config(argv=None) -> Config:
 		default=defaults.output_dir,
 		help='Optional explicit local path or S3 URI for the state output directory.',
 	)
+	# The final output filename is fixed to DEFAULT_FINAL_BG_SCORES_FILENAME
 	parser.add_argument(
-		'--final-bg-scores-filename',
-		dest='final_bg_scores_filename',
-		default=defaults.final_bg_scores_filename,
-		help=f'Output filename for final state scores (default: {defaults.final_bg_scores_filename})',
+		'-v', '--version',
+		dest='version',
+		default=defaults.version,
+		help='Optional: config version to base processing on (current default: 1.0)'
+	)
+	parser.add_argument(
+		'--dry-run',
+		dest='dry_run',
+		action='store_true',
+		help='Dry run: validate manifests and paths but do not read or write any files.',
 	)
 	args = parser.parse_args(argv)
 
+	# Accept explicit 'all' (case-insensitive) to indicate processing the full configured set.
 	state = None
 	if args.state:
-		state = normalize_state_code(args.state)
+		if isinstance(args.state, str) and args.state.strip().lower() == 'all':
+			state = None
+		else:
+			state = normalize_state_code(args.state)
 
 	return Config(
 		storage_mode=args.storage_mode,
 		state=state,
+		version=args.version,
 		output_dir=args.output_dir,
-		final_bg_scores_filename=args.final_bg_scores_filename,
+		dry_run=bool(args.dry_run),
 	)
 
 
@@ -243,11 +271,11 @@ def write_df_s3_or_local(df: pd.DataFrame, out_path: str) -> None:
 
 
 def get_active_pm25_root_path(storage_mode: str) -> str:
-	if storage_mode == 'local':
-		return resolve_local_pm25_root_path(PM25_DIR)
-	if storage_mode == 'remote':
-		return get_pm25_config().remote_root_path
-	raise ValueError(f'Unsupported storage mode: {storage_mode}')
+	# Prefer resolver accessors that understand versioned manifests. Callers
+	# should pass the indicator version when resolving manifests; this helper
+	# is left for compatibility but will raise if used without a version-aware
+	# caller.
+	raise RuntimeError('get_active_pm25_root_path should not be called directly; use resolve_path.get_indicator_root with a version')
 
 
 def get_active_shared_root_path(storage_mode: str) -> str:
@@ -261,36 +289,42 @@ def get_active_shared_root_path(storage_mode: str) -> str:
 	raise ValueError(f'Unsupported storage mode: {storage_mode}')
 
 
-def resolve_paths(cfg: Config, state_config: StateConfig) -> ResolvedPaths:
-	"""Resolve the tract input, shared block-weight input, and state output paths."""
-	pm25_config = get_pm25_config()
-	shared_cfg = get_shared_config()
-	pm25_root_path = get_active_pm25_root_path(cfg.storage_mode)
-	shared_root_path = get_active_shared_root_path(cfg.storage_mode)
+def resolve_paths(cfg: Config, state_config: StateConfig, manifest: dict) -> ResolvedPaths:
+	"""Resolve the tract input, shared block-weight input, and state output paths.
 
-	tract_scores_path = join_root_and_relative_path(
-		pm25_root_path,
-		pm25_config.preprocessed_tract_output_relative_path,
-	)
-	census_block_weights_relative_path = shared_cfg.census_block_weights_relative_path_template.format(
-		postal=state_config.postal,
-	)
-	census_block_weights_path = join_root_and_relative_path(
-		shared_root_path,
-		census_block_weights_relative_path,
-	)
-	output_dir = cfg.output_dir or join_root_and_relative_path(
-		pm25_root_path,
-		pm25_config.indicator_output_relative_path_template.format(postal=state_config.postal),
-	)
+	The `manifest` is the stage manifest for the indicator's `score` stage and is
+	supplied by the caller to avoid duplicate manifest lookups.
+	"""
+	inputs = manifest.get('inputs', {})
+	outputs = manifest.get('outputs', {})
+
+	tract_entry = inputs.get('preprocessed_tracts')
+	if not tract_entry:
+		raise RuntimeError('Score manifest missing required input: preprocessed_tracts')
+
+	indicator_root = resolve_path.get_indicator_root('pm25', cfg.version, cfg.storage_mode)
+	tract_scores_path = join_root_and_relative_path(indicator_root, tract_entry['relative'])
+
+	weights_entry = inputs.get('weights')
+	if not weights_entry:
+		raise RuntimeError('Score manifest missing required input: weights')
+	shared_version = resolve_path.get_dependency_version('pm25', cfg.version, 'census_block_weights')
+	shared_root = resolve_path.get_shared_root('census_block_weights', shared_version, cfg.storage_mode)
+	census_block_weights_path = join_root_and_relative_path(shared_root, weights_entry['relative'].format(postal=state_config.postal))
+
+	output_dir_entry = outputs.get('indicator_output_template')
+	if not output_dir_entry:
+		raise RuntimeError('Score manifest missing required output: indicator_output_template')
+	output_dir = cfg.output_dir or join_root_and_relative_path(indicator_root, output_dir_entry['relative'].format(postal=state_config.postal))
+
 	return ResolvedPaths(
 		state_config=state_config,
-		pm25_root_path=pm25_root_path,
-		shared_root_path=shared_root_path,
+		pm25_root_path=indicator_root,
+		shared_root_path=shared_root,
 		tract_scores_path=tract_scores_path,
 		census_block_weights_path=census_block_weights_path,
 		output_dir=output_dir,
-		final_bg_scores_path=join_path_and_file(output_dir, cfg.final_bg_scores_filename),
+		final_bg_scores_path=join_path_and_file(output_dir, DEFAULT_FINAL_BG_SCORES_FILENAME),
 	)
 
 
@@ -409,9 +443,9 @@ def log_state_summary(
 	)
 
 
-def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataFrame) -> None:
+def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataFrame, manifest: dict) -> None:
 	"""Build and write one state's final PM2.5 block-group score file."""
-	paths = resolve_paths(cfg, state_config)
+	paths = resolve_paths(cfg, state_config, manifest)
 	log_resolved_paths(paths, cfg)
 	block_weights_df = read_csv_s3_or_local(paths.census_block_weights_path, dtype={BLOCK_GROUP_GEOID_COLUMN: 'string'})
 	block_group_population = prepare_block_group_population(block_weights_df)
@@ -436,20 +470,48 @@ def main(argv=None) -> int:
 	log_path = configure_logging()
 	cfg = get_config(argv)
 	initialize_runtime_dependencies(cfg)
+	logging.info('Config version: %s', cfg.version)
 	state_targets = load_state_targets(cfg.state)
-	tract_scores_path = join_root_and_relative_path(
-		get_active_pm25_root_path(cfg.storage_mode),
-		get_pm25_config().preprocessed_tract_output_relative_path,
+	# Load the stage manifest and resolve the tract scores input path
+	manifest = build_manifest.get_stage_manifest(
+		target_type='indicator',
+		name='pm25',
+		stage='score',
+		version=cfg.version,
+		environment=cfg.storage_mode,
 	)
+	inputs = manifest.get('inputs', {})
+	tract_entry = inputs.get('preprocessed_tracts')
+	if not tract_entry:
+		raise RuntimeError('Score manifest missing required input: preprocessed_tracts')
+	indicator_root = resolve_path.get_indicator_root('pm25', cfg.version, cfg.storage_mode)
+	tract_scores_path = join_root_and_relative_path(indicator_root, tract_entry['relative'])
+
 	logging.info('Logging to %s', log_path)
 	logging.info('Selected state filter: %s', cfg.state or 'all configured states')
 	logging.info('Using tract scores path: %s', tract_scores_path)
+	# If dry-run was requested, print resolved paths for the tract scores and
+	# for each state's weights and outputs, then exit without reading/writing.
+	if cfg.dry_run:
+		print('DRY RUN: manifest and path resolution')
+		print(f'tract_scores_path={tract_scores_path}')
+		logging.info('DRY RUN tract_scores_path=%s', tract_scores_path)
+		for state_config in state_targets:
+			paths = resolve_paths(cfg, state_config, manifest)
+			print(f'state={state_config.postal}')
+			print(f'  census_block_weights_path={paths.census_block_weights_path}')
+			print(f'  final_bg_scores_path={paths.final_bg_scores_path}')
+			logging.info('DRY RUN state=%s', state_config.postal)
+			logging.info('DRY RUN census_block_weights_path=%s', paths.census_block_weights_path)
+			logging.info('DRY RUN final_bg_scores_path=%s', paths.final_bg_scores_path)
+		return 0
+
 	tract_scores_df = read_csv_s3_or_local(tract_scores_path, dtype={TRACT_GEOID_COLUMN: 'string'})
 	prepared_tract_scores = prepare_tract_scores(tract_scores_df)
 	logging.info('Prepared %d tract-level PM2.5 scores', len(prepared_tract_scores))
 
 	for state_config in state_targets:
-		process_state(cfg, state_config, prepared_tract_scores)
+		process_state(cfg, state_config, prepared_tract_scores, manifest)
 
 	state_count = len(state_targets)
 	msg = f"Completed PM2.5 block-group indicator generation"

@@ -1,4 +1,4 @@
-"""pm25_indicator.py
+"""pm25_score.py
 
 Purpose:
 	Read tract-level PM2.5 averages, expand them to block groups with the shared
@@ -19,28 +19,35 @@ Runtime arguments (current defaults shown):
 		- -s/--state: required two-letter state code (e.g. `WY`) or `all` (case-insensitive) to process the full
 			configured set. Use `--state all` to iterate across all configured states (the code maps this to
 			an internal `None` which `load_state_targets()` interprets as "all").
-		- --output-dir: optional explicit output directory (local path or S3 URI). Default: none (uses indicator output template).
-		- -v/--version: optional config version to use. Default: `1.0`.
+		- -v/--version: optional config version to use. Default: `1.2020`.
 		- --dry-run: long-only flag. When present the script validates manifests and prints resolved paths
 			without performing any I/O.
 
 Outputs:
-	- output/indicators/{postal}/final_bg_scores.csv under the active PM2.5 root.
-	- pm25_indicator.log in scripts/pm25.
+	- output/{postal}/final_bg_scores.csv under the active PM2.5 root.
+	- pm25_score.log in scripts/pm25.
+
+Examples (run from the `scripts` folder):
+		- Dry-run for Wyoming (local):
+			python3 pm25/pm25_score.py --location local --state WY --dry-run
+
+		- Full run for all configured states (local):
+			python3 pm25/pm25_score.py --location local --state all
+
+		- Full run for a specific version (remote):
+			python3 pm25/pm25_score.py --location remote -v 1.2022 --state CA
 """
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 import importlib
-import importlib.util
-import json
 import logging
 from pathlib import Path
 import sys
-from typing import Any
 
 import pandas as pd
 # All of our project-specific imports must be relative to the 
@@ -61,26 +68,35 @@ import shared.resolve_path as resolve_path
 
 
 PM25_DIR = Path(__file__).resolve().parent
-DEFAULT_LOG_FILENAME = 'pm25_indicator.log'
-DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
+DEFAULT_LOG_FILENAME = 'pm25_score.log'
+DEFAULT_VERSION = '1.2020'
 TRACT_GEOID_COLUMN = 'tract_geoid'
 ANNUAL_AVERAGE_COLUMN = 'annual_average_concentration'
 FINAL_SCORE_COLUMN = 'pm25_score'
-BLOCK_GROUP_GEOID_COLUMN = 'block_group_geoid'
-BLOCK_GROUP_POP_COLUMN = 'block_group_pop'
+
+# Column name defaults (lower_snake_case variables). Default to V1 names.
+# These are selected per-version at read time and then mapped to the canonical
+# names used throughout the downstream code.
+# Note that the 2020, 2021, and 2022 raw o3 data files all use
+# the 2020 block_group_geoid values, not the block_group_geoid_2022 values
+# (which are only different for CT anyway). 
+block_group_geoid_col = 'block_group_geoid'
+# But, from version 1.2020 onward, the population column that we use
+# for assigning nulls to zero-population block groups is the ACS 2022 population column.
+block_group_pop_col = 'acs_2022_bg_pop'
+state_abb_col = 'state_abb'
+
+# Canonical column names used downstream after normalization
+canonical_block_group_geoid = 'block_group_geoid'
+canonical_block_group_pop = 'block_group_pop'
 PM25_STORAGE_MODES = ('local', 'remote')
 
-# Find and then ensure the scripts directory is on sys.path so we can import shared modules
-# using the fixed relationship (scripts/shared) without dynamic module loading.
-def _resolve_scripts_dir() -> Path:
-	current_path = Path(__file__).resolve()
-	for parent in current_path.parents:
-		if parent.name == 'scripts':
-			return parent
-	raise RuntimeError(f'Unable to locate scripts directory from {current_path}')
-SCRIPTS_DIR = _resolve_scripts_dir()
-if str(SCRIPTS_DIR) not in sys.path:
-	sys.path.insert(0, str(SCRIPTS_DIR))
+def parse_version_decimal(version_str: str) -> Decimal:
+	try:
+		return Decimal(str(version_str))
+	except (InvalidOperation, TypeError) as exc:
+		raise RuntimeError(f'Invalid version string: {version_str}') from exc
+
 
 try:
 	from shared.state_config import StateConfig, get_state_config, get_state_config_list
@@ -90,21 +106,13 @@ except Exception as exc:
 		'that the repository root (containing the scripts directory) is on PYTHONPATH.'
 	) from exc
 
-try:
-	from shared.shared_config import get_shared_config, resolve_local_shared_root_path
-except Exception as exc:
-	raise RuntimeError(
-		'Failed to import shared.shared_config. Ensure scripts/shared/shared_config.py is present and '
-		'that the repository root (containing the scripts directory) is on PYTHONPATH.'
-	) from exc
-
 
 @dataclass(frozen=True, slots=True)
 class Config:
 	storage_mode: str
 	state: str | None
-	version: str = '1.0'
-	output_dir: str | None = None
+	version: str = DEFAULT_VERSION
+	version_decimal: Decimal | None = None
 	dry_run: bool = False
 
 
@@ -121,7 +129,7 @@ class ResolvedPaths:
 
 def get_config(argv=None) -> Config:
 	"""Parse runtime arguments for the PM2.5 indicator step."""
-	defaults = Config(storage_mode='local', state=None, version='1.0', dry_run=False)
+	defaults = Config(storage_mode='local', state=None, version=DEFAULT_VERSION, dry_run=False)
 	parser = argparse.ArgumentParser(
 		description='Read tract-level PM2.5 scores and produce per-state block-group final scores.'
 	)
@@ -135,27 +143,22 @@ def get_config(argv=None) -> Config:
 	parser.add_argument(
 		'-s', '--state',
 		dest='state',
-		default=defaults.state,
+		required=True,
 		help="Specify a two-letter state code (e.g. 'WY') or 'all' to process the full configured set.",
 	)
-	parser.add_argument(
-		'--output-dir',
-		dest='output_dir',
-		default=defaults.output_dir,
-		help='Optional explicit local path or S3 URI for the state output directory.',
-	)
-	# The final output filename is fixed to DEFAULT_FINAL_BG_SCORES_FILENAME
+	# `--output-dir` removed; output path is derived from the manifest template.
+	
 	parser.add_argument(
 		'-v', '--version',
 		dest='version',
 		default=defaults.version,
-		help='Optional: config version to base processing on (current default: 1.0)'
+		help=f'Optional: config version to base processing on (current default: {DEFAULT_VERSION})'
 	)
 	parser.add_argument(
 		'--dry-run',
 		dest='dry_run',
 		action='store_true',
-		help='Dry run: validate manifests and paths but do not read or write any files.',
+		help='Dry run: validate manifest and paths but do not read or write any files.',
 	)
 	args = parser.parse_args(argv)
 
@@ -171,7 +174,6 @@ def get_config(argv=None) -> Config:
 		storage_mode=args.storage_mode,
 		state=state,
 		version=args.version,
-		output_dir=args.output_dir,
 		dry_run=bool(args.dry_run),
 	)
 
@@ -270,30 +272,11 @@ def write_df_s3_or_local(df: pd.DataFrame, out_path: str) -> None:
 	df.to_csv(out_path, index=False)
 
 
-def get_active_pm25_root_path(storage_mode: str) -> str:
-	# Prefer resolver accessors that understand versioned manifests. Callers
-	# should pass the indicator version when resolving manifests; this helper
-	# is left for compatibility but will raise if used without a version-aware
-	# caller.
-	raise RuntimeError('get_active_pm25_root_path should not be called directly; use resolve_path.get_indicator_root with a version')
-
-
-def get_active_shared_root_path(storage_mode: str) -> str:
-	if storage_mode == 'local':
-		# 12 May 2026, not adopting Eric's change for this chunk of
-		# code. I don't think that hard-coding "shared" here is or should
-		# be needed. 
-		return resolve_local_shared_root_path(SCRIPTS_DIR)
-	if storage_mode == 'remote':
-		return get_shared_config().remote_root_path
-	raise ValueError(f'Unsupported storage mode: {storage_mode}')
-
-
 def resolve_paths(cfg: Config, state_config: StateConfig, manifest: dict) -> ResolvedPaths:
 	"""Resolve the tract input, shared block-weight input, and state output paths.
 
-	The `manifest` is the stage manifest for the indicator's `score` stage and is
-	supplied by the caller to avoid duplicate manifest lookups.
+	The manifest must be provided by the caller to avoid duplicate manifest
+	lookups; callers should request the stage manifest once and pass it through.
 	"""
 	inputs = manifest.get('inputs', {})
 	outputs = manifest.get('outputs', {})
@@ -310,12 +293,25 @@ def resolve_paths(cfg: Config, state_config: StateConfig, manifest: dict) -> Res
 		raise RuntimeError('Score manifest missing required input: weights')
 	shared_version = resolve_path.get_dependency_version('pm25', cfg.version, 'census_block_weights')
 	shared_root = resolve_path.get_shared_root('census_block_weights', shared_version, cfg.storage_mode)
-	census_block_weights_path = join_root_and_relative_path(shared_root, weights_entry['relative'].format(postal=state_config.postal))
+	census_block_weights_path = join_root_and_relative_path(
+		shared_root, 
+		weights_entry['relative'].format(postal=state_config.postal),
+	)
 
 	output_dir_entry = outputs.get('indicator_output_template')
 	if not output_dir_entry:
 		raise RuntimeError('Score manifest missing required output: indicator_output_template')
-	output_dir = cfg.output_dir or join_root_and_relative_path(indicator_root, output_dir_entry['relative'].format(postal=state_config.postal))
+	# The manifest's `indicator_output_template.relative` is treated as the
+	# final filename template (e.g. "v{version}/score_output/final_bg_scores_{postal}.csv").
+	final_rel = output_dir_entry['relative'].format(postal=state_config.postal)
+	final_bg_scores_path = join_root_and_relative_path(indicator_root, final_rel)
+
+	# Determine the output_dir as the parent of the final file path. For S3
+	# URIs we compute the parent via string split; for local paths use Path.
+	if is_s3_uri(final_bg_scores_path):
+		output_dir = final_bg_scores_path.rsplit('/', 1)[0]
+	else:
+		output_dir = str(Path(final_bg_scores_path).parent)
 
 	return ResolvedPaths(
 		state_config=state_config,
@@ -324,7 +320,7 @@ def resolve_paths(cfg: Config, state_config: StateConfig, manifest: dict) -> Res
 		tract_scores_path=tract_scores_path,
 		census_block_weights_path=census_block_weights_path,
 		output_dir=output_dir,
-		final_bg_scores_path=join_path_and_file(output_dir, DEFAULT_FINAL_BG_SCORES_FILENAME),
+		final_bg_scores_path=final_bg_scores_path,
 	)
 
 
@@ -356,22 +352,37 @@ def prepare_tract_scores(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def prepare_block_group_population(df: pd.DataFrame) -> pd.DataFrame:
-	"""Reduce the shared block-weight input to one population row per block group."""
-	require_columns(df, (BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_POP_COLUMN), 'Census block weights CSV')
-	prepared = df[[BLOCK_GROUP_GEOID_COLUMN, BLOCK_GROUP_POP_COLUMN]].copy()
-	prepared[BLOCK_GROUP_GEOID_COLUMN] = prepared[BLOCK_GROUP_GEOID_COLUMN].astype('string').str.strip()
-	invalid_bg_mask = prepared[BLOCK_GROUP_GEOID_COLUMN].isna() | ~prepared[BLOCK_GROUP_GEOID_COLUMN].str.fullmatch(r'\d{12}')
+	"""Validate and reduce the shared block-weight input to one population row per block group.
+
+	Expects the DataFrame to contain the canonical columns
+	`canonical_block_group_geoid` and `canonical_block_group_pop` (and
+	`state_abb` where present). Returns a DataFrame with one row per block
+	group and a derived `tract_geoid` column.
+	"""
+	require_columns(df, (canonical_block_group_geoid, canonical_block_group_pop), 'Census block weights CSV')
+	prepared = df[[canonical_block_group_geoid, canonical_block_group_pop]].copy()
+	prepared[canonical_block_group_geoid] = prepared[canonical_block_group_geoid].astype('string').str.strip()
+
+	# Drop rows with missing or placeholder GEOIDs (e.g., NA) before validation
+	geoid_upper = prepared[canonical_block_group_geoid].fillna('').str.upper()
+	missing_geoid_mask = geoid_upper.isin(['', 'NA', '<NA>'])
+	if missing_geoid_mask.any():
+		logging.info('Dropping %d rows with missing block-group GEOID values', int(missing_geoid_mask.sum()))
+		prepared = prepared.loc[~missing_geoid_mask].copy()
+
+	invalid_bg_mask = prepared[canonical_block_group_geoid].isna() | ~prepared[canonical_block_group_geoid].str.fullmatch(r'\d{12}')
 	if invalid_bg_mask.any():
-		invalid_samples = prepared.loc[invalid_bg_mask, BLOCK_GROUP_GEOID_COLUMN].drop_duplicates().astype(str).head(5).tolist()
+		invalid_samples = prepared.loc[invalid_bg_mask, canonical_block_group_geoid].drop_duplicates().astype(str).head(5).tolist()
 		raise RuntimeError(f'Census block weights CSV contains invalid block group GEOIDs. Sample invalid values: {invalid_samples}')
 
-	prepared[BLOCK_GROUP_POP_COLUMN] = pd.to_numeric(prepared[BLOCK_GROUP_POP_COLUMN], errors='raise')
-	if prepared[BLOCK_GROUP_POP_COLUMN].isna().any():
-		raise RuntimeError('Census block weights CSV contains null block_group_pop values')
-	if (prepared[BLOCK_GROUP_POP_COLUMN] < 0).any():
+	# Coerce population to numeric; treat missing (NA) as zero to tolerate
+	# upstream files that encode zero fractions as NA.
+	prepared[canonical_block_group_pop] = pd.to_numeric(prepared[canonical_block_group_pop], errors='coerce')
+	prepared[canonical_block_group_pop] = prepared[canonical_block_group_pop].fillna(0)
+	if (prepared[canonical_block_group_pop] < 0).any():
 		raise RuntimeError('Census block weights CSV contains negative block_group_pop values')
 
-	population_variants = prepared.groupby(BLOCK_GROUP_GEOID_COLUMN, dropna=False)[BLOCK_GROUP_POP_COLUMN].nunique(dropna=False)
+	population_variants = prepared.groupby(canonical_block_group_geoid, dropna=False)[canonical_block_group_pop].nunique(dropna=False)
 	inconsistent_geoids = population_variants[population_variants > 1].index.tolist()
 	if inconsistent_geoids:
 		raise RuntimeError(
@@ -379,26 +390,30 @@ def prepare_block_group_population(df: pd.DataFrame) -> pd.DataFrame:
 			f'Sample GEOIDs: {inconsistent_geoids[:5]}'
 		)
 
-	group_population = prepared.drop_duplicates(subset=[BLOCK_GROUP_GEOID_COLUMN]).copy()
-	group_population[TRACT_GEOID_COLUMN] = group_population[BLOCK_GROUP_GEOID_COLUMN].str.slice(0, 11)
-	return group_population.sort_values(BLOCK_GROUP_GEOID_COLUMN).reset_index(drop=True)
+	group_population = prepared.drop_duplicates(subset=[canonical_block_group_geoid]).copy()
+	group_population[TRACT_GEOID_COLUMN] = group_population[canonical_block_group_geoid].str.slice(0, 11)
+	return group_population.sort_values(canonical_block_group_geoid).reset_index(drop=True)
 
 
 def build_final_scores(tract_scores: pd.DataFrame, block_group_population: pd.DataFrame) -> pd.DataFrame:
-	"""Join tract scores to block groups and apply the zero-population null rule."""
+	"""Join tract scores to block groups and apply the zero-population null rule.
+
+	Assumes `block_group_population` contains canonical columns produced by
+	`prepare_block_group_population()`.
+	"""
 	merged = block_group_population.merge(tract_scores, on=TRACT_GEOID_COLUMN, how='left')
-	positive_population_mask = merged[BLOCK_GROUP_POP_COLUMN] > 0
+	positive_population_mask = merged[canonical_block_group_pop] > 0
 	missing_positive_mask = positive_population_mask & merged[ANNUAL_AVERAGE_COLUMN].isna()
 	if missing_positive_mask.any():
-		missing_samples = merged.loc[missing_positive_mask, BLOCK_GROUP_GEOID_COLUMN].astype(str).head(5).tolist()
+		missing_samples = merged.loc[missing_positive_mask, canonical_block_group_geoid].astype(str).head(5).tolist()
 		raise RuntimeError(
-			'Positive-population block groups are missing tract-level PM2.5 scores. '
+			'Positive-population block groups are missing tract-level Ozone scores. '
 			f'Sample block groups: {missing_samples}'
 		)
 
 	merged[FINAL_SCORE_COLUMN] = merged[ANNUAL_AVERAGE_COLUMN].astype('Float64')
 	merged.loc[~positive_population_mask, FINAL_SCORE_COLUMN] = pd.NA
-	return merged[[BLOCK_GROUP_GEOID_COLUMN, FINAL_SCORE_COLUMN]].copy()
+	return merged[[canonical_block_group_geoid, FINAL_SCORE_COLUMN]].copy()
 
 
 def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
@@ -419,8 +434,8 @@ def log_state_summary(
 ) -> None:
 	total_tract_count = int(block_group_population[TRACT_GEOID_COLUMN].nunique(dropna=True))
 	total_block_group_count = int(len(block_group_population))
-	non_zero_block_group_count = int(block_group_population[BLOCK_GROUP_POP_COLUMN].gt(0).sum())
-	zero_population_block_group_count = int(block_group_population[BLOCK_GROUP_POP_COLUMN].eq(0).sum())
+	non_zero_block_group_count = int(block_group_population[canonical_block_group_pop].gt(0).sum())
+	zero_population_block_group_count = int(block_group_population[canonical_block_group_pop].eq(0).sum())
 	non_null_scores = final_scores[FINAL_SCORE_COLUMN].dropna()
 	minimum_score = None if non_null_scores.empty else float(non_null_scores.min())
 	maximum_score = None if non_null_scores.empty else float(non_null_scores.max())
@@ -447,10 +462,34 @@ def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataF
 	"""Build and write one state's final PM2.5 block-group score file."""
 	paths = resolve_paths(cfg, state_config, manifest)
 	log_resolved_paths(paths, cfg)
-	block_weights_df = read_csv_s3_or_local(paths.census_block_weights_path, dtype={BLOCK_GROUP_GEOID_COLUMN: 'string'})
-	block_group_population = prepare_block_group_population(block_weights_df)
+	# Select per-version column names explicitly and read only required cols.
+	bg_geoid_col = block_group_geoid_col
+	bg_pop_col = block_group_pop_col
+
+	#NB: Support for versions less than 1.2020 not implemented. 
+	# (See o3 code for how to do that if you need it.)
+
+	usecols = [state_abb_col, bg_geoid_col, bg_pop_col]
+	dtypes = {bg_geoid_col: 'string', state_abb_col: 'string'}
+	block_weights_df = read_csv_s3_or_local(
+		paths.census_block_weights_path, 
+		usecols=usecols, 
+		dtype=dtypes,
+	)
+
+	require_columns(block_weights_df, (state_abb_col, bg_geoid_col, bg_pop_col), 'Census block weights CSV')
+	# Filter to rows for this state and fail if none found
+	state_block_weights = block_weights_df.loc[block_weights_df[state_abb_col].astype(str).str.upper() == state_config.postal].copy()
+	if state_block_weights.empty:
+		raise RuntimeError(
+			f'No census block weights found for state {state_config.postal} in {paths.census_block_weights_path}'
+		)
+
+	# Normalize to canonical column names expected by downstream functions.
+	state_block_weights = state_block_weights.rename(columns={bg_geoid_col: canonical_block_group_geoid, bg_pop_col: canonical_block_group_pop})
+	block_group_population = prepare_block_group_population(state_block_weights)
 	final_scores = build_final_scores(tract_scores, block_group_population)
-	zero_population_count = int(block_group_population[BLOCK_GROUP_POP_COLUMN].eq(0).sum())
+	zero_population_count = int(block_group_population[canonical_block_group_pop].eq(0).sum())
 	logging.info(
 		'Writing final PM2.5 scores to %s (rows=%d, zero_population_groups=%d)',
 		paths.final_bg_scores_path,
@@ -469,8 +508,17 @@ def main(argv=None) -> int:
 	"""Run the PM2.5 tract-to-block-group indicator workflow."""
 	log_path = configure_logging()
 	cfg = get_config(argv)
+
+	# Parse and validate version early; fail fast for unsupported manifest versions.
+	version_decimal = parse_version_decimal(cfg.version)
+	cfg = replace(cfg, version_decimal=version_decimal)
+	manifest_version_unsupported = Decimal('2.0')
+	if cfg.version_decimal is not None and cfg.version_decimal >= manifest_version_unsupported:
+		raise RuntimeError('Configured manifest version >= %s is not yet supported by this module' % manifest_version_unsupported)
+
+	logging.info('Runtime config: version=%s storage_mode=%s state=%s',
+			 cfg.version_decimal, cfg.storage_mode, cfg.state or 'all')
 	initialize_runtime_dependencies(cfg)
-	logging.info('Config version: %s', cfg.version)
 	state_targets = load_state_targets(cfg.state)
 	# Load the stage manifest and resolve the tract scores input path
 	manifest = build_manifest.get_stage_manifest(
@@ -480,8 +528,7 @@ def main(argv=None) -> int:
 		version=cfg.version,
 		environment=cfg.storage_mode,
 	)
-	inputs = manifest.get('inputs', {})
-	tract_entry = inputs.get('preprocessed_tracts')
+	tract_entry = manifest.get('inputs', {}).get('preprocessed_tracts')
 	if not tract_entry:
 		raise RuntimeError('Score manifest missing required input: preprocessed_tracts')
 	indicator_root = resolve_path.get_indicator_root('pm25', cfg.version, cfg.storage_mode)

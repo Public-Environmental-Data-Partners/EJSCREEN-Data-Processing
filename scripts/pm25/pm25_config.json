@@ -48,12 +48,12 @@
               "category": "preprocessed_input"
             }
           },
-          "outputs": {
-            "indicator_output_template": {
-              "type": "template",
-              "relative_path": "v{version}/score_output/{postal}/"
+            "outputs": {
+              "indicator_output_template": {
+                "type": "template",
+                "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
+              }
             }
-          }
         }
       }
     },
@@ -99,10 +99,10 @@
               "category": "preprocessed_input"
             }
           },
-          "outputs": {
+            "outputs": {
             "indicator_output_template": {
               "type": "template",
-              "relative_path": "v{version}/score_output/{postal}/"
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
             }
           }
         }
@@ -150,10 +150,10 @@
               "category": "preprocessed_input"
             }
           },
-          "outputs": {
+            "outputs": {
             "indicator_output_template": {
               "type": "template",
-              "relative_path": "v{version}/score_output/{postal}/"
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
             }
           }
         }

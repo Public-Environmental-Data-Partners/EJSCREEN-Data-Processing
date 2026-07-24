@@ -123,7 +123,6 @@ class ResolvedPaths:
 	shared_root_path: str
 	tract_scores_path: str
 	census_block_weights_path: str
-	output_dir: str
 	final_bg_scores_path: str
 
 
@@ -298,20 +297,13 @@ def resolve_paths(cfg: Config, state_config: StateConfig, manifest: dict) -> Res
 		weights_entry['relative'].format(postal=state_config.postal),
 	)
 
-	output_dir_entry = outputs.get('indicator_output_template')
-	if not output_dir_entry:
+	output_entry = outputs.get('indicator_output_template')
+	if not output_entry:
 		raise RuntimeError('Score manifest missing required output: indicator_output_template')
-	# The manifest's `indicator_output_template.relative` is treated as the
-	# final filename template (e.g. "v{version}/score_output/final_bg_scores_{postal}.csv").
-	final_rel = output_dir_entry['relative'].format(postal=state_config.postal)
+	# The manifest's `indicator_output_template.relative` is the final filename
+	# template (e.g. "v{version}/score_output/final_bg_scores_{postal}.csv").
+	final_rel = output_entry['relative'].format(postal=state_config.postal)
 	final_bg_scores_path = join_root_and_relative_path(indicator_root, final_rel)
-
-	# Determine the output_dir as the parent of the final file path. For S3
-	# URIs we compute the parent via string split; for local paths use Path.
-	if is_s3_uri(final_bg_scores_path):
-		output_dir = final_bg_scores_path.rsplit('/', 1)[0]
-	else:
-		output_dir = str(Path(final_bg_scores_path).parent)
 
 	return ResolvedPaths(
 		state_config=state_config,
@@ -319,7 +311,6 @@ def resolve_paths(cfg: Config, state_config: StateConfig, manifest: dict) -> Res
 		shared_root_path=shared_root,
 		tract_scores_path=tract_scores_path,
 		census_block_weights_path=census_block_weights_path,
-		output_dir=output_dir,
 		final_bg_scores_path=final_bg_scores_path,
 	)
 
@@ -458,7 +449,13 @@ def log_state_summary(
 	)
 
 
-def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataFrame, manifest: dict) -> None:
+def process_state(
+	cfg: Config,
+	state_config: StateConfig,
+	tract_scores: pd.DataFrame,
+	manifest: dict,
+	cached_block_weights_df: pd.DataFrame | None = None,
+) -> None:
 	"""Build and write one state's final PM2.5 block-group score file."""
 	paths = resolve_paths(cfg, state_config, manifest)
 	log_resolved_paths(paths, cfg)
@@ -471,15 +468,18 @@ def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataF
 
 	usecols = [state_abb_col, bg_geoid_col, bg_pop_col]
 	dtypes = {bg_geoid_col: 'string', state_abb_col: 'string'}
-	block_weights_df = read_csv_s3_or_local(
-		paths.census_block_weights_path, 
-		usecols=usecols, 
-		dtype=dtypes,
-	)
+	if cached_block_weights_df is not None:
+		block_weights_df = cached_block_weights_df
+	else:
+		block_weights_df = read_csv_s3_or_local(
+			paths.census_block_weights_path,
+			usecols=usecols,
+			dtype=dtypes,
+		)
 
 	require_columns(block_weights_df, (state_abb_col, bg_geoid_col, bg_pop_col), 'Census block weights CSV')
 	# Filter to rows for this state and fail if none found
-	state_block_weights = block_weights_df.loc[block_weights_df[state_abb_col].astype(str).str.upper() == state_config.postal].copy()
+	state_block_weights = block_weights_df.loc[block_weights_df[state_abb_col].astype(str).str.upper() == state_config.postal]
 	if state_block_weights.empty:
 		raise RuntimeError(
 			f'No census block weights found for state {state_config.postal} in {paths.census_block_weights_path}'
@@ -557,8 +557,22 @@ def main(argv=None) -> int:
 	prepared_tract_scores = prepare_tract_scores(tract_scores_df)
 	logging.info('Prepared %d tract-level PM2.5 scores', len(prepared_tract_scores))
 
+	cached_block_weights_df: pd.DataFrame | None = None
+	weights_entry = manifest.get('inputs', {}).get('weights')
+	if not weights_entry:
+		raise RuntimeError('Score manifest missing required input: weights')
+	# Always read the shared census block weights once (we assume a nationwide
+	# file per the current operational decision) and reuse it for each state.
+	shared_version = resolve_path.get_dependency_version('pm25', cfg.version, 'census_block_weights')
+	shared_root = resolve_path.get_shared_root('census_block_weights', shared_version, cfg.storage_mode)
+	census_block_weights_path = join_root_and_relative_path(shared_root, weights_entry['relative'])
+	usecols = [state_abb_col, block_group_geoid_col, block_group_pop_col]
+	dtypes = {block_group_geoid_col: 'string', state_abb_col: 'string'}
+	cached_block_weights_df = read_csv_s3_or_local(census_block_weights_path, usecols=usecols, dtype=dtypes)
+	require_columns(cached_block_weights_df, (state_abb_col, block_group_geoid_col, block_group_pop_col), 'Census block weights CSV')
+
 	for state_config in state_targets:
-		process_state(cfg, state_config, prepared_tract_scores, manifest)
+		process_state(cfg, state_config, prepared_tract_scores, manifest, cached_block_weights_df=cached_block_weights_df)
 
 	state_count = len(state_targets)
 	msg = f"Completed PM2.5 block-group indicator generation"

@@ -6,7 +6,7 @@
     "chunk_size_bytes": 1048576
   },
   "versions": {
-    "1.2": {
+    "1.2022": {
       "required_shared_assets": {
         "census_block_weights": "1.0"
       },
@@ -59,13 +59,13 @@
             },
             "indicator_output_template": {
               "type": "template",
-              "relative_path": "v{version}/score_output/{postal}/"
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
             }
           }
         }
       }
     },
-    "1.1": {
+    "1.2021": {
       "required_shared_assets": {
         "census_block_weights": "1.0"
       },
@@ -118,13 +118,13 @@
             },
             "indicator_output_template": {
               "type": "template",
-              "relative_path": "v{version}/score_output/{postal}/"
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
             }
           }
         }
       }
     },
-    "1.0": {
+    "1.2020": {
       "required_shared_assets": {
         "census_block_weights": "1.0"
       },
@@ -177,7 +177,7 @@
             },
             "indicator_output_template": {
               "type": "template",
-              "relative_path": "v{version}/score_output/{postal}/"
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
             }
           }
         }
@@ -235,7 +235,7 @@
             },
             "indicator_output_template": {
               "type": "template",
-              "relative_path": "v0.6/output/{postal}/"
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
             }
           }
         }
@@ -293,7 +293,7 @@
             },
             "indicator_output_template": {
               "type": "template",
-              "relative_path": "v0.5/output/{postal}/"
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
             }
           }
         }

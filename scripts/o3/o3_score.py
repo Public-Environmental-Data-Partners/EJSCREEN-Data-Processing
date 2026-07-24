@@ -5,9 +5,6 @@ Purpose:
 	census block weights inputs, apply the zero-population null rule, and write
 	per-state final_bg_scores.csv outputs.
 
-Notes:
-	- The final block-group output filename is fixed to ``final_bg_scores.csv``
-	  and is not configurable via the CLI.
 
 Process summary:
 	- Resolve the Ozone and shared roots for local or remote mode.
@@ -23,14 +20,12 @@ Runtime arguments (current defaults shown):
 		- -s/--state: required two-letter state code (e.g. `WY`) or `all` (case-insensitive) to process the full
 			configured set. Use `--state all` to iterate across all configured states (the code maps this to
 			an internal `None` which `load_state_targets()` interprets as "all").
-		- --output-dir: optional explicit output directory (local path or S3 URI). Default: none (uses indicator output template).
-		- -v/--version: optional config version to use. Default: `1.0`.
+		- -v/--version: optional config version to use. Default: `1.2020`.
 		- --dry-run: long-only flag. When present the script validates manifests and prints resolved paths
 			without performing any I/O.
 
 Outputs:
-		- output/indicators/{postal}/final_bg_scores.csv under the active Ozone root (filename is fixed to
-			`final_bg_scores.csv`).
+		- output/{postal}/final_bg_scores.csv under the active Ozone root
 		- o3_score.log in scripts/o3.
 
 Examples (run from the `scripts` folder):
@@ -78,10 +73,10 @@ import shared.resolve_path as resolve_path
 
 O3_DIR = Path(__file__).resolve().parent
 DEFAULT_LOG_FILENAME = 'o3_score.log'
-DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
+DEFAULT_VERSION = '1.2020'
 TRACT_GEOID_COLUMN = 'tract_geoid'
 ANNUAL_AVERAGE_COLUMN = 'annual_average_ten_highest_MDA8'
-FINAL_SCORE_COLUMN = 'o3_score'  #Edit this to match EJAM/EJSCREEN e.g. o3
+FINAL_SCORE_COLUMN = 'o3_score'  
 
 # Column name defaults (lower_snake_case variables). Default to V1 names.
 # These are selected per-version at read time and then mapped to the canonical
@@ -120,9 +115,8 @@ except Exception as exc:
 class Config:
 	storage_mode: str
 	state: str | None
-	version: str = '1.0'
+	version: str = DEFAULT_VERSION
 	version_decimal: Decimal | None = None
-	output_dir: str | None = None
 	dry_run: bool = False
 
 
@@ -133,7 +127,6 @@ class ResolvedPaths:
 	shared_root_path: str
 	tract_scores_path: str
 	census_block_weights_path: str
-	output_dir: str
 	final_bg_scores_path: str
 
 
@@ -156,18 +149,13 @@ def get_config(argv=None) -> Config:
 		required=True,
 		help="Specify a two-letter state code (e.g. 'WY') or 'all' to process the full configured set.",
 	)
-	parser.add_argument(
-		'--output-dir',
-		dest='output_dir',
-		default=defaults.output_dir,
-		help='Optional explicit local path or S3 URI for the state output directory.',
-	)
+	# `--output-dir` removed; output path is derived from the manifest template.
 
 	parser.add_argument(
 		'-v', '--version',
 		dest='version',
 		default=defaults.version,
-		help='Optional: config version to base processing on (current default: 1.0)'
+		help=f'Optional: config version to base processing on (current default: {DEFAULT_VERSION})'
 	)
 	# Long-only dry-run flag (no short alias)
 	parser.add_argument(
@@ -190,7 +178,6 @@ def get_config(argv=None) -> Config:
 		storage_mode=args.storage_mode,
 		state=state,
 		version=args.version,
-		output_dir=args.output_dir,
 		dry_run=bool(args.dry_run),
 	)
 
@@ -319,14 +306,14 @@ def resolve_paths(cfg: Config, state_config: StateConfig, manifest: dict) -> Res
 		weights_entry['relative'].format(postal=state_config.postal),
 	)
 
-	# output directory/template (indicator outputs are relative to indicator root)
-	output_dir_entry = outputs.get('indicator_output_template')
-	if not output_dir_entry:
+	# output filename template (indicator outputs are relative to indicator root)
+	output_entry = outputs.get('indicator_output_template')
+	if not output_entry:
 		raise RuntimeError('Score manifest missing required output: indicator_output_template')
-	output_dir = cfg.output_dir or join_root_and_relative_path(
-		indicator_root,
-		output_dir_entry['relative'].format(postal=state_config.postal),
-	)
+	# The manifest's `indicator_output_template.relative` is the final filename
+	# template (e.g. "v{version}/score_output/final_bg_scores_{postal}.csv").
+	final_rel = output_entry['relative'].format(postal=state_config.postal)
+	final_bg_scores_path = join_root_and_relative_path(indicator_root, final_rel)
 
 	return ResolvedPaths(
 		state_config=state_config,
@@ -334,8 +321,7 @@ def resolve_paths(cfg: Config, state_config: StateConfig, manifest: dict) -> Res
 		shared_root_path=shared_root,
 		tract_scores_path=tract_scores_path,
 		census_block_weights_path=census_block_weights_path,
-		output_dir=output_dir,
-		final_bg_scores_path=join_path_and_file(output_dir, DEFAULT_FINAL_BG_SCORES_FILENAME),
+		final_bg_scores_path=final_bg_scores_path,
 	)
 
 
@@ -473,8 +459,14 @@ def log_state_summary(
 	)
 
 
-def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataFrame, manifest: dict) -> None:
-	"""Build and write one state's final Ozone block-group score file."""
+def process_state(
+	cfg: Config,
+	state_config: StateConfig,
+	tract_scores: pd.DataFrame,
+	manifest: dict,
+	cached_block_weights_df: pd.DataFrame | None = None,
+) -> None:
+	"""Build and write one state's final PM2.5 block-group score file."""
 	paths = resolve_paths(cfg, state_config, manifest)
 	log_resolved_paths(paths, cfg)
 	
@@ -492,21 +484,19 @@ def process_state(cfg: Config, state_config: StateConfig, tract_scores: pd.DataF
 		bg_pop_col = 'block_group_pop'
 
 	usecols = [state_abb_col, bg_geoid_col, bg_pop_col]
-
-	block_weights_df = read_csv_s3_or_local(
-		paths.census_block_weights_path,
-		usecols=usecols,
-		dtype={bg_geoid_col: 'string'},
-	)
-
-	# Require the explicit state column to exist
-	if 'state_abb' not in block_weights_df.columns:
-		raise RuntimeError(
-			f"Census block weights CSV missing required column 'state_abb': {paths.census_block_weights_path}"
+	dtypes = {bg_geoid_col: 'string', state_abb_col: 'string'}
+	if cached_block_weights_df is not None:
+		block_weights_df = cached_block_weights_df
+	else:
+		block_weights_df = read_csv_s3_or_local(
+			paths.census_block_weights_path,
+			usecols=usecols,
+			dtype=dtypes,
 		)
 
-	# Filter to rows for this state and fail if none found
-	state_block_weights = block_weights_df.loc[block_weights_df[state_abb_col] == state_config.postal]
+	# Require required columns and filter robustly by state postal (case-insensitive)
+	require_columns(block_weights_df, (state_abb_col, bg_geoid_col, bg_pop_col), 'Census block weights CSV')
+	state_block_weights = block_weights_df.loc[block_weights_df[state_abb_col].astype(str).str.upper() == state_config.postal]
 	if state_block_weights.empty:
 		raise RuntimeError(
 			f'No census block weights found for state {state_config.postal} in {paths.census_block_weights_path}'
@@ -549,8 +539,8 @@ def main(argv=None) -> int:
 	if cfg.version_decimal is not None and cfg.version_decimal >= manifest_version_unsupported:
 		raise RuntimeError('Configured manifest version >= %s is not yet supported by this module' % manifest_version_unsupported)
 	
-	logging.info('Runtime config: version=%s storage_mode=%s state=%s output_dir=%s',
-			 cfg.version_decimal, cfg.storage_mode, cfg.state or 'all', cfg.output_dir or 'None')
+	logging.info('Runtime config: version=%s storage_mode=%s state=%s',
+			 cfg.version_decimal, cfg.storage_mode, cfg.state or 'all')
 	initialize_runtime_dependencies(cfg)
 	state_targets = load_state_targets(cfg.state)
 	# Load the score-stage manifest once and reuse it for all path resolution
@@ -590,9 +580,22 @@ def main(argv=None) -> int:
 	prepared_tract_scores = prepare_tract_scores(tract_scores_df)
 	logging.info('Prepared %d tract-level Ozone scores', len(prepared_tract_scores))
 
+	cached_block_weights_df: pd.DataFrame | None = None
+	weights_entry = manifest.get('inputs', {}).get('weights')
+	if not weights_entry:
+		raise RuntimeError('Score manifest missing required input: weights')
+	# Always read the shared census block weights once (we assume a nationwide
+	# file per the current operational decision) and reuse it for each state.
+	shared_version = resolve_path.get_dependency_version('pm25', cfg.version, 'census_block_weights')
+	shared_root = resolve_path.get_shared_root('census_block_weights', shared_version, cfg.storage_mode)
+	census_block_weights_path = join_root_and_relative_path(shared_root, weights_entry['relative'])
+	usecols = [state_abb_col, block_group_geoid_col, block_group_pop_col]
+	dtypes = {block_group_geoid_col: 'string', state_abb_col: 'string'}
+	cached_block_weights_df = read_csv_s3_or_local(census_block_weights_path, usecols=usecols, dtype=dtypes)
+	require_columns(cached_block_weights_df, (state_abb_col, block_group_geoid_col, block_group_pop_col), 'Census block weights CSV')
 	for state_config in state_targets:
 		# pass manifest into process_state via resolve_paths to avoid duplicate lookups
-		process_state(cfg, state_config, prepared_tract_scores, manifest)
+		process_state(cfg, state_config, prepared_tract_scores, manifest, cached_block_weights_df=cached_block_weights_df)
 
 	state_count = len(state_targets)
 	msg = f"Completed Ozone block-group indicator generation"

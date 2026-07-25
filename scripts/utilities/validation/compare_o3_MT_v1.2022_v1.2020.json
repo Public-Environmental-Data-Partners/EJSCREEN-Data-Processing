@@ -1,0 +1,13 @@
+{
+  "indicator": "o3",
+  "state": "MT",
+  "version_a": "1.2022",
+  "file_a": "{indicator}/v{version_a}/score_output/final_bg_scores_{state}.csv",
+  "id_a": "block_group_geoid",
+  "score_a": "o3_score",
+  "version_b": "1.2020",
+  "file_b": "{indicator}/v{version_b}/score_output/final_bg_scores_{state}.csv",
+  "id_b": "block_group_geoid",
+  "score_b": "o3_score",
+  "out_dir": "compare/output/{state}/{indicator}_v{version_a}_vs_v{version_b}/"
+}

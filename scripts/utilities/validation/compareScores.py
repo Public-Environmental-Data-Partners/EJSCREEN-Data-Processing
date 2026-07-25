@@ -70,6 +70,10 @@ import textwrap
 import geopandas as gpd
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize, TwoSlopeNorm
+from PIL import Image
+import urllib.request
+import io
+import importlib
 
 # All of our project-specific imports must be relative to the 
 # `scripts` folder which we assume is at the first level of the
@@ -181,6 +185,58 @@ def default_out_dir(state: str, indicator: str, version_a: str, version_b: str) 
     return str(Path('output') / state / 'compare' / f'{indicator}_{version_a}_vs_{version_b}')
 
 
+def apply_path_templates(cfg: Dict[str, Any]) -> None:
+    """Format configured path templates using the merged config values."""
+    template_keys = ('file_a', 'file_b', 'out_dir')
+    template_values = {
+        key: value
+        for key, value in cfg.items()
+        if isinstance(value, (str, int, float))
+    }
+
+    for key in template_keys:
+        value = cfg.get(key)
+        if not isinstance(value, str):
+            continue
+        try:
+            cfg[key] = value.format(**template_values)
+        except KeyError as exc:
+            missing_key = exc.args[0]
+            raise RuntimeError(
+                f"Config value '{key}' uses template field '{missing_key}' but no such merged config value exists"
+            ) from exc
+
+
+def resolve_validation_path(path_value: str, location: str) -> str:
+    """Resolve a config path against the validation root for the selected location."""
+    if validation_paths.is_s3_uri(path_value):
+        return path_value
+
+    candidate = Path(path_value)
+    if candidate.is_absolute():
+        return str(candidate)
+
+    normalized = str(path_value).replace('\\', '/').strip()
+    while normalized.startswith('./'):
+        normalized = normalized[2:]
+
+    root = validation_paths.get_validation_root(location)
+    root_name = Path(str(root).rstrip('/')).name
+    pipeline_prefixes = (
+        '../' + root_name + '/',
+        root_name + '/',
+    )
+    for prefix in pipeline_prefixes:
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):]
+            break
+
+    if normalized == root_name:
+        normalized = ''
+
+    return validation_paths.join_root_and_relative_path(root, normalized)
+
+
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Compare two indicator score CSVs')
     parser.add_argument('--config', type=str, default=None, help='Path to JSON config file (optional)')
@@ -267,10 +323,15 @@ def plot_scatter(df: pd.DataFrame, score_a: str, score_b: str, out_path: Path, s
     props = dict(boxstyle='round', facecolor='white', alpha=0.8)
     ax.text(0.02, 0.98, stats_txt, transform=ax.transAxes, fontsize=9, va='top', ha='left', bbox=props)
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
+    # Write figure to local or S3 path
+    if isinstance(out_path, str) and validation_paths.is_s3_uri(out_path):
+        validation_paths.write_figure_s3_or_local(fig, out_path)
+    else:
+        out_p = Path(out_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        fig.tight_layout()
+        fig.savefig(out_p, dpi=150)
+        plt.close(fig)
 
 
 def _resolve_scripts_dir() -> Path:
@@ -366,8 +427,16 @@ def prepare_map_and_plot(merged_df: pd.DataFrame, state: str, out_dir: Path, ind
     # Scatter panel: reuse the short-named standalone scatter PNG (created
     # earlier as `scatter_{indicator}_{version_a}_vs_{version_b}.png`). If it
     # doesn't exist yet, create it; then embed into the four-panel figure.
-    scatter_path = out_dir / f'scatter_{indicator}_{version_a}_vs_{version_b}.png'
-    if not scatter_path.exists():
+    # Build scatter path (support string s3 out_dir)
+    scatter_name = f'scatter_{indicator}_{version_a}_vs_{version_b}.png'
+    if isinstance(out_dir, str) and validation_paths.is_s3_uri(out_dir):
+        scatter_path = out_dir.rstrip('/') + '/' + scatter_name
+        scatter_exists = validation_paths.exists_s3_or_local(scatter_path)
+    else:
+        scatter_path = Path(out_dir) / scatter_name
+        scatter_exists = scatter_path.exists()
+
+    if not scatter_exists:
         plot_scatter(
             map_df.rename(columns={'score_a': 'score_a', 'score_b': 'score_b'}),
             'score_a',
@@ -377,7 +446,21 @@ def prepare_map_and_plot(merged_df: pd.DataFrame, state: str, out_dir: Path, ind
             f'{indicator} scatter',
         )
     try:
-        img = plt.imread(scatter_path)
+        # matplotlib will soon deprecate direct URL reads; support local, http(s), and s3 via fsspec/Pillow
+        if isinstance(scatter_path, str) and (scatter_path.startswith('http://') or scatter_path.startswith('https://') or validation_paths.is_s3_uri(scatter_path)):
+            try:
+                if validation_paths.is_s3_uri(scatter_path):
+                    fsspec = validation_paths.load_fsspec_module()
+                    with fsspec.open(scatter_path, 'rb') as fh:
+                        img = np.array(Image.open(fh))
+                else:
+                    with urllib.request.urlopen(scatter_path) as resp:
+                        img = np.array(Image.open(io.BytesIO(resp.read())))
+            except Exception:
+                # fallback to matplotlib's reader where possible
+                img = plt.imread(scatter_path)
+        else:
+            img = plt.imread(scatter_path)
         ax_scatter.imshow(img)
         ax_scatter.set_axis_off()
     except Exception as exc_img:
@@ -389,8 +472,13 @@ def prepare_map_and_plot(merged_df: pd.DataFrame, state: str, out_dir: Path, ind
     diff_colorbar.set_label('Score difference (A - B)')
 
     fig.suptitle(f'{state}: Block-group score comparison', fontsize=15, y=0.98)
-    map_out = out_dir / f'{state}_map_{indicator}_{version_a}_vs_{version_b}.png'
-    fig.savefig(map_out, dpi=150, bbox_inches='tight')
+    map_name = f'{state}_map_{indicator}_{version_a}_vs_{version_b}.png'
+    if isinstance(out_dir, str) and validation_paths.is_s3_uri(out_dir):
+        map_out = out_dir.rstrip('/') + '/' + map_name
+        validation_paths.write_figure_s3_or_local(fig, map_out)
+    else:
+        map_out = Path(out_dir) / map_name
+        fig.savefig(map_out, dpi=150, bbox_inches='tight')
     plt.close(fig)
     logging.info('Map written to %s', map_out)
     print(f'Generated four panel map: {map_out}')
@@ -400,6 +488,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
     script_dir = Path(__file__).resolve().parent
     init_logging(script_dir)
+
+    # If we're going to touch S3, ensure environment-based credentials are loaded
+    # (matches the pattern used in `o3_score.py`). We delay imports to avoid
+    # requiring fsspec/s3fs when running purely local tests.
+    if getattr(args, 'location', None) == 'remote':
+        try:
+            dotenv = importlib.import_module('dotenv')
+            importlib.import_module('s3fs')
+            importlib.import_module('fsspec')
+            dotenv.load_dotenv()
+        except Exception:
+            # If dotenv or s3fs/fsspec are not available, silently continue; any
+            # subsequent boto3 calls will raise informative errors.
+            pass
 
     file_cfg = None
     if args.config:
@@ -422,16 +524,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         if merged.get('state') and merged.get('indicator') and merged.get('version_a') and merged.get('version_b'):
             merged['out_dir'] = default_out_dir(merged['state'], merged['indicator'], merged['version_a'], merged['version_b'])
 
-    # Allow file/out paths in config to be templates using {state} so a single
-    # config file can be reused for different states via the --state override.
-    if merged.get('state'):
-        for key in ('file_a', 'file_b', 'out_dir'):
-            val = merged.get(key)
-            if isinstance(val, str):
-                try:
-                    merged[key] = val.format(state=merged['state'])
-                except Exception as exc:
-                    logging.warning('Failed to format %s with state=%s: %s', key, merged['state'], exc)
+    try:
+        apply_path_templates(merged)
+    except RuntimeError as exc:
+        print(f'ERROR: {exc}', file=sys.stderr)
+        logging.error('Template formatting failed: %s', exc)
+        return 4
 
     valid, missing = validate_config(merged)
     if not valid:
@@ -446,6 +544,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.dry_run:
         print('Dry-run: merged configuration (no files will be read or written)')
         pretty_print_cli_style_config(merged)
+        # Also print resolved absolute/S3 paths so users can see where inputs would
+        # be read from and outputs written to when the run is executed.
+        try:
+            resolved_a = resolve_validation_path(merged['file_a'], merged['location'])
+            resolved_b = resolve_validation_path(merged['file_b'], merged['location'])
+            print('\nResolved input/output paths:')
+            print('  file_a ->', resolved_a)
+            print('  file_b ->', resolved_b)
+            # Show where out_dir would resolve as well
+            try:
+                resolved_out = resolve_validation_path(merged.get('out_dir', ''), merged['location'])
+                print('  out_dir ->', resolved_out)
+            except Exception:
+                pass
+        except Exception as exc:
+            print(f'Warning: could not resolve input/output paths: {exc}')
         logging.info('Dry-run completed')
         return 0
 
@@ -455,30 +569,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     out_dir_raw = merged.get('out_dir')
     if out_dir_raw is None:
         raise RuntimeError('out_dir must be set at this point')
-
-    # If out_dir is an absolute local path or an S3 URI, leave it as-is.
-    # Otherwise join against validation root. If the user already wrote a
-    # root-relative value like 'pipeline/...' strip that prefix to avoid
-    # duplicating 'pipeline/pipeline' when joining.
-    if validation_paths.is_s3_uri(out_dir_raw):
-        resolved_out_dir = out_dir_raw
-    else:
-        p = Path(out_dir_raw)
-        if p.is_absolute():
-            resolved_out_dir = str(p)
-        else:
-            root = validation_paths.get_validation_root(merged['location'])
-            # determine the root basename (works for both local absolute roots and remote s3 roots)
-            root_basename = str(root).rstrip('/').split('/')[-1]
-            if out_dir_raw == root_basename:
-                # user wants the root itself
-                resolved_out_dir = root
-            elif out_dir_raw.startswith(root_basename + '/'):
-                # strip the leading 'pipeline/' (or other root name) and join remainder
-                remainder = out_dir_raw[len(root_basename) + 1 :]
-                resolved_out_dir = validation_paths.join_root_and_relative_path(root, remainder)
-            else:
-                resolved_out_dir = validation_paths.join_root_and_relative_path(root, out_dir_raw)
+    resolved_out_dir = resolve_validation_path(out_dir_raw, merged['location'])
 
     # If local path, create directory. For S3, do not attempt to create.
     if validation_paths.is_s3_uri(resolved_out_dir):
@@ -494,26 +585,18 @@ def main(argv: Optional[list[str]] = None) -> int:
             return out_dir.rstrip('/') + '/' + name
         return out_dir / name
 
-    matched_csv = _join_out(f"matched_rows_{merged['indicator']}_{merged['version_a']}_vs_{merged['version_b']}.csv")
-    scatter_png = _join_out(f"scatter_{merged['indicator']}_{merged['version_a']}_vs_{merged['version_b']}.png")
-    compare_summary = _join_out('compare_summary.txt')
+    suffix = f"{merged['indicator']}_{merged['version_a']}_vs_{merged['version_b']}"
+    matched_name = f"{merged['state']}_matched_rows_{suffix}.csv"
+    scatter_name = f"{merged['state']}_scatter_{suffix}.png"
+    compare_summary_name = f"{merged['state']}_compare_summary_{suffix}.txt"
+
+    matched_csv = _join_out(matched_name)
+    scatter_png = _join_out(scatter_name)
+    compare_summary = _join_out(compare_summary_name)
 
     try:
-        # Resolve and log the full paths we are about to open for easier debugging
-        try:
-            if validation_paths.is_s3_uri(merged['file_a']):
-                resolved_a = merged['file_a']
-            else:
-                resolved_a = str((REPO_ROOT / merged['file_a']).resolve())
-        except Exception:
-            resolved_a = merged['file_a']
-        try:
-            if validation_paths.is_s3_uri(merged['file_b']):
-                resolved_b = merged['file_b']
-            else:
-                resolved_b = str((REPO_ROOT / merged['file_b']).resolve())
-        except Exception:
-            resolved_b = merged['file_b']
+        resolved_a = resolve_validation_path(merged['file_a'], merged['location'])
+        resolved_b = resolve_validation_path(merged['file_b'], merged['location'])
 
         logging.info('Opening File A: raw=%s resolved=%s', merged['file_a'], resolved_a)
         logging.info('Opening File B: raw=%s resolved=%s', merged['file_b'], resolved_b)
@@ -536,8 +619,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         merged_df = df_a.merge(df_b, on='id', how='inner')
         merged_df['score_diff'] = merged_df['score_a'] - merged_df['score_b']
 
-        # Write matched CSV
-        merged_df.to_csv(matched_csv, index=False)
+        # Write matched CSV (support S3 or local)
+        validation_paths.write_df_s3_or_local(merged_df, str(matched_csv))
 
         # Compute stats and plot scatter
         stats = compute_stats(merged_df, 'score_a', 'score_b')
@@ -553,18 +636,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         greatest_positive = float(diffs[diffs > 0].max()) if not diffs[diffs > 0].empty else float('nan')
         smallest_negative = float(diffs[diffs < 0].min()) if not diffs[diffs < 0].empty else float('nan')
 
-        # Write compare summary (additional extremes included)
-        with compare_summary.open('w', encoding='utf-8') as fh:
-            fh.write('Comparison summary\n')
-            fh.write(f"matched_rows={stats['matched_rows']}\n")
-            fh.write(f"rows_used={stats['rows_used']}\n")
-            fh.write(f"dropped={stats['dropped']}\n")
-            fh.write(f"mean_abs_diff={stats['mean_abs_diff']:.6g}\n")
-            fh.write(f"median_abs_diff={stats['median_abs_diff']:.6g}\n")
-            fh.write(f"rmse={stats['rmse']:.6g}\n")
-            fh.write(f"pearson={stats['pearson']:.6g}\n")
-            fh.write(f"greatest_positive_diff={greatest_positive:.6g}\n")
-            fh.write(f"smallest_negative_diff={smallest_negative:.6g}\n")
+        # Write compare summary (additional extremes included) via helper
+        summary_text = []
+        summary_text.append('Comparison summary')
+        summary_text.append(f"matched_rows={stats['matched_rows']}")
+        summary_text.append(f"rows_used={stats['rows_used']}")
+        summary_text.append(f"dropped={stats['dropped']}")
+        summary_text.append(f"mean_abs_diff={stats['mean_abs_diff']:.6g}")
+        summary_text.append(f"median_abs_diff={stats['median_abs_diff']:.6g}")
+        summary_text.append(f"rmse={stats['rmse']:.6g}")
+        summary_text.append(f"pearson={stats['pearson']:.6g}")
+        summary_text.append(f"greatest_positive_diff={greatest_positive:.6g}")
+        summary_text.append(f"smallest_negative_diff={smallest_negative:.6g}")
+        validation_paths.write_text_s3_or_local(str(compare_summary), '\n'.join(summary_text) + '\n')
 
         logging.info('Comparison completed: matched=%d rows_used=%d', stats['matched_rows'], stats['rows_used'])
         print(f'Wrote matched rows CSV: {matched_csv}')

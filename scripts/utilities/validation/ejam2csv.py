@@ -46,7 +46,7 @@ Outputs:
 
 Credits:
         Designed by Anne Gunn.
-        Coded by GitHub Copilot (GPT-5.4) and Anne Gunn.
+        Coded by Multiple GitHub CoPilot agents and Anne Gunn.
 
 Examples (run from the `scripts/utilities/validation` folder):
     - Get EJAM O3 data for New Jersey (writes to `./output/NJ/`):

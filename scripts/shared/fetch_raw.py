@@ -37,7 +37,7 @@ Outputs:
 
 Examples (run from the `scripts` folder):
     - Simple indicator with a default download:
-        python3 shared/fetch_raw.py --indicator pm25 -l local
+        python3 shared/fetch_raw.py --indicator pm25 -v 1.2020 -l local
 
     - Remote fetch for ozone:
         python3 shared/fetch_raw.py --indicator o3 -l remote

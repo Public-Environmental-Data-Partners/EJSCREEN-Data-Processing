@@ -1,18 +1,17 @@
-"""o3_score.py
+"""pm25_score.py
 
 Purpose:
-	Read tract-level Ozone averages, expand them to block groups with the shared
+	Read tract-level PM2.5 averages, expand them to block groups with the shared
 	census block weights inputs, apply the zero-population null rule, and write
 	per-state final_bg_scores.csv outputs.
 
-
 Process summary:
-	- Resolve the Ozone and shared roots for local or remote mode.
+	- Resolve the PM2.5 and shared roots for local or remote mode.
 	- Read the tract-level preprocess output.
 	- Read each state's census block weights file from the shared pipeline inputs.
 	- Derive tract GEOIDs from block-group GEOIDs and join tract scores.
 	- Generate scores for positive-population block groups.
-	- Set o3_score to null for zero-population block groups.
+	- Set pm25_score to null for zero-population block groups.
 	- Write per-state final_bg_scores.csv files and state summary logs.
 
 Runtime arguments (current defaults shown):
@@ -25,21 +24,20 @@ Runtime arguments (current defaults shown):
 			without performing any I/O.
 
 Outputs:
-		- output/{postal}/final_bg_scores.csv under the active Ozone root
-		- o3_score.log in scripts/o3.
+	- output/{postal}/final_bg_scores.csv under the active PM2.5 root.
+	- pm25_score.log in scripts/pm25.
 
 Examples (run from the `scripts` folder):
 		- Dry-run for Wyoming (local):
-			python3 o3/o3_score.py --location local --state WY --dry-run
+			python3 pm25/pm25_score.py --location local --state WY --dry-run
 
 		- Full run for all configured states (local):
-			python3 o3/o3_score.py --location local --state all
+			python3 pm25/pm25_score.py --location local --state all
 
 		- Full run for a specific version (remote):
-			python3 o3/o3_score.py --location remote -v 1.0 --state CA
-
+			python3 pm25/pm25_score.py --location remote -v 1.2022 --state CA
 """
- 
+
 from __future__ import annotations
 
 import argparse
@@ -52,7 +50,6 @@ from pathlib import Path
 import sys
 
 import pandas as pd
-
 # All of our project-specific imports must be relative to the 
 # `scripts` folder which we assume is at the first level of the
 # repository. 
@@ -66,17 +63,16 @@ if REPO_ROOT is None:
     raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
-
 import shared.build_manifest as build_manifest
 import shared.resolve_path as resolve_path
 
 
-O3_DIR = Path(__file__).resolve().parent
-DEFAULT_LOG_FILENAME = 'o3_score.log'
+PM25_DIR = Path(__file__).resolve().parent
+DEFAULT_LOG_FILENAME = 'pm25_score.log'
 DEFAULT_VERSION = '1.2020'
 TRACT_GEOID_COLUMN = 'tract_geoid'
-ANNUAL_AVERAGE_COLUMN = 'annual_average_ten_highest_MDA8'
-FINAL_SCORE_COLUMN = 'o3_score'  
+ANNUAL_AVERAGE_COLUMN = 'annual_average_concentration'
+FINAL_SCORE_COLUMN = 'pm25_score'
 
 # Column name defaults (lower_snake_case variables). Default to V1 names.
 # These are selected per-version at read time and then mapped to the canonical
@@ -85,7 +81,7 @@ FINAL_SCORE_COLUMN = 'o3_score'
 # the 2020 block_group_geoid values, not the block_group_geoid_2022 values
 # (which are only different for CT anyway). 
 block_group_geoid_col = 'block_group_geoid'
-# But, from version 1.0 onward, the population column that we use
+# But, from version 1.2020 onward, the population column that we use
 # for assigning nulls to zero-population block groups is the ACS 2022 population column.
 block_group_pop_col = 'acs_2022_bg_pop'
 state_abb_col = 'state_abb'
@@ -93,14 +89,14 @@ state_abb_col = 'state_abb'
 # Canonical column names used downstream after normalization
 canonical_block_group_geoid = 'block_group_geoid'
 canonical_block_group_pop = 'block_group_pop'
-O3_STORAGE_MODES = ('local', 'remote')
-
+PM25_STORAGE_MODES = ('local', 'remote')
 
 def parse_version_decimal(version_str: str) -> Decimal:
 	try:
 		return Decimal(str(version_str))
 	except (InvalidOperation, TypeError) as exc:
 		raise RuntimeError(f'Invalid version string: {version_str}') from exc
+
 
 try:
 	from shared.state_config import StateConfig, get_state_config, get_state_config_list
@@ -123,7 +119,7 @@ class Config:
 @dataclass(frozen=True, slots=True)
 class ResolvedPaths:
 	state_config: StateConfig
-	o3_root_path: str
+	pm25_root_path: str
 	shared_root_path: str
 	tract_scores_path: str
 	census_block_weights_path: str
@@ -131,15 +127,15 @@ class ResolvedPaths:
 
 
 def get_config(argv=None) -> Config:
-	"""Parse runtime arguments for the Ozone indicator step."""
-	defaults = Config(storage_mode='local', state=None)
+	"""Parse runtime arguments for the PM2.5 indicator step."""
+	defaults = Config(storage_mode='local', state=None, version=DEFAULT_VERSION, dry_run=False)
 	parser = argparse.ArgumentParser(
-		description='Read tract-level Ozone scores and produce per-state block-group final scores.'
+		description='Read tract-level PM2.5 scores and produce per-state block-group final scores.'
 	)
 	parser.add_argument(
 		'-l', '--location',
 		dest='storage_mode',
-		choices=O3_STORAGE_MODES,
+		choices=PM25_STORAGE_MODES,
 		required=True,
 		help='Select whether the script reads and writes through the local root path or remote S3 root path.',
 	)
@@ -150,14 +146,13 @@ def get_config(argv=None) -> Config:
 		help="Specify a two-letter state code (e.g. 'WY') or 'all' to process the full configured set.",
 	)
 	# `--output-dir` removed; output path is derived from the manifest template.
-
+	
 	parser.add_argument(
 		'-v', '--version',
 		dest='version',
 		default=defaults.version,
 		help=f'Optional: config version to base processing on (current default: {DEFAULT_VERSION})'
 	)
-	# Long-only dry-run flag (no short alias)
 	parser.add_argument(
 		'--dry-run',
 		dest='dry_run',
@@ -166,11 +161,11 @@ def get_config(argv=None) -> Config:
 	)
 	args = parser.parse_args(argv)
 
-	# Accept explicit 'all' (case-insensitive) to indicate processing the full set.
+	# Accept explicit 'all' (case-insensitive) to indicate processing the full configured set.
 	state = None
 	if args.state:
 		if isinstance(args.state, str) and args.state.strip().lower() == 'all':
-			state = None  # This value gets interpreted by load_state_targets as "load all states"
+			state = None
 		else:
 			state = normalize_state_code(args.state)
 
@@ -196,7 +191,7 @@ def load_fsspec_module():
 
 
 def configure_logging() -> str:
-	log_path = O3_DIR / DEFAULT_LOG_FILENAME
+	log_path = PM25_DIR / DEFAULT_LOG_FILENAME
 	log_path.parent.mkdir(parents=True, exist_ok=True)
 	logging.basicConfig(
 		level=logging.INFO,
@@ -215,10 +210,9 @@ def normalize_state_code(state_code: str) -> str:
 		raise RuntimeError(f"State code must be a two-letter postal abbreviation, got '{state_code}'")
 	return normalized_state_code
 
-
 # We can load one state or 'all' (as indicated by no argument). 
 # But note that each indicator needs to be aware of what its own 'all'
-# entails. In the case of Ozone, values are only available for the continental US,
+# entails. In the case of PM2.5, values are only available for the continental US,
 # so all is the 48 lower states plus DC.
 def load_state_targets(selected_state: str | None) -> list[StateConfig]:
 	logging.info('Loading state config(s) for selection: %s', selected_state or 'all')
@@ -277,8 +271,6 @@ def write_df_s3_or_local(df: pd.DataFrame, out_path: str) -> None:
 	df.to_csv(out_path, index=False)
 
 
-
-
 def resolve_paths(cfg: Config, state_config: StateConfig, manifest: dict) -> ResolvedPaths:
 	"""Resolve the tract input, shared block-weight input, and state output paths.
 
@@ -288,25 +280,23 @@ def resolve_paths(cfg: Config, state_config: StateConfig, manifest: dict) -> Res
 	inputs = manifest.get('inputs', {})
 	outputs = manifest.get('outputs', {})
 
-	# preprocessed_tracts should be a plain file input (relative to indicator root)
 	tract_entry = inputs.get('preprocessed_tracts')
 	if not tract_entry:
 		raise RuntimeError('Score manifest missing required input: preprocessed_tracts')
-	indicator_root = resolve_path.get_indicator_root('o3', cfg.version, cfg.storage_mode)
+
+	indicator_root = resolve_path.get_indicator_root('pm25', cfg.version, cfg.storage_mode)
 	tract_scores_path = join_root_and_relative_path(indicator_root, tract_entry['relative'])
 
-	# weights is a shared asset; resolve shared version and root via resolver
 	weights_entry = inputs.get('weights')
 	if not weights_entry:
 		raise RuntimeError('Score manifest missing required input: weights')
-	shared_version = resolve_path.get_dependency_version('o3', cfg.version, 'census_block_weights')
+	shared_version = resolve_path.get_dependency_version('pm25', cfg.version, 'census_block_weights')
 	shared_root = resolve_path.get_shared_root('census_block_weights', shared_version, cfg.storage_mode)
 	census_block_weights_path = join_root_and_relative_path(
-		shared_root,
+		shared_root, 
 		weights_entry['relative'].format(postal=state_config.postal),
 	)
 
-	# output filename template (indicator outputs are relative to indicator root)
 	output_entry = outputs.get('indicator_output_template')
 	if not output_entry:
 		raise RuntimeError('Score manifest missing required output: indicator_output_template')
@@ -317,7 +307,7 @@ def resolve_paths(cfg: Config, state_config: StateConfig, manifest: dict) -> Res
 
 	return ResolvedPaths(
 		state_config=state_config,
-		o3_root_path=indicator_root,
+		pm25_root_path=indicator_root,
 		shared_root_path=shared_root,
 		tract_scores_path=tract_scores_path,
 		census_block_weights_path=census_block_weights_path,
@@ -332,7 +322,7 @@ def require_columns(df: pd.DataFrame, required_columns: tuple[str, ...], descrip
 
 
 def prepare_tract_scores(df: pd.DataFrame) -> pd.DataFrame:
-	"""Validate and normalize the tract-level Ozone preprocess output."""
+	"""Validate and normalize the tract-level PM2.5 preprocess output."""
 	require_columns(df, (TRACT_GEOID_COLUMN, ANNUAL_AVERAGE_COLUMN), 'Tract scores CSV')
 	prepared = df[[TRACT_GEOID_COLUMN, ANNUAL_AVERAGE_COLUMN]].copy()
 	prepared[TRACT_GEOID_COLUMN] = prepared[TRACT_GEOID_COLUMN].astype('string').str.strip()
@@ -420,7 +410,7 @@ def build_final_scores(tract_scores: pd.DataFrame, block_group_population: pd.Da
 def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
 	logging.info('State: %s (%s) | FIPS: %s', paths.state_config.name, paths.state_config.postal, paths.state_config.fips)
 	logging.info('Storage mode: %s', cfg.storage_mode)
-	logging.info('Ozone root path: %s', paths.o3_root_path)
+	logging.info('PM2.5 root path: %s', paths.pm25_root_path)
 	logging.info('Shared root path: %s', paths.shared_root_path)
 	logging.info('Tract scores path: %s', paths.tract_scores_path)
 	logging.info('Census block weights path: %s', paths.census_block_weights_path)
@@ -453,7 +443,7 @@ def log_state_summary(
 		zero_population_block_group_count,
 	)	
 	logging.info(
-		'     min_o3_score=%s max_o3_score=%s',
+		'     min_pm25_score=%s max_pm25_score=%s',
 		minimum_score,
 		maximum_score,
 	)
@@ -469,19 +459,12 @@ def process_state(
 	"""Build and write one state's final PM2.5 block-group score file."""
 	paths = resolve_paths(cfg, state_config, manifest)
 	log_resolved_paths(paths, cfg)
-	
-	# Note that some code below was changed for processing our v0.6 configuration, where
-	# we use only the whole-nation census block weight csv. But, because
-	# the column names did not change, this code works equally well for the v0.5 configuration,
-	# where the input file is one state at a time.
-	# Choose per-version input column names (defaults are V1 names set above).
+	# Select per-version column names explicitly and read only required cols.
 	bg_geoid_col = block_group_geoid_col
 	bg_pop_col = block_group_pop_col
-	if cfg.version_decimal is not None and cfg.version_decimal < Decimal('1.0'):
-		# Before version 1.0, we used the block_group_pop column for 
-		# determining null scores.
-		#bg_geoid_col = 'block_group_geoid'
-		bg_pop_col = 'block_group_pop'
+
+	#NB: Support for versions less than 1.2020 not implemented. 
+	# (See o3 code for how to do that if you need it.)
 
 	usecols = [state_abb_col, bg_geoid_col, bg_pop_col]
 	dtypes = {bg_geoid_col: 'string', state_abb_col: 'string'}
@@ -494,24 +477,21 @@ def process_state(
 			dtype=dtypes,
 		)
 
-	# Require required columns and filter robustly by state postal (case-insensitive)
 	require_columns(block_weights_df, (state_abb_col, bg_geoid_col, bg_pop_col), 'Census block weights CSV')
+	# Filter to rows for this state and fail if none found
 	state_block_weights = block_weights_df.loc[block_weights_df[state_abb_col].astype(str).str.upper() == state_config.postal]
 	if state_block_weights.empty:
 		raise RuntimeError(
 			f'No census block weights found for state {state_config.postal} in {paths.census_block_weights_path}'
 		)
 
-	# Normalize column names to canonical names used downstream
+	# Normalize to canonical column names expected by downstream functions.
 	state_block_weights = state_block_weights.rename(columns={bg_geoid_col: canonical_block_group_geoid, bg_pop_col: canonical_block_group_pop})
-
-	# Prepare block-group population (single validator for all versions)
 	block_group_population = prepare_block_group_population(state_block_weights)
-
 	final_scores = build_final_scores(tract_scores, block_group_population)
 	zero_population_count = int(block_group_population[canonical_block_group_pop].eq(0).sum())
 	logging.info(
-		'Writing final Ozone scores to %s (rows=%d, zero_population_groups=%d)',
+		'Writing final PM2.5 scores to %s (rows=%d, zero_population_groups=%d)',
 		paths.final_bg_scores_path,
 		len(final_scores),
 		zero_population_count,
@@ -525,28 +505,25 @@ def process_state(
 
 
 def main(argv=None) -> int:
-	"""Run the Ozone tract-to-block-group indicator workflow."""
+	"""Run the PM2.5 tract-to-block-group indicator workflow."""
 	log_path = configure_logging()
 	cfg = get_config(argv)
 
-	# Parse and validate version early; fail fast for versions we don't support yet.
+	# Parse and validate version early; fail fast for unsupported manifest versions.
 	version_decimal = parse_version_decimal(cfg.version)
 	cfg = replace(cfg, version_decimal=version_decimal)
-	# Note that the following line should be updated every time the major version
-	# number is incremented. The design plan is that minor version increments (e.g. 1.0 -> 1.1)
-	# should happen when we have new data files but not new columns. 
 	manifest_version_unsupported = Decimal('2.0')
 	if cfg.version_decimal is not None and cfg.version_decimal >= manifest_version_unsupported:
 		raise RuntimeError('Configured manifest version >= %s is not yet supported by this module' % manifest_version_unsupported)
-	
+
 	logging.info('Runtime config: version=%s storage_mode=%s state=%s',
 			 cfg.version_decimal, cfg.storage_mode, cfg.state or 'all')
 	initialize_runtime_dependencies(cfg)
 	state_targets = load_state_targets(cfg.state)
-	# Load the score-stage manifest once and reuse it for all path resolution
+	# Load the stage manifest and resolve the tract scores input path
 	manifest = build_manifest.get_stage_manifest(
 		target_type='indicator',
-		name='o3',
+		name='pm25',
 		stage='score',
 		version=cfg.version,
 		environment=cfg.storage_mode,
@@ -554,13 +531,12 @@ def main(argv=None) -> int:
 	tract_entry = manifest.get('inputs', {}).get('preprocessed_tracts')
 	if not tract_entry:
 		raise RuntimeError('Score manifest missing required input: preprocessed_tracts')
-	# Use the resolver to get an absolute indicator root (local) or raw remote root
-	indicator_root = resolve_path.get_indicator_root('o3', cfg.version, cfg.storage_mode)
+	indicator_root = resolve_path.get_indicator_root('pm25', cfg.version, cfg.storage_mode)
 	tract_scores_path = join_root_and_relative_path(indicator_root, tract_entry['relative'])
+
 	logging.info('Logging to %s', log_path)
 	logging.info('Selected state filter: %s', cfg.state or 'all configured states')
 	logging.info('Using tract scores path: %s', tract_scores_path)
-
 	# If dry-run was requested, print resolved paths for the tract scores and
 	# for each state's weights and outputs, then exit without reading/writing.
 	if cfg.dry_run:
@@ -576,9 +552,10 @@ def main(argv=None) -> int:
 			logging.info('DRY RUN census_block_weights_path=%s', paths.census_block_weights_path)
 			logging.info('DRY RUN final_bg_scores_path=%s', paths.final_bg_scores_path)
 		return 0
+
 	tract_scores_df = read_csv_s3_or_local(tract_scores_path, dtype={TRACT_GEOID_COLUMN: 'string'})
 	prepared_tract_scores = prepare_tract_scores(tract_scores_df)
-	logging.info('Prepared %d tract-level Ozone scores', len(prepared_tract_scores))
+	logging.info('Prepared %d tract-level PM2.5 scores', len(prepared_tract_scores))
 
 	cached_block_weights_df: pd.DataFrame | None = None
 	weights_entry = manifest.get('inputs', {}).get('weights')
@@ -593,19 +570,18 @@ def main(argv=None) -> int:
 	dtypes = {block_group_geoid_col: 'string', state_abb_col: 'string'}
 	cached_block_weights_df = read_csv_s3_or_local(census_block_weights_path, usecols=usecols, dtype=dtypes)
 	require_columns(cached_block_weights_df, (state_abb_col, block_group_geoid_col, block_group_pop_col), 'Census block weights CSV')
+
 	for state_config in state_targets:
-		# pass manifest into process_state via resolve_paths to avoid duplicate lookups
 		process_state(cfg, state_config, prepared_tract_scores, manifest, cached_block_weights_df=cached_block_weights_df)
 
 	state_count = len(state_targets)
-	msg = f"Completed Ozone block-group indicator generation"
+	msg = f"Completed PM2.5 block-group indicator generation"
 	if state_count == 1:
 		msg += f" for {state_count} state: {state_targets[0].postal}"
 	else:
 		msg += f" for {state_count} states"
 	logging.info(msg)
 	print(msg)
-
 	return 0
 
 

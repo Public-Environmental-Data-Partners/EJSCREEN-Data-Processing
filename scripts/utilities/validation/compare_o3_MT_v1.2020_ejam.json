@@ -5,9 +5,8 @@
   "file_a": "{indicator}/v{version_a}/score_output/final_bg_scores_{state}.csv",
   "id_a": "block_group_geoid",
   "score_a": "o3_score",
+  "version_b": "ejam",
   "file_b": "compare/ejamOG/{state}/ejam_{indicator}_subset.csv",
   "id_b": "ejam_uniq_id",
-  "score_b": "o3",
-  "version_b": "ejam",
-  "out_dir": "compare/output/{state}/{indicator}_v{version_a}_vs_ejam/"
+  "score_b": "o3"
 }

@@ -74,6 +74,7 @@ from PIL import Image
 import urllib.request
 import io
 import importlib
+import tempfile
 
 # All of our project-specific imports must be relative to the 
 # `scripts` folder which we assume is at the first level of the
@@ -181,8 +182,16 @@ def pretty_print_cli_style_config(cfg: Dict[str, Any]) -> None:
     print(json.dumps(cli_cfg, indent=2, sort_keys=True))
 
 
-def default_out_dir(state: str, indicator: str, version_a: str, version_b: str) -> str:
-    return str(Path('output') / state / 'compare' / f'{indicator}_{version_a}_vs_{version_b}')
+def default_out_dir(state: str, indicator: str, version_a: str, version_b: str, config_name: str | None = None) -> str:
+    """Return a pipeline-rooted relative default out_dir.
+
+    If `config_name` is provided it is used as the final path component;
+    otherwise fall back to the prior indicator_versionA_vs_versionB name.
+    The returned path is relative (to be resolved against the validation root).
+    """
+    if config_name:
+        return f"compare/{indicator}/{state}/{config_name}/"
+    return f"compare/{indicator}/{state}/{indicator}_{version_a}_vs_{version_b}/"
 
 
 def apply_path_templates(cfg: Dict[str, Any]) -> None:
@@ -357,21 +366,60 @@ def _read_block_groups_geodataframe(tiger_zip_path: Path) -> gpd.GeoDataFrame:
     raise RuntimeError(f'Failed to read block-group data from {tiger_zip_path}: {last_err}')
 
 
-def prepare_map_and_plot(merged_df: pd.DataFrame, state: str, out_dir: Path, indicator: str, version_a: str, version_b: str) -> None:
+def prepare_map_and_plot(merged_df: pd.DataFrame, state: str, out_dir: Path, indicator: str, version_a: str, version_b: str, location: str) -> None:
     # Derive FIPS from first matched geoid (first 2 digits)
     if merged_df.empty:
         raise RuntimeError('No matched rows to map')
     sample_id = merged_df['id'].astype(str).iloc[0]
     fips = sample_id[:2]
 
-    # Resolve TIGER path relative to scripts/shared/pipeline/downloads/...
-    scripts_dir = _resolve_scripts_dir()
-    tiger_rel = Path('downloads') / 'tiger_lines' / '2020' / 'bg' / f'tl_2020_{fips}_bg.zip'
-    tiger_path = scripts_dir / 'shared' / 'pipeline' / tiger_rel
-    if not tiger_path.exists():
-        raise FileNotFoundError(f'TIGER block-group ZIP not found: {tiger_path}')
+    # Resolve TIGER path via shared asset config so resolution works for
+    # both local and remote locations. This uses the shared asset entry
+    # `tiger_bg` version `2020` and the download key `tiger_bg_2020`.
+    shared_info = resolve_path.get_shared_asset_path(
+        asset='tiger_bg', version='2020', category='downloads', asset_key='tiger_bg_2020', environment=location
+    )
+    # Ensure the shared root is fully resolved for local environments
+    if location == 'local':
+        try:
+            shared_root = resolve_path.get_shared_root('tiger_bg', '2020', environment=location)
+        except Exception:
+            # Fallback to the returned root if resolving fails
+            shared_root = shared_info.get('root')
+    else:
+        shared_root = shared_info.get('root')
 
-    bg_gdf = _read_block_groups_geodataframe(tiger_path)
+    tiger_path_str = validation_paths.join_root_and_relative_path(shared_root, shared_info['relative'])
+    # Log both the raw shared asset path and the resolved path so failures can be diagnosed
+    try:
+        raw_relative = shared_info.get('relative')
+    except Exception:
+        raw_relative = None
+    logging.info('TIGER raw relative path -> %s', raw_relative)
+    logging.info('TIGER resolved path -> %s', tiger_path_str)
+
+    # If remote, copy to a temporary local file for geopandas to read.
+    if validation_paths.is_s3_uri(tiger_path_str):
+        if not validation_paths.exists_s3_or_local(tiger_path_str):
+            raise FileNotFoundError(f'TIGER block-group ZIP not found: {tiger_path_str}')
+        fsspec = validation_paths.load_fsspec_module()
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+        tmp.close()
+        try:
+            with fsspec.open(tiger_path_str, 'rb') as fh:
+                with open(tmp.name, 'wb') as outfh:
+                    outfh.write(fh.read())
+            bg_gdf = _read_block_groups_geodataframe(Path(tmp.name))
+        finally:
+            try:
+                Path(tmp.name).unlink()
+            except Exception:
+                pass
+    else:
+        tiger_path = Path(tiger_path_str)
+        if not tiger_path.exists():
+            raise FileNotFoundError(f'TIGER block-group ZIP not found: {tiger_path}')
+        bg_gdf = _read_block_groups_geodataframe(tiger_path)
     if 'GEOID' not in bg_gdf.columns:
         raise RuntimeError(f"Expected 'GEOID' column in TIGER block-group data: {tiger_path}")
     if 'geometry' not in bg_gdf.columns:
@@ -522,7 +570,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     # If out_dir unspecified, propose a default (do not create yet)
     if 'out_dir' not in merged or not merged.get('out_dir'):
         if merged.get('state') and merged.get('indicator') and merged.get('version_a') and merged.get('version_b'):
-            merged['out_dir'] = default_out_dir(merged['state'], merged['indicator'], merged['version_a'], merged['version_b'])
+            cfg_name = None
+            if getattr(args, 'config', None):
+                try:
+                    cfg_name = Path(args.config).stem
+                except Exception:
+                    cfg_name = None
+            merged['out_dir'] = default_out_dir(merged['state'], merged['indicator'], merged['version_a'], merged['version_b'], config_name=cfg_name)
 
     try:
         apply_path_templates(merged)
@@ -570,6 +624,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     if out_dir_raw is None:
         raise RuntimeError('out_dir must be set at this point')
     resolved_out_dir = resolve_validation_path(out_dir_raw, merged['location'])
+    # Log the resolved out_dir for real runs (similar to how inputs are logged)
+    logging.info('resolved out_dir -> %s', resolved_out_dir)
 
     # If local path, create directory. For S3, do not attempt to create.
     if validation_paths.is_s3_uri(resolved_out_dir):
@@ -658,7 +714,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         # Attempt to produce the four-panel map. If TIGER data is missing
         # or plotting fails, log the error but do not fail the whole run.
         try:
-            prepare_map_and_plot(merged_df, merged['state'], out_dir, merged['indicator'], merged['version_a'], merged['version_b'])
+            prepare_map_and_plot(merged_df, merged['state'], out_dir, merged['indicator'], merged['version_a'], merged['version_b'], merged['location'])
         except FileNotFoundError as fnf:
             print(f'Map not produced: {fnf}')
             logging.warning('Map not produced: %s', fnf)

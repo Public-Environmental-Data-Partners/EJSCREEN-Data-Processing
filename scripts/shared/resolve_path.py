@@ -8,6 +8,7 @@ Public (flat) module-level functions:
 - get_shared_root(asset: str, version: str, environment: str = "local") -> str
 - get_shared_version_block(config: dict, asset_name: str, version: str) -> dict
 - substitute_version_placeholder(template: str, version: str) -> str
+- get_pipeline_root(environment: str = "local") -> str
 
 Return contract:
 - Functions that resolve locations return a dictionary containing at least the keys

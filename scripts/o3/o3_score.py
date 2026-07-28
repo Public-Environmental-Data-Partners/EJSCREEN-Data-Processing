@@ -25,7 +25,7 @@ Runtime arguments (current defaults shown):
 			without performing any I/O.
 
 Outputs:
-		- output/{postal}/final_bg_scores.csv under the active Ozone root
+		- v{version}/score_output/final_bg_scores_{postal}.csv under the active Ozone root
 		- o3_score.log in scripts/o3.
 
 Examples (run from the `scripts` folder):

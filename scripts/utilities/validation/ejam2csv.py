@@ -15,8 +15,6 @@ Process summary:
             number of processed rows.
         - Build an output table from shared base fields plus indicator-specific
             score columns for traffic, superfund, hazardous_waste, or pm25.
-            The pm25 branch currently exports the live PM-related EJAM columns
-            used by the PM2.5 validation workflow.
         - Clean selected fields for easier spreadsheet use, including extracting
             report URLs from HTML anchors and forcing EJAM IDs to import as text.
         - Write the selected-field CSV and a small sample JSON dump either to a
@@ -26,19 +24,21 @@ Runtime arguments:
         - --state / --state-code
             Required two-letter postal code used in the API request and output
             subfolder name.
-        - -p / --path
-            Local folder or S3 prefix used as the output root.
+        - -l / --location
+            Required. Either `local` or `remote`; selects which validation pipeline
+            root (via `resolve_path.get_pipeline_root()`) outputs are written under.
         - --indicator
             Indicator selector. Must be one of traffic, superfund,
-            hazardous_waste, or pm25.
+            hazardous_waste, pm25, or o3.
         - -n / --number_rows
             Optional row limit; values less than or equal to zero mean no limit.
         - --dry-run
             Print what would be written without creating output files.
 
-Outputs:
+Outputs (written under `compare/ejamOG/{STATE}/` in the resolved pipeline root,
+e.g. `pipeline/compare/ejamOG/{STATE}/` for `--location local`):
         - ejam_{indicator}_subset.csv
-            Selected EJAM fields written under {path}/{STATE}/.
+            Selected EJAM fields.
             For pm25 this currently includes `pm`, `avg.pm`, and `state.avg.pm`
             when present in the API response.
         - ejam_response.json
@@ -49,8 +49,8 @@ Credits:
         Coded by Multiple GitHub CoPilot agents and Anne Gunn.
 
 Examples (run from the `scripts/utilities/validation` folder):
-    - Get EJAM O3 data for New Jersey (writes to `./output/NJ/`):
-        python3 ejam2csv.py --state NJ -p ./output --indicator o3
+    - Get EJAM O3 data for New Jersey (writes under `pipeline/compare/ejamOG/NJ/`):
+        python3 ejam2csv.py --state NJ --location local --indicator o3
 
 Warning:
     The EJAM API call used by this script relatively slow; the

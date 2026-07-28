@@ -16,7 +16,7 @@ Process summary:
 
 Runtime arguments (current defaults shown):
 		- -l/--location: required one of `local` or `remote` (assigned to internal `storage_mode`).
-		- -v/--version: optional config version to use. Default: `1.0`.
+		- -v/--version: optional config version to use. Default: `1.2020`.
 		- --dry-run: long-only flag. When present the script validates the preprocess manifest
 			and source file headers, then exits without reading or writing full outputs.
 
@@ -29,10 +29,10 @@ Outputs:
 			python3 o3/o3_preprocess.py -l local --dry-run
 
 		- Full run (local, explicit version):
-			python3 o3/o3_preprocess.py -l local -v 1.0
+			python3 o3/o3_preprocess.py -l local -v 1.2020
 
 		- Full run (remote):
-			python3 o3/o3_preprocess.py -l remote -v 1.0
+			python3 o3/o3_preprocess.py -l remote -v 1.2020
 
 """
 
@@ -110,8 +110,8 @@ def get_config(argv=None) -> Config:
 	parser.add_argument(
 		'-v', '--version',
 		dest='version',
-		default='1.0',
-		help='Optional: config version to base processing on (current default: 1.0)'
+		default='1.2020',
+		help='Optional: config version to base processing on (current default: 1.2020)'
 	)
 	# Long-only dry-run flag (no short alias)
 	parser.add_argument(

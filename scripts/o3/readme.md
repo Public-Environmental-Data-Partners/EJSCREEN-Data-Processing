@@ -1,58 +1,72 @@
-# Ozone Scripts
+# Ozone (O3) Scripts
 
-This folder contains the Ozone (O3) indicator pipeline and its state-validation wrapper.
+Ozone indicator pipeline: fetch → preprocess → score. 
+Configuration (versions, shared assets, input and output file paths)
+comes from `o3_config.json` via the shared `build_manifest.py`/`resolve_path.py`
+modules. Note that the default version and the supported geographies,
+(e.g. 'conus', see load_state_targets()) are still hard-coded in the o3_score.py 
+script. Those values could and probably should be moved to the configuration
+file to be consistent with the goal of keeping the code as transparent
+as possible.
+
+All modules should give you up-to-date documentation on runtime options
+if run with the --help option.
+All IO is either 'local' (from/to the pipeline folder within your local git repo)
+or 'remote' (from/to our AWS S3 bucket pipeline). Examples below all show '-l local'.
+To write/read S3 simply substitute 'l remote'.
+Note that the first time you run the code and/or use the 'remote' option, you
+may need to install some additional packages, specifically fsspec (which should
+install boto3 as a dependency), s3fs, and python-dotenv. Also, to use 'remote'
+you have to make your AWS credentials available to the code.  
+(Recco: Google something like: `How to Store Your AWS Credentials in a .env File`
 
 ## Workflow
 
-1. Raw data fetching is now handled by the central fetch runner `../fetch_raw.py` rather than an indicator-specific script.
-  Example (local dry-run):
+1. Fetch the raw annual ozone file via the central fetch runner (run from the `scripts` folder),
+will skip the download if the file already exists:
 
-  ```bash
-  # use the following to see/verify paths
-    python scripts/fetch_raw.py -i o3  --mode local --dry-run
-  # use this to actually fetch the raw data file
-    python scripts/fetch_raw.py -i o3  --mode local --dry-run
+   ```bash
+   python3 shared/fetch_raw.py --indicator o3 -v 1.2020 -l local
+   ```
 
-  ```
-2. `o3_preprocess.py` reads the compressed source directly and writes one annual average concentration per tract.
-3. `o3_score.py` expands tract scores to block groups, applies the zero-population null rule, and writes per-state `final_bg_scores.csv` outputs.
-4. `run_state_validation.sh` reruns one state and, in local mode, compares the result to an Ozone-oriented EJAM subset file.
+2. `o3_preprocess.py` reads the zipped raw annual ozone file source directly 
+and writes one annual average of the ten highest daily 8-hour maxima per tract:
+
+   ```bash
+   python3 o3/o3_preprocess.py -v 1.2020 -l local
+   ```
+
+3. `o3_score.py` expands tract scores to block groups, applies the zero-population null rule, and writes per-state final scores:
+
+   ```bash
+   python3 o3/o3_score.py -v 1.2020 -s WY  -l local 
+   # or use  `-s all` to process every configured state
+   ```
 
 ## Key files
 
-- `../fetch_raw.py` central fetch runner for raw data
-- `o3_config.json`: O3 local and remote roots plus raw-download settings.
-- `o3_config.py`: validated config loader shared by the O3 scripts.
+- `o3_config.json`: versioned fetch/preprocess/score manifest config (local + remote roots, raw-download settings, per-version stage inputs/outputs).
 - `o3_preprocess.py`: tract-level annual averaging step.
-- `o3_score.py`: tract-to-block-group expansion and final state output step.
-- `run_state_validation.sh`: one-state validation wrapper.
+- `o3_score.py`: tract-to-block-group expansion and final per-state output step.
+- `o3_preprocess.log`, `o3_score.log`: log files with more runtime info than you will see on the console
 
-## Current local validation flow
 
-Generate an Ozone-oriented EJAM subset CSV:
+## Validation / Results Comparison
 
-```bash
-python scripts/utilities/validation/ejam2csv.py \
-  --state RI \
-  --data-type o3 \
-  -p scripts/utilities/validation/output
-```
+1. Pull an EJAM ozone subset for a state (writes to folder `pipeline/compare/ejamOG/{STATE}/`):
 
-Then run the O3 validation wrapper:
+   ```bash
+   python3 utilities/validation/ejam2csv.py --state WY --indicator o3 --location local 
+   ```
 
-```bash
-bash scripts/o3/run_state_validation.sh RI local
-```
-
-The current working validation defaults are:
-
-- EJAM subset file: `scripts/utilities/validation/output/{STATE}/ejam_o3_subset.csv`
-- EJAM score column: `ozone`
-- pipeline score column: `o3_score`
+2. Compare the pipeline output to the EJAM subset with `utilities/validation/compareScores.py`
+   (see that script's docstring for the full argument list). Saved configs for this
+   pattern are checked in as `utilities/validation/compare_o3_*.json` and can be
+   reused with `--config`. All config file options can be overwritten at runtime via
+   cli arguments.
 
 ## Output contract
 
-- Tract-level preprocess output: `preprocessed_input/o3_tract_annual_average.csv`
-- Per-state final output: `output/indicators/{postal}/final_bg_scores.csv`
-- Final columns: `block_group_geoid`, `o3_score`
-- Zero-population block groups must have null `o3_score`
+- Tract-level preprocess output: `v{version}/preprocessed_input/o3_tract_annual_average.csv`
+- Per-state final output: `v{version}/score_output/final_bg_scores_{postal}.csv`
+- Final columns include `block_group_geoid` and `o3_score`; zero-population block groups must have a null `o3_score`.

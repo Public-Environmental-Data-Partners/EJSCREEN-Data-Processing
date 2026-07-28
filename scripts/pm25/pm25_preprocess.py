@@ -15,14 +15,14 @@ Process summary:
 
 Runtime arguments:
 	- storage_mode
-		Required. Either local or remote.
+		Required. Passed via -l/--location. Either local or remote.
 	- --version / -v
-		Optional. Config version to use (default: 1.0).
+		Optional. Config version to use (default: 1.2020).
 	- --dry-run
 		Optional. Validate manifest and headers, then exit without processing or writing outputs.
 
 Outputs:
-	- preprocessed_input/pm25_tract_annual_average.csv under the active PM2.5 root.
+	- v{version}/preprocessed_input/pm25_tract_annual_average.csv under the active PM2.5 root.
 	- pm25_preprocess.log in scripts/pm25.
 """
 
@@ -93,8 +93,8 @@ def get_config(argv=None) -> Config:
 	parser.add_argument(
 		'-v', '--version',
 		dest='version',
-		default='1.0',
-		help='Optional: config version to base processing on (current default: 1.0)'
+		default='1.2020',
+		help='Optional: config version to base processing on (current default: 1.2020)'
 	)
 	# Long-only dry-run flag (no short alias)
 	parser.add_argument(

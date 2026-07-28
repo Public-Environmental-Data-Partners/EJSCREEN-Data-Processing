@@ -30,7 +30,10 @@ Runtime arguments (select):
     --id-b         ID column name in file B
     --score-b      Score column name in file B
     --version-b    Version label for file B
-    --out-dir      Optional output directory (defaults to output/{state}/compare/{indicator}_{version_a}_vs_{version_b})
+    --out-dir      Optional output directory (defaults to compare/{indicator}/{state}/compare_{indicator}_{state}_{version_a}_{version_b}/,
+                   resolved against the validation root for the selected location)
+    -l/--location  Required. Either `local` or `remote`; selects which validation root
+                   the resolved paths (including the default --out-dir) are rooted against.
     --dry-run      Validate and print merged config without reading or writing files
 
 Inputs:
@@ -39,17 +42,17 @@ Inputs:
         from statistical calculations.
 
 Outputs:
-    - matched_rows_{indicator}_{version_a}_vs_{version_b}.csv — matched rows after inner join
-    - scatter_{indicator}_{version_a}_vs_{version_b}.png — standalone scatter plot
-    - compare_summary.txt — text file with summary metrics and extremes
+    - {state}_matched_rows_{indicator}_{version_a}_vs_{version_b}.csv — matched rows after inner join
+    - {state}_scatter_{indicator}_{version_a}_vs_{version_b}.png — standalone scatter plot
+    - {state}_compare_summary_{indicator}_{version_a}_vs_{version_b}.txt — text file with summary metrics and extremes
     - {state}_map_{indicator}_{version_a}_vs_{version_b}.png — optional four-panel map (if TIGER data available)
 
 Examples:
     - Dry-run using a config file:
-            python scripts/utilities/validation/compareScores.py --config compare_o3_NJ_v0.6_ejam.json --state NJ --dry-run
+            python scripts/utilities/validation/compareScores.py --config compare_o3_NJ_v0.6_ejam.json --state NJ --location local --dry-run
 
     - Full run specifying files:
-            python scripts/utilities/validation/compareScores.py --indicator o3 --state NJ \
+            python scripts/utilities/validation/compareScores.py --indicator o3 --state NJ --location local \
                 --file-a ../../../pipeline/o3/v0.6/output/indicators/NJ/final_bg_scores.csv --id-a id --score-a score --version-a v0.6 \
                 --file-b ./output/NJ/ejam_o3_subset.csv --id-b id --score-b score --version-b ejam \
                 --out-dir ./output/NJ/compare/o3_v0.6_vs_ejam/

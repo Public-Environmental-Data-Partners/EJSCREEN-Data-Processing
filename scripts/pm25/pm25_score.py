@@ -24,7 +24,7 @@ Runtime arguments (current defaults shown):
 			without performing any I/O.
 
 Outputs:
-	- output/{postal}/final_bg_scores.csv under the active PM2.5 root.
+	- v{version}/score_output/final_bg_scores_{postal}.csv under the active PM2.5 root.
 	- pm25_score.log in scripts/pm25.
 
 Examples (run from the `scripts` folder):

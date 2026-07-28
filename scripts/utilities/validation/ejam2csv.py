@@ -28,7 +28,7 @@ Runtime arguments:
             subfolder name.
         - -p / --path
             Local folder or S3 prefix used as the output root.
-        - --data-type / --type
+        - --indicator
             Indicator selector. Must be one of traffic, superfund,
             hazardous_waste, or pm25.
         - -n / --number_rows
@@ -37,7 +37,7 @@ Runtime arguments:
             Print what would be written without creating output files.
 
 Outputs:
-        - ejam_{data_type}_subset.csv
+        - ejam_{indicator}_subset.csv
             Selected EJAM fields written under {path}/{STATE}/.
             For pm25 this currently includes `pm`, `avg.pm`, and `state.avg.pm`
             when present in the API response.
@@ -50,7 +50,7 @@ Credits:
 
 Examples (run from the `scripts/utilities/validation` folder):
     - Get EJAM O3 data for New Jersey (writes to `./output/NJ/`):
-        python3 ejam2csv.py --state NJ -p ./output --data-type o3
+        python3 ejam2csv.py --state NJ -p ./output --indicator o3
 
 Warning:
     The EJAM API call used by this script relatively slow; the
@@ -82,7 +82,7 @@ class Config:
     # number of rows to process; <=0 or None means process all rows
     number_rows: Optional[int] = 0
     dry_run: bool = False
-    data_type: str = "traffic"
+    indicator: str = "traffic"
 
 
 def get_config(argv=None) -> Config:
@@ -98,7 +98,7 @@ def get_config(argv=None) -> Config:
     parser.add_argument('-l', '--location', dest='location', type=str, required=True,
                         choices=['local', 'remote'],
                         help='Where to write outputs; must be "local" or "remote"')
-    parser.add_argument('--data-type', '--type', dest='data_type', type=str, default=Config.data_type,
+    parser.add_argument('--indicator', dest='indicator', type=str, default=Config.indicator,
                         choices=['superfund', 'traffic', 'hazardous_waste', 'pm25', 'o3'],
                         help='indicator to extract from the EJAM response (default: traffic)')
     parser.add_argument('-n', '--number_rows', type=int, default=Config.number_rows,
@@ -317,7 +317,7 @@ def main(argv=None) -> None:
     root = get_validation_root(config.location)
 
     # write into a state-specific folder under pipeline/compare/ejamOG/{STATE}/
-    output_file = f"ejam_{config.data_type}_subset.csv"
+    output_file = f"ejam_{config.indicator}_subset.csv"
     out_rel = f"compare/ejamOG/{config.state_code}/{output_file}"
     out_path = join_root_and_relative_path(root, out_rel)
 
@@ -390,7 +390,7 @@ def main(argv=None) -> None:
             "state.avg.o3",
         ],
     }
-    desired = base_required + indicator_columns[config.data_type] + base_last
+    desired = base_required + indicator_columns[config.indicator] + base_last
 
     out_df = pandas.DataFrame(index=df.index)
     missing = []

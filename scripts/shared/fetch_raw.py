@@ -78,6 +78,9 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 logging.info("REPO_ROOT: %s", REPO_ROOT)
 logging.info("SCRIPTS_DIR: %s", SCRIPTS_DIR)
 sys.path.insert(0, str(SCRIPTS_DIR))
+# We don't need it on the path, but for some of the shared code and config files, we 
+# may as well have a handy reference to the shared folder.
+SHARED_DIR = SCRIPTS_DIR / "shared"
 
 import shared.build_manifest as build_manifest
 import shared.resolve_path as resolve_path
@@ -137,7 +140,7 @@ def _load_shared_state_module():
     same import semantics and dataclass behavior.
     """
     # Shared state config should live beside this runner in scripts/shared/
-    state_py = SCRIPTS_DIR / 'state_config.py'
+    state_py = SHARED_DIR / 'state_config.py'
     if not state_py.exists():
         raise FileNotFoundError(f'Shared state config module not found: {state_py}')
     loader = importlib.machinery.SourceFileLoader('shared_state_config', str(state_py))
@@ -328,7 +331,7 @@ def get_config(argv=None) -> Config:
         if not args.download:
             raise ValueError('Shared fetch runs require --download to select a shared fetch output key')
 
-        shared_config = _load_json_object(SCRIPTS_DIR / 'shared_config.json', 'shared')
+        shared_config = _load_json_object(SHARED_DIR / 'shared_config.json', 'shared')
         request_timeout_seconds, chunk_size_bytes = _get_download_settings(shared_config, 'shared')
         asset_name, version = _resolve_shared_fetch_target(shared_config, args.download, args.version)
         # Build manifest for the requested environment; resolver accessors

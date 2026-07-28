@@ -84,15 +84,15 @@ import tempfile
 # repository root, then add the scripts directory to sys.path
 REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
 if REPO_ROOT is None:
-	# This is a running-from-docker or other non-git environment cry for help.
+    # This is a running-from-docker or other non-git environment cry for help.
     # Undone: Handle non-git environments more gracefully when needed.
     raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
-SCRIPTS_ROOT = REPO_ROOT / "scripts"
-sys.path.insert(0, str(SCRIPTS_ROOT))
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
 
 import shared.build_manifest as build_manifest
 import shared.resolve_path as resolve_path
-import utilities.validation.validation_paths as validation_paths
+import utilities.validation.validation_io as validation_paths
 
 REQUIRED_FIELDS = (
     'indicator',
@@ -182,16 +182,26 @@ def pretty_print_cli_style_config(cfg: Dict[str, Any]) -> None:
     print(json.dumps(cli_cfg, indent=2, sort_keys=True))
 
 
-def default_out_dir(state: str, indicator: str, version_a: str, version_b: str, config_name: str | None = None) -> str:
+def _version_label(version: str) -> str:
+    """Prefix a numeric-looking version with 'v' (e.g. '1.2021' -> 'v1.2021').
+
+    Non-numeric version labels (e.g. 'ejam') are left unchanged. This mirrors
+    the naming convention already used by the hand-written compare_*.json
+    config filenames.
+    """
+    return f"v{version}" if version and version[0].isdigit() else version
+
+
+def default_out_dir(state: str, indicator: str, version_a: str, version_b: str) -> str:
     """Return a pipeline-rooted relative default out_dir.
 
-    If `config_name` is provided it is used as the final path component;
-    otherwise fall back to the prior indicator_versionA_vs_versionB name.
-    The returned path is relative (to be resolved against the validation root).
+    Always derived from the final (possibly CLI-overridden) merged config
+    values, so the folder name never goes stale relative to a `--config`
+    file's original name. The returned path is relative (to be resolved
+    against the validation root).
     """
-    if config_name:
-        return f"compare/{indicator}/{state}/{config_name}/"
-    return f"compare/{indicator}/{state}/{indicator}_{version_a}_vs_{version_b}/"
+    name = f"compare_{indicator}_{state}_{_version_label(version_a)}_{_version_label(version_b)}"
+    return f"compare/{indicator}/{state}/{name}/"
 
 
 def apply_path_templates(cfg: Dict[str, Any]) -> None:
@@ -389,13 +399,17 @@ def prepare_map_and_plot(merged_df: pd.DataFrame, state: str, out_dir: Path, ind
     else:
         shared_root = shared_info.get('root')
 
-    tiger_path_str = validation_paths.join_root_and_relative_path(shared_root, shared_info['relative'])
-    # Log both the raw shared asset path and the resolved path so failures can be diagnosed
+    # Format the returned relative template with state-specific placeholders
+    raw_relative = shared_info.get('relative')
     try:
-        raw_relative = shared_info.get('relative')
+        formatted_relative = raw_relative.format(fips=fips, postal=state)
     except Exception:
-        raw_relative = None
-    logging.info('TIGER raw relative path -> %s', raw_relative)
+        formatted_relative = raw_relative
+
+    tiger_path_str = validation_paths.join_root_and_relative_path(shared_root, formatted_relative)
+    # Log both the raw shared asset template, the formatted relative, and the resolved path
+    logging.info('TIGER raw relative template -> %s', raw_relative)
+    logging.info('TIGER formatted relative -> %s', formatted_relative)
     logging.info('TIGER resolved path -> %s', tiger_path_str)
 
     # If remote, copy to a temporary local file for geopandas to read.
@@ -570,13 +584,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # If out_dir unspecified, propose a default (do not create yet)
     if 'out_dir' not in merged or not merged.get('out_dir'):
         if merged.get('state') and merged.get('indicator') and merged.get('version_a') and merged.get('version_b'):
-            cfg_name = None
-            if getattr(args, 'config', None):
-                try:
-                    cfg_name = Path(args.config).stem
-                except Exception:
-                    cfg_name = None
-            merged['out_dir'] = default_out_dir(merged['state'], merged['indicator'], merged['version_a'], merged['version_b'], config_name=cfg_name)
+            merged['out_dir'] = default_out_dir(merged['state'], merged['indicator'], merged['version_a'], merged['version_b'])
 
     try:
         apply_path_templates(merged)

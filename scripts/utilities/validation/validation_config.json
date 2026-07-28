@@ -1,4 +1,0 @@
-{
-  "local_root_path": "pipeline/",
-  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/pipeline/"
-}

@@ -312,7 +312,7 @@ def main(argv=None) -> None:
     config = get_config(argv)
 
     # Determine validation root based on requested location
-    from validation_paths import get_validation_root, join_root_and_relative_path
+    from validation_io import get_validation_root, join_root_and_relative_path
 
     root = get_validation_root(config.location)
 

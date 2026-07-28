@@ -320,3 +320,30 @@ def get_shared_version_block(config: dict[str, object], asset_name: str, version
     validation and error messages.
     """
     return _get_resolver()._get_shared_version_block(config, asset_name, version)
+
+
+def get_pipeline_root(environment: str = "local") -> str:
+    """Return the pipeline root (the parent of the shared assets root).
+
+    This is a generic anchor for callers (e.g. the compare/validation
+    scripts) that need to resolve arbitrary, free-form relative paths that
+    aren't tied to a specific indicator or shared-asset schema entry. It
+    reuses the same `local_root_path`/`remote_root_path` fields from
+    `shared_config.json` that `get_shared_root` relies on, so it stays in
+    sync automatically if that root ever moves.
+
+    For `environment=='local'` this returns an absolute path resolved
+    against the project root. For `environment=='remote'` it returns the
+    raw remote root string (e.g. an S3 URI).
+    """
+    resolver = _get_resolver()
+    resolver._validate_environment(environment)
+    config = resolver._load_shared_config()
+    shared_root = resolver._get_root(config, environment, "shared")
+
+    if environment == "local":
+        return str((REPO_ROOT / shared_root).resolve().parent)
+
+    stripped = shared_root.rstrip("/")
+    parent, _, _ = stripped.rpartition("/")
+    return parent + "/" if parent else stripped + "/"

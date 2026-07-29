@@ -5,10 +5,19 @@
 # via `reticulate` and inspect the returned named-list
 #
 # Usage examples: (run from the scripts/ folder):
-# Rscript test_harness/test_build_manifest.R --storage-mode local --target-type indicator --name o3 --stage preprocess --version 1.0
-# Rscript test_harness/test_build_manifest.R --storage-mode remote --target-type indicator --name o3 --stage score --version 1.0
+# Rscript test_harness/test_build_manifest.R --storage-mode local --target-type indicator --name o3 --stage preprocess --version 1.2020
+# Rscript test_harness/test_build_manifest.R --storage-mode remote --target-type indicator --name o3 --stage score --version 1.2021
 # Rscript test_harness/test_build_manifest.R --storage-mode local --target-type shared --name tiger_bg --stage fetch --version 2020
 # Rscript test_harness/test_build_manifest.R --storage-mode local --target-type shared --name census_block_weights --stage preprocess --version 1.0
+#
+# Notes:
+# - See the config files for what names, stages, and versions are valid for any particular indicator or shared asset. 
+#   Error messages here are not particularly diagnostic, so if you get a "not found" error, check the config files to 
+#   make sure you are using a valid combination.
+# - TODO: We've accumulated  naming inconsistencies as the tested code and the configurations have evolved.
+#   For example, "--storage-mode" here corresponds to the 
+#   '-l/--location' argument in the cli for most of the other current modules. I'm not fixing any of that 
+#   today but it should be cleaned up soon to avoid confusion as more modules start to use this code's services.
 
 # checking package requirements
 if (!requireNamespace("reticulate", quietly = TRUE)) {

@@ -23,6 +23,11 @@ Notes:
 - The module exposes a flat functional interface suitable for use from R via
     `reticulate` and from other callers. Internally a singleton `_PathResolver`
     caches parsed JSON configs to minimize I/O.
+- TODO: We've accumulated several naming inconsistencies as the tested code and the configurations have evolved.
+  For example, "--environment" here corresponds to the  
+  '-l/--location' argument in the cli for most of the other current modules and to --storage-mode in the test harnesses. 
+  I'm not fixing any of that 
+  today but it should be cleaned up soon to avoid confusion as more modules start to use this code's services.
 """
 
 from __future__ import annotations

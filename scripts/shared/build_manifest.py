@@ -15,6 +15,12 @@ Notes:
 - The builder delegates shared-version validation to `resolve_path.get_shared_version_block`
     to ensure one authoritative implementation for shared-asset lookups and error messages.
 - Exposes a flat function `get_stage_manifest` suitable for use from R via `reticulate`.
+- TODO: We've accumulated several naming inconsistencies as the indicator code configurations have evolved.
+  For example, "--environment" here corresponds to the  
+  '-l/--location' argument in the cli for most of the other current modules and to --storage-mode in the test harnesses. 
+  I'm not fixing any of that 
+  today but it should be cleaned up soon to avoid confusion as more modules start to use this code's services.
+
 """
 
 from __future__ import annotations

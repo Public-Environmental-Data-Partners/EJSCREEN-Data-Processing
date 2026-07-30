@@ -53,8 +53,8 @@ df <- readr::read_csv(full_path)
 Quick CLI checks (shell) to confirm what `reticulate` will receive:
 
 ```bash
-python scripts/test_harness/test_resolve_path.py --storage-mode local --type indicator --name o3 --version 1.0 --key raw_o3
-python scripts/test_harness/test_resolve_path.py --storage-mode local --type shared --name census_block_weights --version 1.0 --category preprocessed_input
+python scripts/test_harness/test_resolve_path.py --storage-mode local --type indicator --name o3 --version 1.2022 --key raw_o3
+python scripts/test_harness/test_resolve_path.py --storage-mode local --type shared --name census_block_weights --version 1.2022 --category preprocessed_input
 ```
 
 These produce a small JSON object with `root` and `relative` fields; the harness adds a
@@ -92,7 +92,7 @@ print(manifest$outputs$main_tract_averages$relative)
 Quick CLI check (shell) to confirm manifest shape and contents:
 
 ```bash
-python scripts/test_harness/test_build_manifest.py --storage-mode local --target-type indicator --name o3 --stage preprocess --version 1.0
+python scripts/test_harness/test_build_manifest.py --storage-mode local --target-type indicator --name o3 --stage preprocess --version 1.2022
 ```
 
 The harness prints a JSON object prefixed with `status` that mirrors the manifest
@@ -112,11 +112,11 @@ Notes and recommendations
 
 - Resolver test harness: `scripts/test_harness/test_resolve_path.py`
   - Use to validate `get_download_path` and `get_shared_asset_path` return shapes
-  - Example: `python scripts/test_harness/test_resolve_path.py --storage-mode local --type indicator --name o3 --version 1.0 --key raw_o3`
+  - Example: `python scripts/test_harness/test_resolve_path.py --storage-mode local --type indicator --name o3 --version 1.2022 --key raw_o3`
 
 - Manifest test harness: `scripts/test_harness/test_build_manifest.py`
   - Use to validate `get_stage_manifest` returns `inputs`/`outputs` with compiled entries
-  - Example: `python scripts/test_harness/test_build_manifest.py --storage-mode local --target-type indicator --name o3 --stage preprocess --version 1.0`
+  - Example: `python scripts/test_harness/test_build_manifest.py --storage-mode local --target-type indicator --name o3 --stage preprocess --version 1.2022`
 
 I added a short R script in `scripts/test_harness/` that calls these functions via
 `reticulate` and prints the R named-list shapes. Run it with `Rscript` to see what

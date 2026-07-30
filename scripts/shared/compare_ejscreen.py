@@ -2,14 +2,9 @@
 EJSCREEN Comparison Tool
 
 PURPOSE:
-    1. Compares a base indicator (e.g., 'OZONE' vs 'ozone') across original and replaced files.
-    2. Compares all associated variants (e.g., P_OZONE, D5_OZONE) between the original
-       archive and a final processed EJSCREEN file.
-
-PURPOSE:
-    Compares indicator columns (base and variants) between different stages 
-    of the EJSCREEN pipeline. Handles case-sensitivity and automatic 
-    discovery of variant columns (e.g., P_OZONE, B_OZONE).
+    Compares indicator columns (base and variants, e.g. 'OZONE' vs 'ozone', or
+    P_OZONE, D5_OZONE) between different stages of the EJSCREEN pipeline. Handles
+    case-sensitivity and automatic discovery of variant columns.
 
 MODES:
     - orig_repl: Compare archive to the swapped/merged file.

@@ -5,6 +5,15 @@ Loader and validator for the shared indicator configuration.
 This file merges the information previously present in
 `fetch_tiger_lines_bg_config.json` and `shared_paths_config.json` and
 provides typed accessors used by the central runner.
+
+Public functions:
+- `get_shared_config() -> SharedConfig`:
+    Return the validated `SharedConfig` loaded from `shared_config.json`, caching the
+    result. Raises `FileNotFoundError`/`ValueError` when the file is missing or fails
+    validation.
+- `resolve_local_shared_root_path(shared_dir: Path) -> str`:
+    Resolve the configured `local_root_path` from `shared_config.json` into an absolute
+    path, given the caller's shared script directory.
 """
 
 from __future__ import annotations

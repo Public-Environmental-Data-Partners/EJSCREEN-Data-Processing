@@ -15,8 +15,6 @@ Process summary:
             number of processed rows.
         - Build an output table from shared base fields plus indicator-specific
             score columns for traffic, superfund, hazardous_waste, or pm25.
-            The pm25 branch currently exports the live PM-related EJAM columns
-            used by the PM2.5 validation workflow.
         - Clean selected fields for easier spreadsheet use, including extracting
             report URLs from HTML anchors and forcing EJAM IDs to import as text.
         - Write the selected-field CSV and a small sample JSON dump either to a
@@ -26,19 +24,21 @@ Runtime arguments:
         - --state / --state-code
             Required two-letter postal code used in the API request and output
             subfolder name.
-        - -p / --path
-            Local folder or S3 prefix used as the output root.
-        - --data-type / --type
+        - -l / --location
+            Required. Either `local` or `remote`; selects which validation pipeline
+            root (via `resolve_path.get_pipeline_root()`) outputs are written under.
+        - --indicator
             Indicator selector. Must be one of traffic, superfund,
-            hazardous_waste, or pm25.
+            hazardous_waste, pm25, or o3.
         - -n / --number_rows
             Optional row limit; values less than or equal to zero mean no limit.
         - --dry-run
             Print what would be written without creating output files.
 
-Outputs:
-        - ejam_{data_type}_subset.csv
-            Selected EJAM fields written under {path}/{STATE}/.
+Outputs (written under `compare/ejamOG/{STATE}/` in the resolved pipeline root,
+e.g. `pipeline/compare/ejamOG/{STATE}/` for `--location local`):
+        - ejam_{indicator}_subset.csv
+            Selected EJAM fields.
             For pm25 this currently includes `pm`, `avg.pm`, and `state.avg.pm`
             when present in the API response.
         - ejam_response.json
@@ -46,7 +46,16 @@ Outputs:
 
 Credits:
         Designed by Anne Gunn.
-        Coded by GitHub Copilot (GPT-5.4) and Anne Gunn.
+        Coded by Multiple GitHub CoPilot agents and Anne Gunn.
+
+Examples (run from the `scripts/utilities/validation` folder):
+    - Get EJAM O3 data for New Jersey (writes under `pipeline/compare/ejamOG/NJ/`):
+        python3 ejam2csv.py --state NJ --location local --indicator o3
+
+Warning:
+    The EJAM API call used by this script relatively slow; the
+    request may take several minutes to complete. Use `--dry-run` for a
+    quick validation of arguments without making the network request.
 """
 
 # Inputs: none required (hardcoded API request), optional CLI `-n/--limit` to limit rows
@@ -66,12 +75,14 @@ from typing import Optional
 class Config:
     # State code (USPS or FIPS-style short code); user must supply on CLI
     state_code: str = ""
-    # destination path for the csv file
-    path: str = "s3://pedp-data-preserved/ejscreen-data-processing/traffic/"
+    # `location` determines which root to use (local or remote)
+    location: str = "local"
+    # destination path for the csv file (kept for backward compatibility; unused in Slice 1)
+    path: str = ""
     # number of rows to process; <=0 or None means process all rows
     number_rows: Optional[int] = 0
     dry_run: bool = False
-    data_type: str = "traffic"
+    indicator: str = "traffic"
 
 
 def get_config(argv=None) -> Config:
@@ -84,9 +95,10 @@ def get_config(argv=None) -> Config:
     # Order: state_code, path, number_rows, dry_run, then others
     parser.add_argument('--state', '--state-code', dest='state_code', type=str, required=True,
                         help='State code (e.g. RI); will be upper-cased and used for API request and as output folder')
-    parser.add_argument('-p', '--path', type=str, default=Config.path,
-                        help='S3 path prefix or local folder for output (default local example: ./output/)')
-    parser.add_argument('--data-type', '--type', dest='data_type', type=str, default=Config.data_type,
+    parser.add_argument('-l', '--location', dest='location', type=str, required=True,
+                        choices=['local', 'remote'],
+                        help='Where to write outputs; must be "local" or "remote"')
+    parser.add_argument('--indicator', dest='indicator', type=str, default=Config.indicator,
                         choices=['superfund', 'traffic', 'hazardous_waste', 'pm25', 'o3'],
                         help='indicator to extract from the EJAM response (default: traffic)')
     parser.add_argument('-n', '--number_rows', type=int, default=Config.number_rows,
@@ -299,11 +311,16 @@ def main(argv=None) -> None:
     # Use simplified config/CLI parsing
     config = get_config(argv)
 
-    print(f"Will be writing to path: {config.path}")
+    # Determine validation root based on requested location
+    from validation_io import get_validation_root, join_root_and_relative_path
 
-    # write into a state-specific folder and use a short filename
-    output_file = f"ejam_{config.data_type}_subset.csv"
-    out_path = join_path_and_file(config.path, f"{config.state_code}/{output_file}")
+    root = get_validation_root(config.location)
+
+    # write into a state-specific folder under pipeline/compare/ejamOG/{STATE}/
+    output_file = f"ejam_{config.indicator}_subset.csv"
+    out_rel = f"compare/ejamOG/{config.state_code}/{output_file}"
+    out_path = join_root_and_relative_path(root, out_rel)
+
     limit = config.number_rows
     dry_run = config.dry_run
 
@@ -311,14 +328,19 @@ def main(argv=None) -> None:
     url = "https://ejamapi-84652557241.us-central1.run.app/data"
     # Use configured state code (uppercased)
     request_data = {"buffer": 0, "fips": config.state_code, "scale": "blockgroup"}
+    # If dry-run, don't make the API call — just report resolved path and exit.
+    if dry_run:
+        print(f"--dry-run: no files will be written. Would write to: {out_path}")
+        return
 
     resp = requests.post(url, json=request_data)
     resp.raise_for_status()
     print("HTTP status:", resp.status_code)
 
     data = resp.json()
-    # dump the raw JSON response to a file for inspection (limited)
-    dumpRequestJson(data, path=config.path, state_code=config.state_code, limit=limit)
+    # dump the raw JSON response to the same compare folder (alongside the CSV)
+    dump_dir = join_root_and_relative_path(root, f"compare/ejamOG/{config.state_code}")
+    dumpRequestJson(data, filename='ejam_response.json', path=dump_dir, state_code=None, limit=limit)
     print("response type:", type(data))
 
     # The API returns a list-of-dicts; construct DataFrame directly
@@ -368,7 +390,7 @@ def main(argv=None) -> None:
             "state.avg.o3",
         ],
     }
-    desired = base_required + indicator_columns[config.data_type] + base_last
+    desired = base_required + indicator_columns[config.indicator] + base_last
 
     out_df = pandas.DataFrame(index=df.index)
     missing = []

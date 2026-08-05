@@ -2,24 +2,38 @@
 
 Purpose:
 	Read the raw national Ozone .txt.gz file directly, validate the tract-keyed
-	input columns, compute one annual average concentration per tract, and write
-	the tract-level intermediate CSV used by the indicator step.
+	input columns, compute one annual average of the ten highest daily 8-hour
+	maximum concentrations per tract, and write the tract-level intermediate CSV
+	used by the indicator step.
 
 Process summary:
-	- Resolve local or remote Ozone storage from o3_config.json.
+	- Resolve local or remote Ozone storage from the manifest + resolver.
 	- Validate the compressed file header before performing the full read.
 	- Read only the required columns from the raw source.
 	- Validate tract GEOIDs, dates, and numeric Ozone values.
-	- Aggregate to one annual average concentration per tract.
+	- Aggregate to the average of the ten highest daily 8-hour maximum values per tract.
 	- Write the tract-level CSV and log the output range.
 
-Runtime arguments:
-	- storage_mode
-		Required. Either local or remote.
+Runtime arguments (current defaults shown):
+		- -l/--location: required one of `local` or `remote` (assigned to internal `storage_mode`).
+		- -v/--version: optional config version to use. Default: `1.2020`.
+		- --dry-run: long-only flag. When present the script validates the preprocess manifest
+			and source file headers, then exits without reading or writing full outputs.
 
 Outputs:
-	- preprocessed_input/o3_tract_annual_average.csv under the active Ozone root.
-	- o3_preprocess.log in scripts/o3.
+		- vn.m/preprocessed_input/o3_tract_annual_average.csv, version controlled by manifest.
+		- o3_preprocess.log in scripts/o3.
+
+	Examples (run from the `scripts` folder):
+		- Dry-run (local):
+			python3 o3/o3_preprocess.py -l local --dry-run
+
+		- Full run (local, explicit version):
+			python3 o3/o3_preprocess.py -l local -v 1.2020
+
+		- Full run (remote):
+			python3 o3/o3_preprocess.py -l remote -v 1.2020
+
 """
 
 from __future__ import annotations
@@ -32,9 +46,24 @@ import logging
 from pathlib import Path
 
 import pandas as pd
+import sys
 
-from o3_config import get_o3_config, resolve_local_o3_root_path
+# All of our project-specific imports must be relative to the 
+# `scripts` folder which we assume is at the first level of the
+# repository. 
+# NB: ***If `scripts` moves, this code will have to change.***
+# Walk up our current working directory tree until you find the
+# repository root, then add the scripts directory to sys.path
+REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
+if REPO_ROOT is None:
+	# This is a running-from-docker or other non-git environment cry for help.
+    # Undone: Handle non-git environments more gracefully when needed.
+    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS_ROOT))
 
+import shared.build_manifest as build_manifest
+import shared.resolve_path as resolve_path
 
 O3_DIR = Path(__file__).resolve().parent
 DEFAULT_LOG_FILENAME = 'o3_preprocess.log'
@@ -44,36 +73,97 @@ RAW_O3_COLUMN = 'ozone_daily_8hour_maximum(ppb)'
 TRACT_GEOID_COLUMN = 'tract_geoid'
 ANNUAL_AVERAGE_COLUMN = 'annual_average_ten_highest_MDA8'
 
+# Pre-compile or centralize frequently used regexes/patterns as module
+# constants to avoid recreating them on each function call.
+FIPS_PATTERN = r'\d{11}'
+
 
 @dataclass(frozen=True, slots=True)
 class Config:
 	storage_mode: str
+	version: str
 	local_root_path: str
 	remote_root_path: str
 	raw_download_relative_path: str
 	preprocessed_tract_output_relative_path: str
+	dry_run: bool = False
 
 
 def get_config(argv=None) -> Config:
-	"""Parse runtime arguments and merge them with validated Ozone config values."""
-	raw_config = get_o3_config()
+	"""Parse runtime arguments and derive canonical paths from the manifest/resolver.
+
+	This function uses `build_manifest.get_stage_manifest()` (preprocess stage)
+	and `resolve_path.get_indicator_root()` to populate the runtime config.
+	No compatibility fallback to the old flat JSON format is provided.
+	"""
 
 	parser = argparse.ArgumentParser(
 		description='Read the raw national Ozone .txt.gz file, compute tract-level annual average concentration, and write the preprocessed tract CSV.'
 	)
 	parser.add_argument(
-		'storage_mode',
+		'-l', '--location',
+		dest='storage_mode',
 		choices=('local', 'remote'),
+		required=True,
 		help='Select whether the script reads and writes through the configured local root path or remote S3 root path.',
+	)
+	parser.add_argument(
+		'-v', '--version',
+		dest='version',
+		default='1.2020',
+		help='Optional: config version to base processing on (current default: 1.2020)'
+	)
+	# Long-only dry-run flag (no short alias)
+	parser.add_argument(
+		'--dry-run',
+		dest='dry_run',
+		action='store_true',
+		help='Dry run: validate manifest and headers but do not process or write outputs.',
 	)
 	args = parser.parse_args(argv)
 
+	# Build the preprocess manifest for this indicator/version. We expect the
+	# preprocess stage to define an input `primary_o3` (indicator download) and
+	# an output `main_tract_averages` (the tract CSV).
+	manifest = build_manifest.get_stage_manifest(
+		target_type='indicator',
+		name='o3',
+		stage='preprocess',
+		version=args.version,
+		environment=args.storage_mode,
+	)
+
+	inputs = manifest.get('inputs', {})
+	outputs = manifest.get('outputs', {})
+
+	if 'primary_o3' not in inputs:
+		raise RuntimeError('Preprocess manifest missing required input: primary_o3')
+	if 'main_tract_averages' not in outputs:
+		raise RuntimeError('Preprocess manifest missing required output: main_tract_averages')
+
+	# Manifest entries may already include a compiled "root" and "relative".
+	raw_entry = inputs['primary_o3']
+	preproc_entry = outputs['main_tract_averages']
+
+	raw_rel = raw_entry.get('relative')
+	preproc_rel = preproc_entry.get('relative')
+
+	if not raw_rel or not isinstance(raw_rel, str):
+		raise RuntimeError('Invalid relative path for primary_o3 in preprocess manifest')
+	if not preproc_rel or not isinstance(preproc_rel, str):
+		raise RuntimeError('Invalid relative path for main_tract_averages in preprocess manifest')
+
+	local_root = resolve_path.get_indicator_root('o3', args.version, 'local')
+	remote_root = resolve_path.get_indicator_root('o3', args.version, 'remote')
+
 	return Config(
 		storage_mode=args.storage_mode,
-		local_root_path=resolve_local_o3_root_path(O3_DIR),
-		remote_root_path=raw_config.remote_root_path,
-		raw_download_relative_path=raw_config.raw_download_relative_path,
-		preprocessed_tract_output_relative_path=raw_config.preprocessed_tract_output_relative_path,
+		version=args.version,
+		local_root_path=local_root,
+		remote_root_path=remote_root,
+		raw_download_relative_path=raw_rel,
+		preprocessed_tract_output_relative_path=preproc_rel,
+		dry_run=args.dry_run,
 	)
 
 
@@ -198,7 +288,7 @@ def validate_and_prepare_raw_table(df: pd.DataFrame) -> pd.DataFrame:
 	require_columns(df, (RAW_FIPS_COLUMN, RAW_DATE_COLUMN, RAW_O3_COLUMN))
 	prepared = df[[RAW_FIPS_COLUMN, RAW_DATE_COLUMN, RAW_O3_COLUMN]].copy()
 	prepared[RAW_FIPS_COLUMN] = prepared[RAW_FIPS_COLUMN].astype('string').str.strip()
-	invalid_fips_mask = prepared[RAW_FIPS_COLUMN].isna() | ~prepared[RAW_FIPS_COLUMN].str.fullmatch(r'\d{11}')
+	invalid_fips_mask = prepared[RAW_FIPS_COLUMN].isna() | ~prepared[RAW_FIPS_COLUMN].str.fullmatch(FIPS_PATTERN)
 	if invalid_fips_mask.any():
 		invalid_samples = prepared.loc[invalid_fips_mask, RAW_FIPS_COLUMN].drop_duplicates().astype(str).head(5).tolist()
 		raise RuntimeError(
@@ -271,6 +361,18 @@ def main(argv=None) -> int:
 	header_df = read_raw_o3_header(raw_input_path)
 	require_columns(header_df, (RAW_FIPS_COLUMN, RAW_DATE_COLUMN, RAW_O3_COLUMN))
 	logging.info('Raw Ozone header validation passed')
+	# If dry-run was requested, we've validated manifest resolution and the
+	# raw file header; exit early without performing the full read/aggregation
+	# or writing outputs.
+	if cfg.dry_run:
+		logging.info('Dry run enabled; skipping full read/processing and write.')
+		logging.info('DRY RUN: manifest and header validated.')
+		logging.info('raw_input_path=%s', raw_input_path)
+		logging.info('output_path=%s', output_path)
+		print('DRY RUN: manifest and header validated.')
+		print(f'raw_input_path={raw_input_path}')
+		print(f'output_path={output_path}')
+		return 0
 
 	logging.info('Reading raw Ozone input table')
 	raw_df = read_raw_o3_table(raw_input_path)

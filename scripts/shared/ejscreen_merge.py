@@ -30,6 +30,7 @@ import pandas as pd
 import re
 import numpy as np
 import argparse
+from pathlib import Path
 
 # File configuration
 EJSCREEN_PATH = "pipeline/shared/ejscreen/EJSCREEN_2024_BG_with_AS_CNMI_GU_VI.csv"
@@ -44,7 +45,7 @@ def ejscreen_merge(indicators, version, location):
     # Low memory False helps with the large number of EJSCREEN columns
     df_main = pd.read_csv(EJSCREEN_PATH, dtype={'ID': str}, low_memory=False)
 
-    print(indicators, version, location)
+    # print(indicators, version, location)
 
     for indicator in indicators:
         local_csv_path = f"pipeline/{indicator}/v{version}/score_output/combined_{indicator}.csv"
@@ -100,11 +101,12 @@ def ejscreen_merge(indicators, version, location):
     df_main = df_main[["ID", "PM25","OZONE","DSLPM","RSEI_AIR","PTRAF","PRE1960PCT","PNPL","PRMP","PTSDF","UST","PWDIS", "DWATER", "NO2"]]
 
     # 5. Save Output
-    output_name = "pipeline/shared/ejscreen/bg_envirodata.csv"
-    df_main.to_csv(output_name, index=False)
+    file_path = Path(f"pipeline/shared/ejscreen/v{version}/envirodata_{version}.csv")
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    df_main.to_csv(file_path, index=False)
     
     print(f"\nSuccess!")
-    print(f"Final file saved: {output_name}")
+    print(f"Final file saved: {file_path}")
     print(f"Total columns: {len(df_main.columns)}")
 
 if __name__ == "__main__":
@@ -122,7 +124,6 @@ if __name__ == "__main__":
 
         if args.indicators:
             args.indicators = args.indicators.split(",")
-            print(args.indicators)
 
         # 4. Access the arguments
         ejscreen_merge(args.indicators, args.version, args.location)

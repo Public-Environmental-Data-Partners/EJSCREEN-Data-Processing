@@ -87,7 +87,7 @@ def get_config(argv=None) -> Config:
     parser.add_argument('-p', '--path', type=str, default=Config.path,
                         help='S3 path prefix or local folder for output (default local example: ./output/)')
     parser.add_argument('--data-type', '--type', dest='data_type', type=str, default=Config.data_type,
-                        choices=['superfund', 'traffic', 'hazardous_waste', 'pm25', 'o3'],
+                        choices=['superfund', 'traffic', 'hazardous_waste', 'pm25', 'o3', 'wastewater'],
                         help='indicator to extract from the EJAM response (default: traffic)')
     parser.add_argument('-n', '--number_rows', type=int, default=Config.number_rows,
                         help='maximum number of rows to process (default: 10); <=0 means no limit')
@@ -366,6 +366,13 @@ def main(argv=None) -> None:
             "o3",
             "avg.o3",
             "state.avg.o3",
+        ],
+        "wastewater": [
+            "proximity.npdes",
+            "pctile.proximity.npdes",
+            "state.pctile.proximity.npdes",
+            "avg.proximity.npdes",
+            "state.avg.proximity.npdes",
         ],
     }
     desired = base_required + indicator_columns[config.data_type] + base_last

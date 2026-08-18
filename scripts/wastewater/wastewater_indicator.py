@@ -38,9 +38,15 @@ import sys
 WASTEWATER_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = WASTEWATER_DIR.parent
 
+print(WASTEWATER_DIR, SCRIPTS_DIR)
+
+# TODO: Move to config/arguments
+DEFAULT_VERSION = 1
+DEFAULT_YEAR = 2021
+
 MODELED_FLOWLINES_DIR = (
-    WASTEWATER_DIR
-    / "pipeline"
+    Path("../pipeline/wastewater")
+    / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
     / "preprocessed_input"
     / "modeled_flowlines"
 )
@@ -49,10 +55,9 @@ COMBINE_SCRIPT = WASTEWATER_DIR / "wastewater_combine_flowlines.py"
 PROXIMITY_SCRIPT = WASTEWATER_DIR / "wastewater_proximity.py"
 
 OUTPUT_ROOT = (
-    WASTEWATER_DIR
-    / "pipeline"
-    / "output"
-    / "indicators"
+    Path("../pipeline/wastewater")
+    / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
+    / "score_output"
 )
 
 STATE_OUTPUT_FILENAMES = (

@@ -1,8 +1,10 @@
 from pathlib import Path
 import pandas as pd
 
-OUTPUT_DIR = Path("wastewater/pipeline/output/indicators")
-QA_DIR = Path("wastewater/pipeline/output/qa")
+DEFAULT_VERSION=1
+DEFAULT_YEAR=2021
+OUTPUT_DIR = Path(f"../pipeline/wastewater/v{DEFAULT_VERSION}.{DEFAULT_YEAR}/score_output")
+QA_DIR = Path(f"../pipeline/wastewater/v{DEFAULT_VERSION}.{DEFAULT_YEAR}/score_output/qa")
 QA_DIR.mkdir(parents=True, exist_ok=True)
 
 rows = []

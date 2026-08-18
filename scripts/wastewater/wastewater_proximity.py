@@ -74,9 +74,12 @@ QA_FILENAME = "wastewater_proximity_qa.json"
 WASTEWATER_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = WASTEWATER_DIR.parent
 
+# TODO: Move to config/arguments
+DEFAULT_VERSION = 1
+DEFAULT_YEAR = 2021
 MODELED_FLOWLINES_DIR = (
-    WASTEWATER_DIR
-    / "pipeline"
+    Path("../pipeline/wastewater")
+    / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
     / "preprocessed_input"
     / "modeled_flowlines"
 )
@@ -267,12 +270,12 @@ def get_census_block_path(
         return args.census_blocks_path
 
     return (
-        SCRIPTS_DIR
+        Path("../pipeline")
         / "shared"
-        / "pipeline"
+        / "census_block_weights"
+        / "1.0" # hard coded
         / "preprocessed_input"
-        / "census_block_weights_2020"
-        / f"census_block_weights_2020_{args.state}.csv"
+        / f"census_block_weights_2020_w2022pops.csv" # Not sure how to handle states here v1.0 of census block weights does entire US see shared_config.json
     )
 
 
@@ -285,10 +288,9 @@ def get_output_directory(
         return args.output_dir
 
     return (
-        WASTEWATER_DIR
-        / "pipeline"
-        / "output"
-        / "indicators"
+        Path("../pipeline/wastewater")
+        / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
+        / "score_output"
         / args.state
     )
 

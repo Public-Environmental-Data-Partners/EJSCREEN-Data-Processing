@@ -18,10 +18,11 @@ from nhdplus_config import SUPPORTED_VPUS
 
 
 WASTEWATER_DIR = Path(__file__).resolve().parent
-
+DEFAULT_VERSION=1
+DEFAULT_YEAR=2021
 DEFAULT_INPUT_DIR = (
-    WASTEWATER_DIR
-    / "pipeline"
+    Path("../pipeline/wastewater")
+    / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
     / "preprocessed_input"
     / "modeled_flowlines"
 )

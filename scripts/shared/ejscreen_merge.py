@@ -60,6 +60,8 @@ def ejscreen_merge(indicators, version, location):
         # O3->OZONE. NB: This should be automatically handled somewhere in a config...
         if indicator == "o3":
             indicator = "ozone"
+        if indicator == "wastewater":
+            indicator = "pwdis"
         
         # Regex to find any column containing the indicator name
         pattern = re.compile(f".*{indicator}.*", re.IGNORECASE)
@@ -98,7 +100,7 @@ def ejscreen_merge(indicators, version, location):
     # 4. Process further for EJAM
     # Filter to environmental indicators only (including lead paint)
     # EJSCREEN syntax (e.g. OZONE) is ok as long as we use the fixcolnames function in EJAM
-    df_main = df_main[["ID", "PM25","OZONE","DSLPM","RSEI_AIR","PTRAF","PRE1960PCT","PNPL","PRMP","PTSDF","UST","PWDIS", "DWATER", "NO2"]]
+    df_main = df_main[["ID", "PM25","OZONE","DSLPM","RSEI_AIR","PTRAF","PRE1960PCT","PNPL","PRMP","PTSDF","UST", "PWDIS", "DWATER", "NO2"]]
 
     # 5. Save Output
     file_path = Path(f"pipeline/shared/ejscreen/v{version}/envirodata_{version}.csv")

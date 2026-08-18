@@ -129,6 +129,7 @@ def main() -> int:
         Path("../pipeline/wastewater")
         / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
         / "preprocessed_input"
+        / "vpu"
     )
 
     output_path = (

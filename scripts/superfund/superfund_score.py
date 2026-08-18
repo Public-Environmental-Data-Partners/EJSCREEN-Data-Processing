@@ -1,38 +1,42 @@
-"""superfund_indicator.py
+"""superfund_score.py
 
 Purpose:
-	Read the canonical local Superfund NPL geodatabase, combine it with shared
-	block-group boundaries and census block weights, and write per-state final
-	Superfund proximity scores.
+	Run the Superfund proximity scoring pipeline for one or more states.
 
-Process summary:
-	- Resolve the local canonical Superfund preprocess input and the shared/output roots.
-	- Stage remote shared geospatial inputs locally when needed.
-	- Read the preprocessed NPL geodatabase, shared block-group boundaries, and shared
-		census block weights.
-	- Identify targeted block groups, compute block-to-site distances, derive inverse-distance
-		proximity scores, and aggregate those scores to block groups with shared population weights.
+What it does:
+	- Resolves canonical inputs (preprocessed Superfund .gdb and shared TIGER/blocks)
+	  from configuration.
+	- Optionally stages remote geospatial inputs locally when `--location remote` is used.
+	- Executes the per-state pipeline:
+		1. Read projected NPL polygons, block-group boundaries, and blocks CSV.
+		2. Buffer active NPL polygons and identify targeted block groups.
+		3. Compute block-to-site distances and convert to proximity scores.
+		4. Aggregate block-level scores to block-group weighted scores and write outputs.
 
-Runtime arguments:
-	- storage_mode
-		Required. Either local or remote.
-	- --state
-		Optional two-letter state code. Defaults to VT.
-	- --npl-boundaries-path
-		Optional explicit local path to the canonical extracted .gdb directory.
-	- --block-groups-path, --census-blocks-path
-		Optional explicit local path or S3 URI overrides for shared inputs.
-	- --output-dir
-		Optional explicit local path or S3 URI for the state output directory.
-	- --targeted-block-groups-filename, --block-site-distances-filename,
-	  --final-bg-scores-filename
-		Optional output filename overrides.
+Usage summary:
+	- `-l/--location` : Required choice of `local` or `remote` (preferred over legacy positional).
+	- `-s/--state`    : Required two-letter postal code for a single-state run, or the literal
+					   `'all'` to run all configured states.
+	- `-o/--output-dir`: Optional explicit output directory (local path or S3 URI) to override
+					   the configured indicator output location.
 
-Outputs:
-	- output/indicators/{postal}/targeted_block_groups.csv under the active output root.
-	- output/indicators/{postal}/block_site_distances.csv under the active output root.
-	- output/indicators/{postal}/final_bg_scores.csv under the active output root.
-	- superfund_indicator.log in scripts/superfund.
+Examples:
+	Local run, single state:
+		python scripts/superfund/superfund_score.py -l local -s NJ
+
+	Local run, all configured states:
+		python scripts/superfund/superfund_score.py -l local -s all
+
+	Remote run (S3), single state:
+		python scripts/superfund/superfund_score.py -l remote -s NJ
+
+Outputs (per state):
+	- `targeted_block_groups.csv`
+	- `block_site_distances.csv`
+	- `final_bg_scores.csv` (column: `superfund_score`)
+
+Logging:
+	- Writes runtime log entries to `superfund_score.log` in this folder.
 """
 
 from __future__ import annotations
@@ -55,7 +59,7 @@ from superfund_config import get_superfund_config, resolve_local_superfund_root_
 
 
 SUPERFUND_DIR = Path(__file__).resolve().parent
-DEFAULT_LOG_FILENAME = 'superfund_indicator.log'
+DEFAULT_LOG_FILENAME = 'superfund_score.log'
 DEFAULT_TARGETED_BLOCK_GROUPS_FILENAME = 'targeted_block_groups.csv'
 DEFAULT_BLOCK_SITE_DISTANCES_FILENAME = 'block_site_distances.csv'
 DEFAULT_FINAL_BG_SCORES_FILENAME = 'final_bg_scores.csv'
@@ -90,7 +94,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 	sys.path.insert(0, str(SCRIPTS_DIR))
 
 try:
-	from shared.state_config import StateConfig, get_state_config, validate_metric_target_crs
+	from shared.state_config import StateConfig, get_state_config, get_state_config_list, validate_metric_target_crs
 except Exception as exc:
 	raise RuntimeError(
 		'Failed to import shared.state_config. Ensure scripts/shared/state_config.py is present and '
@@ -108,15 +112,11 @@ except Exception as exc:
 
 @dataclass(frozen=True, slots=True)
 class Config:
-	storage_mode: str
-	state: str
-	npl_boundaries_path: str | None = None
-	block_groups_path: str | None = None
-	census_blocks_path: str | None = None
+	# `location` is the new named option (replaces positional storage_mode).
+	location: str
+	# Optional two-letter state postal code; None -> process all/CONUS
+	state: str | None = None
 	output_dir: str | None = None
-	targeted_block_groups_filename: str = DEFAULT_TARGETED_BLOCK_GROUPS_FILENAME
-	block_site_distances_filename: str = DEFAULT_BLOCK_SITE_DISTANCES_FILENAME
-	final_bg_scores_filename: str = DEFAULT_FINAL_BG_SCORES_FILENAME
 	buffer_meters: float = DEFAULT_BUFFER_METERS
 
 
@@ -135,81 +135,68 @@ class ResolvedPaths:
 
 
 def get_config(argv=None) -> Config:
-	"""Parse runtime arguments for the Superfund indicator step."""
-	defaults = Config(storage_mode='local', state='VT')
+	"""Parse runtime arguments for the Superfund indicator step.
+
+	Backwards-compatible: accepts the legacy positional `storage_mode` as an
+	alias for the new named `--location` / `-l` option.
+	"""
+	defaults = Config(location='local', state=None)
 	parser = argparse.ArgumentParser(
 		description='Read the canonical Superfund .gdb input and produce per-state block-group final scores.'
 	)
+	# Legacy positional (optional) for backward compatibility; prefer named flag.
 	parser.add_argument(
 		'storage_mode',
+		nargs='?',
 		choices=('local', 'remote'),
+		help=argparse.SUPPRESS,
+	)
+	parser.add_argument(
+		'-l', '--location',
+		dest='location',
+		choices=('local', 'remote'),
+		default=None,
 		help='Select whether the script reads shared inputs and writes outputs through the local root path or remote S3 root path.',
 	)
 	parser.add_argument(
-		'--state',
+		'-s', '--state',
 		dest='state',
-		default=defaults.state,
-		help=f'Two-letter state code to process (default: {defaults.state}).',
+		required=True,
+		help="Required two-letter state code to process a single state, or 'all' to process all configured states.",
 	)
 	parser.add_argument(
-		'--npl-boundaries-path',
-		dest='npl_boundaries_path',
-		default=defaults.npl_boundaries_path,
-		help='Optional explicit local path to the canonical extracted .gdb directory.',
-	)
-	parser.add_argument(
-		'--block-groups-path',
-		dest='block_groups_path',
-		default=defaults.block_groups_path,
-		help='Optional explicit local path or S3 URI for the TIGER block-group dataset.',
-	)
-	parser.add_argument(
-		'--census-blocks-path',
-		dest='census_blocks_path',
-		default=defaults.census_blocks_path,
-		help='Optional explicit local path or S3 URI for the census block weights CSV.',
-	)
-	parser.add_argument(
-		'--output-dir',
+		'-o', '--output-dir',
 		dest='output_dir',
-		default=defaults.output_dir,
+		default=None,
 		help='Optional explicit local path or S3 URI for the state output directory.',
 	)
-	parser.add_argument(
-		'--targeted-block-groups-filename',
-		dest='targeted_block_groups_filename',
-		default=defaults.targeted_block_groups_filename,
-		help=f'Output filename for Step 1 results (default: {defaults.targeted_block_groups_filename})',
-	)
-	parser.add_argument(
-		'--block-site-distances-filename',
-		dest='block_site_distances_filename',
-		default=defaults.block_site_distances_filename,
-		help=f'Output filename for Step 3 results (default: {defaults.block_site_distances_filename})',
-	)
-	parser.add_argument(
-		'--final-bg-scores-filename',
-		dest='final_bg_scores_filename',
-		default=defaults.final_bg_scores_filename,
-		help=f'Output filename for final state scores (default: {defaults.final_bg_scores_filename})',
-	)
+	# Note: superfund-specific explicit input overrides and intermediate-filename
+	# flags have been removed to simplify the CLI. This is an intentional,
+	# compatibility-breaking change: the script uses canonical config paths and
+	# default output filenames only.
+	# buffer_meters removed from CLI — use canonical DEFAULT_BUFFER_METERS constant.
 	args = parser.parse_args(argv)
 
+	# Determine effective location: prefer explicit named option, fall back to legacy positional.
+	effective_location = args.location or getattr(args, 'storage_mode', None) or defaults.location
+
+	# Require explicit state selection; allow the literal 'all' to mean process all configured states.
+	state_normalized = None
+	if args.state:
+		if isinstance(args.state, str) and args.state.strip().lower() == 'all':
+			state_normalized = None
+		else:
+			state_normalized = normalize_state_code(args.state)
+
 	return Config(
-		storage_mode=args.storage_mode,
-		state=normalize_state_code(args.state),
-		npl_boundaries_path=args.npl_boundaries_path,
-		block_groups_path=args.block_groups_path,
-		census_blocks_path=args.census_blocks_path,
+		location=effective_location,
+		state=state_normalized,
 		output_dir=args.output_dir,
-		targeted_block_groups_filename=args.targeted_block_groups_filename,
-		block_site_distances_filename=args.block_site_distances_filename,
-		final_bg_scores_filename=args.final_bg_scores_filename,
 	)
 
 
 def initialize_runtime_dependencies(cfg: Config) -> None:
-	if cfg.storage_mode != 'remote':
+	if cfg.location != 'remote':
 		return
 	dotenv = importlib.import_module('dotenv')
 	importlib.import_module('s3fs')
@@ -240,6 +227,38 @@ def normalize_state_code(state_code: str) -> str:
 	if len(normalized_state_code) != 2 or not normalized_state_code.isalpha():
 		raise RuntimeError(f"State code must be a two-letter postal abbreviation, got '{state_code}'")
 	return normalized_state_code
+
+
+# Load state targets: a single state when provided, otherwise all of the states
+# for which this indicator is supported. Note that we depend on this code
+# in each scoring module to know which state to process. We may want to move
+# that wisdom to the configuration file.
+# TODO: The "EJScreen Technical Documentation for Version 2.3, July 31, 2024" pdf
+# that has been our bible for these implementations says, on page 58, that this
+# indicator/index should be supported for CONUS, AK, HI, PR, Guam, and the USVI.
+# It omits mention of DC. However, I think the right logic here would be to 
+# ask for a state list with extent=US-52 (which includes DC). It seems unlikely
+# to me that DC would not be supported unless we are all supposed to 
+# simply know that the District has no superfund sites>? The 
+# state configs for Guam and USVI need to be added to the list explicitly. 
+# I can't see coming up with a named extent for that grouping.
+# I'm using only US-52 for now since I don't know if we have block weight
+# data for the territories.
+def load_state_targets(selected_state: str | None) -> list[StateConfig]:
+	logging.info('Loading state config(s) for selection: %s', selected_state or 'all')
+	state_list: list[StateConfig] = []
+
+	if selected_state:
+		state_config = get_state_config(selected_state)
+		state_list.append(state_config)
+	else:
+		# Use the shared helper to retrieve the list of states appropriate
+		# for this indicator.
+		state_list = get_state_config_list('us-52')
+		# TODO: see above and add Guam and USVI to the list here
+
+	logging.info('Loaded %d state configs for processing', len(state_list))
+	return state_list
 
 
 def is_s3_uri(path: str) -> bool:
@@ -309,20 +328,20 @@ def stage_geospatial_input(source_path: str, staging_root: Path, path_name: str)
 	return destination
 
 
-def get_output_root_path(storage_mode: str) -> str:
-	if storage_mode == 'local':
+def get_output_root_path(location: str) -> str:
+	if location == 'local':
 		return resolve_local_superfund_root_path(SUPERFUND_DIR)
-	if storage_mode == 'remote':
+	if location == 'remote':
 		return get_superfund_config().remote_root_path
-	raise ValueError(f'Unsupported storage mode: {storage_mode}')
+	raise ValueError(f'Unsupported location: {location}')
 
 
-def get_active_shared_root_path(storage_mode: str) -> str:
-	if storage_mode == 'local':
+def get_active_shared_root_path(location: str) -> str:
+	if location == 'local':
 		return resolve_local_shared_root_path(SCRIPTS_DIR)
-	if storage_mode == 'remote':
+	if location == 'remote':
 		return get_shared_config().remote_root_path
-	raise ValueError(f'Unsupported storage mode: {storage_mode}')
+	raise ValueError(f'Unsupported location: {location}')
 
 
 def get_default_preprocessed_npl_boundaries_path() -> str:
@@ -336,11 +355,12 @@ def resolve_paths(cfg: Config) -> ResolvedPaths:
 	state_config = get_state_config(cfg.state)
 	superfund_config = get_superfund_config()
 	shared_config = get_shared_config()
-	shared_root_path = get_active_shared_root_path(cfg.storage_mode)
-	output_root_path = get_output_root_path(cfg.storage_mode)
+	shared_root_path = get_active_shared_root_path(cfg.location)
+	output_root_path = get_output_root_path(cfg.location)
 
-	npl_boundaries_path = cfg.npl_boundaries_path or get_default_preprocessed_npl_boundaries_path()
-	block_groups_path = cfg.block_groups_path or join_root_and_relative_path(
+	# Use canonical configured inputs (no per-run overrides).
+	npl_boundaries_path = get_default_preprocessed_npl_boundaries_path()
+	block_groups_path = join_root_and_relative_path(
 		shared_root_path,
 		shared_config.tiger_bg_relative_path_template.format(
 			fips=state_config.fips,
@@ -348,7 +368,7 @@ def resolve_paths(cfg: Config) -> ResolvedPaths:
 			name=state_config.name,
 		),
 	)
-	census_blocks_path = cfg.census_blocks_path or join_root_and_relative_path(
+	census_blocks_path = join_root_and_relative_path(
 		shared_root_path,
 		shared_config.census_block_weights_relative_path_template.format(
 			fips=state_config.fips,
@@ -373,9 +393,9 @@ def resolve_paths(cfg: Config) -> ResolvedPaths:
 		census_blocks_path=census_blocks_path,
 		output_root_path=output_root_path,
 		output_dir=output_dir,
-		targeted_block_groups_path=join_path_and_file(output_dir, cfg.targeted_block_groups_filename),
-		block_site_distances_path=join_path_and_file(output_dir, cfg.block_site_distances_filename),
-		final_bg_scores_path=join_path_and_file(output_dir, cfg.final_bg_scores_filename),
+		targeted_block_groups_path=join_path_and_file(output_dir, DEFAULT_TARGETED_BLOCK_GROUPS_FILENAME),
+		block_site_distances_path=join_path_and_file(output_dir, DEFAULT_BLOCK_SITE_DISTANCES_FILENAME),
+		final_bg_scores_path=join_path_and_file(output_dir, DEFAULT_FINAL_BG_SCORES_FILENAME),
 	)
 
 
@@ -737,7 +757,7 @@ def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
 		paths.state_config.fips,
 		paths.state_config.metric_crs,
 	)
-	logging.info('Storage mode: %s', cfg.storage_mode)
+	logging.info('Location: %s', cfg.location)
 	logging.info('Resolved NPL boundaries path: %s', paths.npl_boundaries_path)
 	logging.info('Resolved shared root path: %s', paths.shared_root_path)
 	logging.info('Resolved block-groups path: %s', paths.block_groups_path)
@@ -749,49 +769,67 @@ def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
 	logging.info('Step 4 output: %s', paths.final_bg_scores_path)
 
 
+def process_state(cfg: Config, state_config: StateConfig) -> None:
+	"""Process a single state: resolve paths and run the indicator pipeline."""
+	# Create a transient cfg that pins the state for path resolution
+	cfg_state = Config(location=cfg.location, state=state_config.postal, output_dir=cfg.output_dir)
+	paths = resolve_paths(cfg_state)
+	log_resolved_paths(paths, cfg_state)
+
+	with tempfile.TemporaryDirectory(prefix=f'superfund_indicator_{paths.state_config.postal.lower()}_') as temp_dir_name:
+		staging_root = Path(temp_dir_name)
+		npl_gdf, bg_gdf, blocks_gdf = step0_prepare_inputs(paths, staging_root)
+		targeted_df = step1_buffer_and_targeted_bgs(
+			npl_gdf=npl_gdf,
+			bg_gdf=bg_gdf,
+			output_path=paths.targeted_block_groups_path,
+		)
+		distances_df = step2_block_site_distances(
+			targeted_df=targeted_df,
+			blocks_gdf=blocks_gdf,
+			npl_gdf=npl_gdf,
+		)
+		distances_with_scores_df = step3_inverse_distance_scoring(
+			distances_df,
+			output_path=paths.block_site_distances_path,
+		)
+		step4_population_weighting_aggregation(
+			distances_with_scores_df,
+			blocks_gdf=blocks_gdf,
+			output_path=paths.final_bg_scores_path,
+		)
+
+
 def main(argv=None) -> int:
 	"""Run the Superfund indicator step and write the per-state outputs."""
 	log_path = configure_logging()
 	cfg = get_config(argv)
 	initialize_runtime_dependencies(cfg)
 	logging.info('Logging to %s', log_path)
+	state_targets = load_state_targets(cfg.state)
+	logging.info('Selected state filter: %s', cfg.state or 'all configured states')
 
+	state_count = 0
 	try:
-		paths = resolve_paths(cfg)
-		log_resolved_paths(paths, cfg)
+		for state_config in state_targets:
+			state_count += 1
+			logging.info('Starting Superfund indicator for %s (%s)', state_config.name, state_config.postal)
+			try:
+				process_state(cfg, state_config)
+			except Exception:
+				logging.exception('Superfund indicator failed for state %s (%s)', state_config.name, state_config.postal)
+				return 1
 	except Exception as exc:
-		logging.error('Failed to resolve indicator configuration: %s', exc)
+		logging.exception('Superfund orchestration failed: %s', exc)
 		return 1
 
-	try:
-		with tempfile.TemporaryDirectory(prefix=f'superfund_indicator_{paths.state_config.postal.lower()}_') as temp_dir_name:
-			staging_root = Path(temp_dir_name)
-			npl_gdf, bg_gdf, blocks_gdf = step0_prepare_inputs(paths, staging_root)
-			targeted_df = step1_buffer_and_targeted_bgs(
-				npl_gdf=npl_gdf,
-				bg_gdf=bg_gdf,
-				buffer_meters=cfg.buffer_meters,
-				output_path=paths.targeted_block_groups_path,
-			)
-			distances_df = step2_block_site_distances(
-				targeted_df=targeted_df,
-				blocks_gdf=blocks_gdf,
-				npl_gdf=npl_gdf,
-			)
-			distances_with_scores_df = step3_inverse_distance_scoring(
-				distances_df,
-				output_path=paths.block_site_distances_path,
-			)
-			step4_population_weighting_aggregation(
-				distances_with_scores_df,
-				blocks_gdf=blocks_gdf,
-				output_path=paths.final_bg_scores_path,
-			)
-	except Exception as exc:
-		logging.exception('Superfund indicator pipeline failed: %s', exc)
-		return 1
-
-	logging.info('Superfund indicator pipeline completed successfully')
+	msg = f"Completed Superfund indicator generation"
+	if state_count == 1:
+		msg += f" for 1 state: {state_targets[0].postal}"
+	else:
+		msg += f" for {state_count} states"
+	logging.info(msg)
+	print(msg)
 	return 0
 
 

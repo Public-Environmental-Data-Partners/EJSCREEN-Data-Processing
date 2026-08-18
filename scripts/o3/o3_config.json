@@ -1,14 +1,303 @@
 {
-  "local_root_path": "./pipeline/",
-  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/o3/pipeline/",
-  "preprocessed_tract_output_relative_path": "preprocessed_input/o3_tract_annual_average.csv",
-  "indicator_output_relative_path_template": "output/indicators/{postal}",
-  "downloads": {
+  "local_root_path": "pipeline/o3/",
+  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/pipeline/o3/",
+  "download_settings": {
     "request_timeout_seconds": 120,
-    "chunk_size_bytes": 1048576,
-    "raw_o3_2020": {
-      "relative_path": "downloads/2020/2020_ozone_daily_8hour_maximum.txt.gz",
-      "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2020_ozone_daily_8hour_maximum.txt.gz"
+    "chunk_size_bytes": 1048576
+  },
+  "versions": {
+    "1.2022": {
+      "required_shared_assets": {
+        "census_block_weights": "1.0"
+      },
+      "notes": "Raw data is updated to the 2022 version data",
+      "stages": {
+        "fetch": {
+          "outputs": {
+            "raw_o3": {
+              "type": "download",
+              "relative_path": "v{version}/downloads/2022/2022_ozone_daily_8hour_maximum.txt.gz",
+              "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2022_ozone_daily_8hour_maximum.txt.gz",
+              "notes": "Check for updates at: https://www.epa.gov/hesc/rsig-related-downloadable-data-files?#output"
+            }
+          }
+        },
+        "preprocess": {
+          "inputs": {
+            "primary_o3": {
+              "type": "indicator_download",
+              "key": "raw_o3"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v{version}/preprocessed_input/"
+            },
+            "main_tract_averages": {
+              "type": "file",
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
+            }
+          }
+        },
+        "score": {
+          "inputs": {
+            "preprocessed_tracts": {
+              "type": "file",
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
+            },
+            "weights": {
+              "type": "shared_asset",
+              "key": "census_block_weights",
+              "category": "preprocessed_input"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v{version}/score_output/"
+            },
+            "indicator_output_template": {
+              "type": "template",
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
+            }
+          }
+        }
+      }
+    },
+    "1.2021": {
+      "required_shared_assets": {
+        "census_block_weights": "1.0"
+      },
+      "notes": "Raw data is updated from the original 2020 download to 2021 data.",
+      "stages": {
+        "fetch": {
+          "outputs": {
+            "raw_o3": {
+              "type": "download",
+              "relative_path": "v{version}/downloads/2021/2021_ozone_daily_8hour_maximum.txt.gz",
+              "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2021_ozone_daily_8hour_maximum.txt.gz",
+              "notes": "Check for updates at: https://www.epa.gov/hesc/rsig-related-downloadable-data-files?#output"
+            }
+          }
+        },
+        "preprocess": {
+          "inputs": {
+            "primary_o3": {
+              "type": "indicator_download",
+              "key": "raw_o3"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v{version}/preprocessed_input/"
+            },
+            "main_tract_averages": {
+              "type": "file",
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
+            }
+          }
+        },
+        "score": {
+          "inputs": {
+            "preprocessed_tracts": {
+              "type": "file",
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
+            },
+            "weights": {
+              "type": "shared_asset",
+              "key": "census_block_weights",
+              "category": "preprocessed_input"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v{version}/score_output/"
+            },
+            "indicator_output_template": {
+              "type": "template",
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
+            }
+          }
+        }
+      }
+    },
+    "1.2020": {
+      "required_shared_assets": {
+        "census_block_weights": "1.0"
+      },
+      "notes": "This is the first version where the scoring stage uses EmmaLi's new-improved census block weight file that includes the acs_2022_bg_pop column to use for identifying zero-population block groups.",
+      "stages": {
+        "fetch": {
+          "outputs": {
+            "raw_o3": {
+              "type": "download",
+              "relative_path": "v{version}/downloads/2020/2020_ozone_daily_8hour_maximum.txt.gz",
+              "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2020_ozone_daily_8hour_maximum.txt.gz",
+              "notes": "Check for updates at: https://www.epa.gov/hesc/rsig-related-downloadable-data-files?#output"
+            }
+          }
+        },
+        "preprocess": {
+          "inputs": {
+            "primary_o3": {
+              "type": "indicator_download",
+              "key": "raw_o3"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v{version}/preprocessed_input/"
+            },
+            "main_tract_averages": {
+              "type": "file",
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
+            }
+          }
+        },
+        "score": {
+          "inputs": {
+            "preprocessed_tracts": {
+              "type": "file",
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
+            },
+            "weights": {
+              "type": "shared_asset",
+              "key": "census_block_weights",
+              "category": "preprocessed_input"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v{version}/score_output/"
+            },
+            "indicator_output_template": {
+              "type": "template",
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
+            }
+          }
+        }
+      }
+    },
+	  "0.6": {
+      "required_shared_assets": {
+        "census_block_weights": "0.6"
+      },
+      "notes": "This is the version where the scoring stage will read in the whole-country census block weight file and then select only the state data it needs for each run",
+      "stages": {
+        "fetch": {
+          "outputs": {
+            "raw_o3": {
+              "type": "download",
+              "relative_path": "v1.0/downloads/2020/2020_ozone_daily_8hour_maximum.txt.gz",
+              "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2020_ozone_daily_8hour_maximum.txt.gz"
+            }
+          }
+        },
+        "preprocess": {
+          "inputs": {
+            "primary_o3": {
+              "type": "indicator_download",
+              "key": "raw_o3"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v1.0/preprocessed_input/"
+            },
+            "main_tract_averages": {
+              "type": "file",
+              "relative_path": "v1.0/preprocessed_input/o3_tract_annual_average.csv"
+            }
+          }
+        },
+        "score": {
+          "inputs": {
+            "preprocessed_tracts": {
+              "type": "file",
+              "relative_path": "v1.0/preprocessed_input/o3_tract_annual_average.csv"
+            },
+            "weights": {
+              "type": "shared_asset",
+              "key": "census_block_weights",
+              "category": "preprocessed_input"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v0.6/output/"
+            },
+            "indicator_output_template": {
+              "type": "template",
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
+            }
+          }
+        }
+      }
+    },
+    "0.5": {
+      "required_shared_assets": {
+        "census_block_weights": "0.5"
+      },
+      "notes": "This was version 1.0 but I've backed down the version # as I work on issue #41 and change how the scoring code reads census_block_weights data. The fetch and preprocess stages are identical to 1.0 intentionally. Only the output folder for the scoring stage has been changed to 0.5",
+      "stages": {
+        "fetch": {
+          "outputs": {
+            "raw_o3": {
+              "type": "download",
+              "relative_path": "v1.0/downloads/2020/2020_ozone_daily_8hour_maximum.txt.gz",
+              "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2020_ozone_daily_8hour_maximum.txt.gz"
+            }
+          }
+        },
+        "preprocess": {
+          "inputs": {
+            "primary_o3": {
+              "type": "indicator_download",
+              "key": "raw_o3"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v1.0/preprocessed_input/"
+            },
+            "main_tract_averages": {
+              "type": "file",
+              "relative_path": "v1.0/preprocessed_input/o3_tract_annual_average.csv"
+            }
+          }
+        },
+        "score": {
+          "inputs": {
+            "preprocessed_tracts": {
+              "type": "file",
+              "relative_path": "v1.0/preprocessed_input/o3_tract_annual_average.csv"
+            },
+            "weights": {
+              "type": "shared_asset",
+              "key": "census_block_weights",
+              "category": "preprocessed_input"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v0.5/output/"
+            },
+            "indicator_output_template": {
+              "type": "template",
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
+            }
+          }
+        }
+      }
     }
   }
 }

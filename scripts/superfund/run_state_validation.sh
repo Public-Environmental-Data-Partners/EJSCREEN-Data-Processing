@@ -39,9 +39,9 @@ fi
 echo "Completed Superfund preprocess"
 
 echo "Starting Superfund indicator for $STATE_CODE in $STORAGE_MODE mode"
-if ! python3 "$SCRIPT_DIR/superfund_indicator.py" \
-	"$STORAGE_MODE" \
-	--state "$STATE_CODE"; then
+if ! python3 "$SCRIPT_DIR/superfund_score.py" \
+	-l "$STORAGE_MODE" \
+	-s "$STATE_CODE"; then
 	echo "Superfund indicator failed for state $STATE_CODE in $STORAGE_MODE mode."
 	exit 1
 fi

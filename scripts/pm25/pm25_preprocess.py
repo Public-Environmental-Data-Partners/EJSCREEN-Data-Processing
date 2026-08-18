@@ -6,7 +6,7 @@ Purpose:
 	the tract-level intermediate CSV used by the indicator step.
 
 Process summary:
-	- Resolve local or remote PM2.5 storage from pm25_config.json.
+	- Resolve local or remote PM2.5 storage from the manifest + resolver.
 	- Validate the compressed file header before performing the full read.
 	- Read only the required columns from the raw source.
 	- Validate tract GEOIDs, dates, and numeric PM2.5 values.
@@ -15,10 +15,14 @@ Process summary:
 
 Runtime arguments:
 	- storage_mode
-		Required. Either local or remote.
+		Required. Passed via -l/--location. Either local or remote.
+	- --version / -v
+		Optional. Config version to use (default: 1.2020).
+	- --dry-run
+		Optional. Validate manifest and headers, then exit without processing or writing outputs.
 
 Outputs:
-	- preprocessed_input/pm25_tract_annual_average.csv under the active PM2.5 root.
+	- v{version}/preprocessed_input/pm25_tract_annual_average.csv under the active PM2.5 root.
 	- pm25_preprocess.log in scripts/pm25.
 """
 
@@ -30,10 +34,19 @@ from datetime import datetime
 import importlib
 import logging
 from pathlib import Path
+import sys
 
 import pandas as pd
 
-from pm25_config import get_pm25_config, resolve_local_pm25_root_path
+# Ensure the `scripts/shared` folder is importable so modules in that
+# folder (e.g. build_manifest.py, resolve_path.py) can be imported as
+# top-level modules when running this script directly.
+SHARED_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "shared"
+if str(SHARED_SCRIPTS_DIR) not in sys.path:
+	sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
+
+import build_manifest
+import resolve_path
 
 
 PM25_DIR = Path(__file__).resolve().parent
@@ -44,36 +57,93 @@ RAW_PM25_COLUMN = 'pm25_daily_average(ug/m3)'
 TRACT_GEOID_COLUMN = 'tract_geoid'
 ANNUAL_AVERAGE_COLUMN = 'annual_average_concentration'
 
+# Centralize frequently used regex/pattern constants.
+FIPS_PATTERN = r'\d{11}'
+
 
 @dataclass(frozen=True, slots=True)
 class Config:
 	storage_mode: str
+	version: str
 	local_root_path: str
 	remote_root_path: str
 	raw_download_relative_path: str
 	preprocessed_tract_output_relative_path: str
+	dry_run: bool = False
 
 
 def get_config(argv=None) -> Config:
-	"""Parse runtime arguments and merge them with validated PM2.5 config values."""
-	raw_config = get_pm25_config()
+	"""Parse runtime arguments and derive canonical paths from the manifest/resolver.
+
+	This function uses `build_manifest.get_stage_manifest()` (preprocess stage)
+	and `resolve_path.get_indicator_root()` to populate the runtime config.
+	No compatibility fallback to the old flat JSON format is provided.
+	"""
 
 	parser = argparse.ArgumentParser(
 		description='Read the raw national PM2.5 .txt.gz file, compute tract-level annual average concentration, and write the preprocessed tract CSV.'
 	)
 	parser.add_argument(
-		'storage_mode',
+		'-l', '--location',
+		dest='storage_mode',
 		choices=('local', 'remote'),
+		required=True,
 		help='Select whether the script reads and writes through the configured local root path or remote S3 root path.',
+	)
+	parser.add_argument(
+		'-v', '--version',
+		dest='version',
+		default='1.2020',
+		help='Optional: config version to base processing on (current default: 1.2020)'
+	)
+	# Long-only dry-run flag (no short alias)
+	parser.add_argument(
+		'--dry-run',
+		dest='dry_run',
+		action='store_true',
+		help='Dry run: validate manifest and headers but do not process or write outputs.',
 	)
 	args = parser.parse_args(argv)
 
+	manifest = build_manifest.get_stage_manifest(
+		target_type='indicator',
+		name='pm25',
+		stage='preprocess',
+		version=args.version,
+		environment=args.storage_mode,
+	)
+
+	inputs = manifest.get('inputs', {})
+	outputs = manifest.get('outputs', {})
+
+	if 'primary_pm25' not in inputs:
+		raise RuntimeError('Preprocess manifest missing required input: primary_pm25')
+	if 'main_tract_averages' not in outputs:
+		raise RuntimeError('Preprocess manifest missing required output: main_tract_averages')
+
+	# Manifest entries may already include a compiled "root" and "relative".
+	raw_entry = inputs['primary_pm25']
+	preproc_entry = outputs['main_tract_averages']
+
+	raw_rel = raw_entry.get('relative')
+	preproc_rel = preproc_entry.get('relative')
+
+	if not raw_rel or not isinstance(raw_rel, str):
+		raise RuntimeError('Invalid relative path for primary_pm25 in preprocess manifest')
+	if not preproc_rel or not isinstance(preproc_rel, str):
+		raise RuntimeError('Invalid relative path for main_tract_averages in preprocess manifest')
+
+	local_root = resolve_path.get_indicator_root('pm25', args.version, 'local')
+	remote_root = resolve_path.get_indicator_root('pm25', args.version, 'remote')
+
 	return Config(
 		storage_mode=args.storage_mode,
-		local_root_path=resolve_local_pm25_root_path(PM25_DIR),
-		remote_root_path=raw_config.remote_root_path,
-		raw_download_relative_path=raw_config.raw_download_relative_path,
-		preprocessed_tract_output_relative_path=raw_config.preprocessed_tract_output_relative_path,
+		version=args.version,
+		local_root_path=local_root,
+		remote_root_path=remote_root,
+		raw_download_relative_path=raw_rel,
+		preprocessed_tract_output_relative_path=preproc_rel,
+		dry_run=args.dry_run,
 	)
 
 
@@ -198,7 +268,7 @@ def validate_and_prepare_raw_table(df: pd.DataFrame) -> pd.DataFrame:
 	require_columns(df, (RAW_FIPS_COLUMN, RAW_DATE_COLUMN, RAW_PM25_COLUMN))
 	prepared = df[[RAW_FIPS_COLUMN, RAW_DATE_COLUMN, RAW_PM25_COLUMN]].copy()
 	prepared[RAW_FIPS_COLUMN] = prepared[RAW_FIPS_COLUMN].astype('string').str.strip()
-	invalid_fips_mask = prepared[RAW_FIPS_COLUMN].isna() | ~prepared[RAW_FIPS_COLUMN].str.fullmatch(r'\d{11}')
+	invalid_fips_mask = prepared[RAW_FIPS_COLUMN].isna() | ~prepared[RAW_FIPS_COLUMN].str.fullmatch(FIPS_PATTERN)
 	if invalid_fips_mask.any():
 		invalid_samples = prepared.loc[invalid_fips_mask, RAW_FIPS_COLUMN].drop_duplicates().astype(str).head(5).tolist()
 		raise RuntimeError(
@@ -271,6 +341,18 @@ def main(argv=None) -> int:
 	header_df = read_raw_pm25_header(raw_input_path)
 	require_columns(header_df, (RAW_FIPS_COLUMN, RAW_DATE_COLUMN, RAW_PM25_COLUMN))
 	logging.info('Raw PM2.5 header validation passed')
+	# If dry-run was requested, we've validated manifest resolution and the
+	# raw file header; exit early without performing the full read/aggregation
+	# or writing outputs.
+	if cfg.dry_run:
+		logging.info('Dry run enabled; skipping full read/processing and write.')
+		logging.info('DRY RUN: manifest and header validated.')
+		logging.info('raw_input_path=%s', raw_input_path)
+		logging.info('output_path=%s', output_path)
+		print('DRY RUN: manifest and header validated.')
+		print(f'raw_input_path={raw_input_path}')
+		print(f'output_path={output_path}')
+		return 0
 
 	logging.info('Reading raw PM2.5 input table')
 	raw_df = read_raw_pm25_table(raw_input_path)
@@ -279,6 +361,22 @@ def main(argv=None) -> int:
 	grouped = build_tract_annual_average_table(prepared)
 	write_df_s3_or_local(grouped, output_path)
 	log_summary(prepared, grouped, output_path)
+	# Print a concise summary similar to o3_preprocess for single-run clarity
+	try:
+		total = 1
+		succeeded = 1
+		skipped = 0
+		failed = 0
+	except Exception:
+		total = succeeded = skipped = failed = 0
+
+	print('SUMMARY:')
+	print(f'  total: {total}')
+	print(f'  succeeded: {succeeded}')
+	print(f'  failed: {failed}')
+	print(f'  skipped: {skipped}')
+	print(f'  filename: {Path(cfg.preprocessed_tract_output_relative_path).name}')
+	print(f'  destination: {output_path}')
 	return 0
 
 

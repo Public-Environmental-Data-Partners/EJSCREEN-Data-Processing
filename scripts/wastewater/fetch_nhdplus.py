@@ -191,11 +191,15 @@ def main() -> int:
     args = parse_args()
     config = VPU_CONFIG[args.vpu]
 
+    DEFAULT_VERSION=1 # temporarily hard coding
+    DEFAULT_YEAR=2021 # temporarily hard coding
+
+    # TODO: MOVE TO CONFIG
     vpu_directory = (
-        Path("wastewater")
-        / "pipeline"
-        / "raw_input"
-        / "nhdplus"
+        Path("../pipeline/wastewater")
+        / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
+        / "downloads"
+        / f"{DEFAULT_YEAR}"
         / f"vpu{args.vpu}"
     )
 

@@ -102,11 +102,15 @@ def main() -> int:
     args = parse_args()
     config = VPU_CONFIG[args.vpu]
 
+    DEFAULT_VERSION=1 # temporarily hard coding
+    DEFAULT_YEAR=2021 # temporarily hard coding
+
+    # TODO: MOVE TO CONFIG
     vpu_input_directory = (
-        Path("wastewater")
-        / "pipeline"
-        / "raw_input"
-        / "nhdplus"
+        Path("../pipeline/wastewater")
+        / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
+        / "downloads"
+        / f"{DEFAULT_YEAR}"
         / f"vpu{args.vpu}"
     )
 
@@ -120,12 +124,11 @@ def main() -> int:
         / config["vaa_relative_path"]
     )
 
+    # TODO: MOVE TO CONFIG
     output_directory = (
-        Path("wastewater")
-        / "pipeline"
+        Path("../pipeline/wastewater")
+        / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
         / "preprocessed_input"
-        / "nhdplus"
-        / f"vpu{args.vpu}"
     )
 
     output_path = (

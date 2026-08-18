@@ -8,11 +8,11 @@ NHDPlus COMIDs, aggregates modeled concentration metrics by COMID, combines
 onsite and offsite results, and writes a compact Parquet dataset.
 
 Primary output:
-    pipeline/preprocessed_input/water_microdata/
+    pipeline/wastewater/v1.2021/preprocessed_input/
     water_microdata_<year>_by_comid.parquet
 
 QA output:
-    pipeline/preprocessed_input/water_microdata/
+    pipeline/wastewater/v1.2021/preprocessed_input/
     water_microdata_<year>_qa.json
 """
 
@@ -30,33 +30,39 @@ import pandas as pd
 
 
 WASTEWATER_DIR = Path(__file__).resolve().parent
-PIPELINE_DIR = WASTEWATER_DIR / "pipeline"
+print(WASTEWATER_DIR)
+PIPELINE_DIR = Path("../pipeline") # Assumes running from "scripts"
+
+DEFAULT_YEAR = 2021
+DEFAULT_VERSION = 1
 
 DEFAULT_ZIP_DIR = (
     PIPELINE_DIR
+    / "wastewater"
+    / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
     / "downloads"
-    / "rsei_water_microdata"
-    / "zips"
+    / f"{DEFAULT_YEAR}"
 )
 
 DEFAULT_OUTPUT_DIR = (
     PIPELINE_DIR
+    / "wastewater"
+    / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
     / "preprocessed_input"
-    / "water_microdata"
 )
 
 DEFAULT_ONSITE_ZIP = (
     DEFAULT_ZIP_DIR
-    / "NHDMicroResults_conc_aggonsite.zip"
+    / "NHDMicroResults_conc_aggonsite.zip" # Note that in 2022 Onsite is capitalized
 )
 
 DEFAULT_OFFSITE_ZIP = (
     DEFAULT_ZIP_DIR
-    / "NHDMicroResults_conc_aggoffsite.zip"
+    / "NHDMicroResults_conc_aggoffsite.zip" # Note that in 2022 Offsite is capitalized
 )
 
-ONSITE_MEMBER = "NHDMicroResults_conc_aggonsite.csv"
-OFFSITE_MEMBER = "NHDMicroResults_conc_aggoffsite.csv"
+ONSITE_MEMBER = "NHDMicroResults_conc_aggonsite.csv" # Note that in 2022 Onsite is capitalized
+OFFSITE_MEMBER = "NHDMicroResults_conc_aggoffsite.csv" # Note that in 2022 Offsite is capitalized
 
 REQUIRED_COLUMNS = (
     "ReleaseNumber",
@@ -73,7 +79,6 @@ METRIC_COLUMNS = (
     "CTW",
 )
 
-DEFAULT_YEAR = 2021
 DEFAULT_CHUNK_SIZE = 500_000
 
 LOG_PATH = WASTEWATER_DIR / "wastewater_microdata_preprocess.log"

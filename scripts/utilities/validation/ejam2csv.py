@@ -99,7 +99,7 @@ def get_config(argv=None) -> Config:
                         choices=['local', 'remote'],
                         help='Where to write outputs; must be "local" or "remote"')
     parser.add_argument('--indicator', dest='indicator', type=str, default=Config.indicator,
-                        choices=['superfund', 'traffic', 'hazardous_waste', 'pm25', 'o3'],
+                        choices=['superfund', 'traffic', 'hazardous_waste', 'pm25', 'o3', 'wastewater'],
                         help='indicator to extract from the EJAM response (default: traffic)')
     parser.add_argument('-n', '--number_rows', type=int, default=Config.number_rows,
                         help='maximum number of rows to process (default: 10); <=0 means no limit')
@@ -388,6 +388,13 @@ def main(argv=None) -> None:
             "o3",
             "avg.o3",
             "state.avg.o3",
+        ],
+        "wastewater": [
+            "proximity.npdes",
+            "pctile.proximity.npdes",
+            "state.pctile.proximity.npdes",
+            "avg.proximity.npdes",
+            "state.avg.proximity.npdes",
         ],
     }
     desired = base_required + indicator_columns[config.indicator] + base_last

@@ -49,3 +49,6 @@ agScratch/
 copilot-instructions.md
 *_plan.md
 scripts/o3/.python-version
+
+# Generated wastewater comparison artifacts
+scripts/wastewater/comparison/

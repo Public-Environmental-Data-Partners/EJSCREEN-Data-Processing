@@ -43,6 +43,14 @@
             "output_directory": {
               "type": "directory",
               "relative_path": "v{version}/preprocessed_input/"
+            },
+            "preprocessed_microdata": {
+              "type": "file",
+              "relative_path": "v{version}/preprocessed_input/water_microdata_2021_by_comid.parquet"
+            },
+            "qa":{
+              "type": "file",
+              "relative_path": "water_microdata_2021_qa.json"
             }
           }
         },
@@ -108,6 +116,14 @@
             "output_directory": {
               "type": "directory",
               "relative_path": "v{version}/preprocessed_input/"
+            },
+            "preprocessed_microdata": {
+              "type": "file",
+              "relative_path": "v{version}/preprocessed_input/water_microdata_2022_by_comid.parquet"
+            },
+            "qa":{
+              "type": "file",
+              "relative_path": "water_microdata_2022_qa.json"
             }
           }
         },

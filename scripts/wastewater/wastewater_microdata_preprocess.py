@@ -8,11 +8,11 @@ NHDPlus COMIDs, aggregates modeled concentration metrics by COMID, combines
 onsite and offsite results, and writes a compact Parquet dataset.
 
 Primary output:
-    pipeline/wastewater/v1.2021/preprocessed_input/
+    pipeline/wastewater/<version>/preprocessed_input/
     water_microdata_<year>_by_comid.parquet
 
 QA output:
-    pipeline/wastewater/v1.2021/preprocessed_input/
+    pipeline/wastewater/<version>/preprocessed_input/
     water_microdata_<year>_qa.json
 """
 
@@ -25,44 +25,28 @@ from pathlib import Path
 import sys
 from typing import Any
 import subprocess
-
+from dataclasses import dataclass
 import pandas as pd
+import importlib
+from datetime import datetime
 
+# All of our project-specific imports must be relative to the 
+# `scripts` folder which we assume is at the first level of the
+# repository. 
+# NB: ***If `scripts` moves, this code will have to change.***
+# Walk up our current working directory tree until you find the
+# repository root, then add the scripts directory to sys.path
+REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
+if REPO_ROOT is None:
+	# This is a running-from-docker or other non-git environment cry for help.
+    # Undone: Handle non-git environments more gracefully when needed.
+    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS_ROOT))
+import shared.build_manifest as build_manifest
+import shared.resolve_path as resolve_path
 
 WASTEWATER_DIR = Path(__file__).resolve().parent
-print(WASTEWATER_DIR)
-PIPELINE_DIR = Path("../pipeline") # Assumes running from "scripts"
-
-DEFAULT_YEAR = 2021
-DEFAULT_VERSION = 1
-
-DEFAULT_ZIP_DIR = (
-    PIPELINE_DIR
-    / "wastewater"
-    / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
-    / "downloads"
-    / f"{DEFAULT_YEAR}"
-)
-
-DEFAULT_OUTPUT_DIR = (
-    PIPELINE_DIR
-    / "wastewater"
-    / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
-    / "preprocessed_input"
-)
-
-DEFAULT_ONSITE_ZIP = (
-    DEFAULT_ZIP_DIR
-    / "NHDMicroResults_conc_aggonsite.zip" # Note that in 2022 Onsite is capitalized
-)
-
-DEFAULT_OFFSITE_ZIP = (
-    DEFAULT_ZIP_DIR
-    / "NHDMicroResults_conc_aggoffsite.zip" # Note that in 2022 Offsite is capitalized
-)
-
-ONSITE_MEMBER = "NHDMicroResults_conc_aggonsite.csv" # Note that in 2022 Onsite is capitalized
-OFFSITE_MEMBER = "NHDMicroResults_conc_aggoffsite.csv" # Note that in 2022 Offsite is capitalized
 
 REQUIRED_COLUMNS = (
     "ReleaseNumber",
@@ -81,8 +65,20 @@ METRIC_COLUMNS = (
 
 DEFAULT_CHUNK_SIZE = 500_000
 
-LOG_PATH = WASTEWATER_DIR / "wastewater_microdata_preprocess.log"
+DEFAULT_LOG_FILENAME =  "wastewater_microdata_preprocess.log"
 
+def configure_logging() -> str:
+	log_path = WASTEWATER_DIR / DEFAULT_LOG_FILENAME
+	log_path.parent.mkdir(parents=True, exist_ok=True)
+	logging.basicConfig(
+		level=logging.INFO,
+		format='%(asctime)s %(levelname)s: %(message)s',
+		datefmt='%Y-%m-%d %H:%M:%S',
+		handlers=[logging.FileHandler(log_path, mode='a', encoding='utf-8')],
+		force=True,
+	)
+	logging.info('========== Log session started %s ==========', datetime.now().astimezone().isoformat(timespec='seconds'))
+	return str(log_path)
 
 class _UnzipMemberStream:
     """Stream one archive member through the system unzip utility."""
@@ -214,25 +210,6 @@ class ZipFile:
             member_name=member_name,
         )
 
-
-def configure_logging() -> None:
-    """Configure terminal and file logging."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(
-                LOG_PATH,
-                mode="a",
-                encoding="utf-8",
-            ),
-            logging.StreamHandler(),
-        ],
-        force=True,
-    )
-
-
 def validate_archive(
     zip_path: Path,
     member_name: str,
@@ -341,7 +318,6 @@ def process_archive(
             ):
                 stats["chunks_processed"] = chunk_number
                 stats["rows_scanned"] += len(chunk)
-
                 year_numeric = pd.to_numeric(
                     chunk["Year"],
                     errors="coerce",
@@ -819,7 +795,20 @@ def print_summary(
     print(f"QA JSON: {qa_path}")
 
 
-def parse_args() -> argparse.Namespace:
+@dataclass(frozen=True, slots=True)
+class Config:
+    storage_mode: str
+    version: str
+    local_root_path: str
+    remote_root_path: str
+    offsite_raw_download_relative_path: str
+    onsite_raw_download_relative_path: str
+    preprocessed_microdata_relative_path: str
+    qa_relative_path: str
+    chunk_size: int
+    dry_run: bool = False
+
+def parse_args(argv) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description=(
@@ -829,34 +818,14 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--year",
-        type=int,
-        default=DEFAULT_YEAR,
+        "-v",
+        "--version",
+        type=str,
+        default="1.2021",
         help=(
             "Target reporting year. "
-            f"Default: {DEFAULT_YEAR}."
+            f"Default: 1.2021"
         ),
-    )
-
-    parser.add_argument(
-        "--onsite-zip",
-        type=Path,
-        default=DEFAULT_ONSITE_ZIP,
-        help="Path to the onsite microdata ZIP.",
-    )
-
-    parser.add_argument(
-        "--offsite-zip",
-        type=Path,
-        default=DEFAULT_OFFSITE_ZIP,
-        help="Path to the offsite microdata ZIP.",
-    )
-
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=DEFAULT_OUTPUT_DIR,
-        help="Directory for Parquet and QA outputs.",
     )
 
     parser.add_argument(
@@ -869,88 +838,175 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
-    return parser.parse_args()
+    parser.add_argument(
+        "-l",
+        "--location",
+        dest='storage_mode',
+        type=str,
+        default="local",
+        help=(
+            "Local or remote storage. "
+            f"Default: local"
+        ),
+    )
 
+    args = parser.parse_args(argv)
+    
+    # Build the preprocess manifest for this indicator/version. We expect the
+    # preprocess stage to define an input `offsite` (indicator download) and
+    # an output: the offsite/onsite combined parquet file.
+    manifest = build_manifest.get_stage_manifest(
+        target_type='indicator',
+        name='wastewater',
+        stage='preprocess',
+        version=args.version,
+        environment=args.storage_mode,
+    )
+    print(manifest)
 
-def main() -> int:
+    inputs = manifest.get('inputs', {})
+    outputs = manifest.get('outputs', {})
+
+    if 'offsite' not in inputs or 'onsite' not in inputs:
+        raise RuntimeError('Preprocess manifest missing required inputs: offsite and onsite')
+    if 'preprocessed_microdata' not in outputs:
+        raise RuntimeError('Preprocess manifest missing required output: preprocessed_microdata')
+
+    # Manifest entries may already include a compiled "root" and "relative".
+    off_raw_entry = inputs['offsite']
+    on_raw_entry = inputs["onsite"]
+    preproc_entry = outputs['preprocessed_microdata']
+    qa_entry = outputs['qa']
+
+    off_raw_rel = off_raw_entry.get('relative')
+    on_raw_rel = on_raw_entry.get('relative')
+    preproc_rel = preproc_entry.get('relative')
+    qa_rel = qa_entry.get('relative')
+
+    if not off_raw_rel or not isinstance(off_raw_rel, str):
+        raise RuntimeError('Invalid relative path for offsite in preprocess manifest')
+    if not on_raw_rel or not isinstance(on_raw_rel, str):
+            raise RuntimeError('Invalid relative path for onsite in preprocess manifest')
+    if not preproc_rel or not isinstance(preproc_rel, str):
+        raise RuntimeError('Invalid relative path for preprocessed_microdata in preprocess manifest')
+    if not qa_rel or not isinstance(qa_rel, str):
+            raise RuntimeError('Invalid relative path for qa in preprocess manifest')
+
+    local_root = resolve_path.get_indicator_root('wastewater', args.version, 'local')
+    remote_root = resolve_path.get_indicator_root('wastewater', args.version, 'remote')
+
+    return Config(
+        storage_mode=args.storage_mode,
+        version=args.version,
+        local_root_path=local_root,
+        remote_root_path=remote_root,
+        offsite_raw_download_relative_path=off_raw_rel,
+        onsite_raw_download_relative_path=on_raw_rel,
+        preprocessed_microdata_relative_path=preproc_rel,
+        qa_relative_path = qa_rel,
+        chunk_size=args.chunk_size,
+        #dry_run=args.dry_run
+    )
+
+# PATH HELPER FUNCTIONS
+def load_fsspec_module():
+	return importlib.import_module('fsspec')
+
+def is_s3_uri(path: str) -> bool:
+	return isinstance(path, str) and path.lower().startswith('s3://')
+
+def ensure_local_parent_dir(path: str) -> None:
+	if not is_s3_uri(path):
+		Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+def path_exists(path: str) -> bool:
+	if is_s3_uri(path):
+		fsspec = load_fsspec_module()
+		return bool(fsspec.open(path).fs.exists(path))
+	return Path(path).exists()
+
+def get_active_root_path(cfg: Config) -> str:
+	if cfg.storage_mode == 'local':
+		return cfg.local_root_path
+	if cfg.storage_mode == 'remote':
+		return cfg.remote_root_path
+	raise ValueError(f'Unsupported storage mode: {cfg.storage_mode}')
+
+def join_root_and_relative_path(root_path: str, relative_path: str) -> str:
+	if is_s3_uri(root_path):
+		return root_path.rstrip('/') + '/' + relative_path.lstrip('/')
+	return str(Path(root_path) / Path(relative_path))
+
+def get_path(cfg: Config, rel_path: str) -> str:
+	return join_root_and_relative_path(get_active_root_path(cfg), rel_path)
+
+def write_s3_or_local(out_path: str) -> None:
+    # Makes sure parent directory exists but does not write
+    # Not finished...
+	ensure_local_parent_dir(out_path)
+	if is_s3_uri(out_path):
+		fsspec = load_fsspec_module()
+		#with fsspec.open(out_path, 'w', encoding='utf-8', newline='') as output_stream:
+		#	df.to_csv(output_stream, index=False)
+		#return
+    #df.to_csv(out_path, index=False)
+
+# MAIN
+def main(argv=None) -> int:
     """Run the complete microdata preprocessing workflow."""
-    configure_logging()
+    log_path = configure_logging()
+    logging.info('Logging to %s', log_path)
 
     try:
-        args = parse_args()
-
-        if args.year <= 0:
+        cfg = parse_args(argv)
+        print(cfg)
+        if not cfg.version:
             raise ValueError(
-                "--year must be a positive integer"
+                "--version must be provided"
             )
+        
+        year = int(cfg.version.split(".")[1]) # Assume version is something like 1.2022. This is brittle!
+        print(year)
 
-        if args.chunk_size <= 0:
+        if cfg.chunk_size <= 0:
             raise ValueError(
                 "--chunk-size must be a positive integer"
             )
 
-        onsite_zip = (
-            args.onsite_zip
-            .expanduser()
-            .resolve()
-        )
-
-        offsite_zip = (
-            args.offsite_zip
-            .expanduser()
-            .resolve()
-        )
-
-        output_dir = (
-            args.output_dir
-            .expanduser()
-            .resolve()
-        )
-
-        output_dir.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        output_path = (
-            output_dir
-            / (
-                "water_microdata_"
-                f"{args.year}_by_comid.parquet"
-            )
-        )
-
-        qa_path = (
-            output_dir
-            / f"water_microdata_{args.year}_qa.json"
-        )
+        # DEFINE PATHS
+        offsite_zip = get_path(cfg, cfg.offsite_raw_download_relative_path)
+        onsite_zip = get_path(cfg, cfg.onsite_raw_download_relative_path)
+        md_output_path = get_path(cfg, cfg.preprocessed_microdata_relative_path)
+        qa_output_path = get_path(cfg, cfg.qa_relative_path)
+        ONSITE_MEMBER = {2021:"NHDMicroResults_conc_aggonsite.csv", 2022:"NHDMicroResults_conc_aggOnsite.csv"}
+        OFFSITE_MEMBER = {2021:"NHDMicroResults_conc_aggoffsite.csv", 2022:"NHDMicroResults_conc_aggOffsite.csv"}
 
         onsite, onsite_stats = process_archive(
-            zip_path=onsite_zip,
-            member_name=ONSITE_MEMBER,
+            zip_path=Path(onsite_zip),
+            member_name=ONSITE_MEMBER[year],
             source_name="onsite",
-            target_year=args.year,
-            chunk_size=args.chunk_size,
+            target_year=year,
+            chunk_size=cfg.chunk_size,
         )
 
         offsite, offsite_stats = process_archive(
-            zip_path=offsite_zip,
-            member_name=OFFSITE_MEMBER,
+            zip_path=Path(offsite_zip),
+            member_name=OFFSITE_MEMBER[year],
             source_name="offsite",
-            target_year=args.year,
-            chunk_size=args.chunk_size,
+            target_year=year,
+            chunk_size=cfg.chunk_size,
         )
 
         combined = combine_sources(
             onsite=onsite,
             offsite=offsite,
-            target_year=args.year,
+            target_year=year,
         )
 
         if combined.empty:
             raise ValueError(
                 "No valid Water Geographic Microdata "
-                f"records were found for {args.year}."
+                f"records were found for {year}."
             )
 
         duplicate_comids = int(
@@ -963,21 +1019,22 @@ def main() -> int:
                 f"{duplicate_comids:,} duplicate COMIDs."
             )
 
+        write_s3_or_local(md_output_path) 
         combined.to_parquet(
-            output_path,
+            md_output_path,
             index=False,
             engine="pyarrow",
             compression="snappy",
         )
 
+        write_s3_or_local(qa_output_path)
         qa = build_combined_qa(
             combined=combined,
-            target_year=args.year,
+            target_year=year,
             onsite_stats=onsite_stats,
             offsite_stats=offsite_stats,
         )
-
-        with qa_path.open(
+        with Path(qa_output_path).open(
             "w",
             encoding="utf-8",
         ) as handle:
@@ -989,8 +1046,8 @@ def main() -> int:
 
         print_summary(
             qa=qa,
-            output_path=output_path,
-            qa_path=qa_path,
+            output_path=md_output_path,
+            qa_path=qa_output_path,
         )
 
         logging.info(
@@ -998,11 +1055,11 @@ def main() -> int:
         )
         logging.info(
             "Parquet output: %s",
-            output_path,
+            md_output_path,
         )
         logging.info(
             "QA output: %s",
-            qa_path,
+            qa_output_path,
         )
 
         return 0

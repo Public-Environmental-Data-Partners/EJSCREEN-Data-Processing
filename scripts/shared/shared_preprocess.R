@@ -9,8 +9,6 @@
 # 
 # TODO - code currently uses ACS 2022 vintage as the null-override score, should
 #        we make this an argument?
-# TODO - this currently writes to version 1.0, should we make version an 
-#        argument as well?
 #
 # Outputs: all from 2020 decennial census 
 #   - state_abb: abbreviated state name 
@@ -36,18 +34,19 @@
 # 
 # Example uses in CLI:
 #     # for local testing: 
-#     Rscript scripts/shared/shared_preprocess.R -l local
+#     Rscript scripts/shared/shared_preprocess.R -l local -v 1.0
 #     # for adding it to s3: 
-#     Rscript scripts/shared/shared_preprocess.R -l remote
+#     Rscript scripts/shared/shared_preprocess.R -l remote -v 1.0
 # 
 # Date: Feb 24th, 2026 
-# Updated: July 28th, 2026
-# Author: EmmaLi Tsai
+# Updated: Aug 21st, 2026
+# Author: EmmaLi Tsai w/ some light help from claude 
 ###############################################################################
 # package handling 
 ###############################################################################
 suppressPackageStartupMessages({
-  required <- c('tigris','janitor','tidyverse','curl','tidycensus','data.table')
+  required <- c('tigris','janitor','tidyverse','curl','tidycensus','data.table', 
+                'sf', 'optparse', 'reticulate')
   for (pkg in required) {
     if (!requireNamespace(pkg, quietly = TRUE)) {
       stop(sprintf('Required package "%s" is not installed. Install it and retry.', 
@@ -70,6 +69,7 @@ library(tidycensus)
 library(aws.s3)
 library(data.table)
 library(optparse)
+library(reticulate)
 # cache tigris files:
 options(tigris_use_cache = TRUE)
 options(scipen = 9999)
@@ -81,20 +81,55 @@ options(scipen = 9999)
 ACS_YEAR = 2022
 
 ###############################################################################
-# Handling arguments - really simple location & state argument 
+# Handling arguments - location & shared-asset config version
 ###############################################################################
 option_list <- list(
-  make_option(c('-l','--location'), type='character', default='local', 
-              help='Select location: local or remote (default: local)'))
-  # removing the state option, as we decided to move forward with a national 
-  #file
-  # make_option(c('-s','--state'), type='character', default=NULL, 
-  #             help="Required two-letter state code or 'all'"))
+  make_option(c('-l','--location'), type='character', default='local',
+              help='Select location: local or remote (default: local)'),
+  make_option(c('-v','--version'), type='character', default='1.0',
+              help='census_block_weights config version to build (default: 1.0)'))
 
 parser <- OptionParser(usage='%prog [options]', option_list=option_list)
 args_all <- parse_args(parser, positional_arguments = FALSE)
 opts <- args_all
 
+###############################################################################
+# generate paths using py_build_manifest & shared_config.json 
+###############################################################################
+shared_path <- "./scripts/shared"
+
+# load it in 
+py_build_manifest <- NULL
+try({
+  py_build_manifest <- import_from_path("build_manifest", path = shared_path)
+}, silent = TRUE)
+
+if (is.null(py_build_manifest)) {
+  stop(paste0("ERROR: failed to import 'build_manifest' from ", shared_path))
+}
+
+# build the manifest 
+manifest <- py_build_manifest$get_stage_manifest(
+  target_type = "shared",
+  name = "census_block_weights",
+  stage = "preprocess",
+  version = opts$version,
+  environment = opts$location)
+
+# check if the output is empty
+output_entry <- manifest$outputs$census_block_weights
+if (is.null(output_entry)) {
+  stop("Preprocess manifest missing required output: census_block_weights")
+}
+
+# function to join the root and relative paths: 
+join_root_and_relative_path <- function(root_path, relative_path) {
+  paste0(sub('/+$', '', root_path), '/', sub('^/+', '', relative_path))
+}
+
+# fully resolved local file path or s3:// URI for the preprocessed output
+output_path <- join_root_and_relative_path(output_entry$root, output_entry$relative)
+print(paste0("Will save output to: ", output_path))
 ###############################################################################
 # Handling states 
 ###############################################################################
@@ -106,13 +141,6 @@ state_acro <- states() %>%
   select(statefp, stusps) %>%
   # we don't be able to get weights from the territories, unfortunately
   filter(!(stusps %in% c("VI", "MP", "GU", "AS")))
-
-# removing the state option, as we decided to move forward with a national 
-# if(opts$state != "all") {
-#   # filter if state option is not all 
-#   state_acro <- state_acro %>%
-#     filter(stusps == opts$state)
-# } 
 
 ###############################################################################
 # Looping over states
@@ -187,7 +215,7 @@ for (i in 1:nrow(state_acro)) {
   # break if these do not have the same number of block groups 
   # I think this is the code I need: https://github.com/Public-Environmental-Data-Partners/EJAM/blob/main/data-raw/datacreate_blockwts.R
   # however, a raw file gets loaded in here and I don't have access to it. 
-  # Based on my understanding & considering the actual bounaries didn't change, 
+  # Based on my understanding & considering the actual boundaries didn't change, 
   # we can remap them pretty easily: 
   if(length(unique(state_i_bg_2022$block_group_geoid_2022)) != length(unique(b_weights_i$block_group_geoid))){
     print(paste0("Fixing FIPS in: ", state_i))
@@ -240,57 +268,35 @@ for (i in 1:nrow(state_acro)) {
   weights_df <- bind_rows(weights_df, b_weights_i_merged)
 }
 
+# stop if the weights_df is empty
+if (nrow(weights_df) == 0) {
+  stop("ERROR: census block weights df was zero")
+}
+
+print(paste0("Trimming Duplicates"))
 # trimming any extra duplicates 
 weights_df_uniq <- weights_df %>%
   unique() %>%
   select(-VINTAGE)
 
-# if option is local, save to shared/pipeline folder 
+# if option is local, save to shared/pipeline folder
 if(opts$location == "local"){
   print(paste0("Saving Data Locally"))
-  script_dir <- getwd()
-  save_path <- normalizePath(file.path(script_dir, 'pipeline/shared/census_block_weights/1.0/preprocessed_input/census_block_weights_2020/'))
-  save_path_name <- paste0(save_path, "/census_block_weights_2020_w2022pops.csv")
-  write.csv(weights_df_uniq, save_path_name)
-  
+  dir.create(dirname(output_path), recursive = TRUE, showWarnings = FALSE)
+  write.csv(weights_df_uniq, output_path)
+
 } else {
   print(paste0("Saving Data to S3"))
-  
-  # if not, save to s3 
-  save_path_name <- paste0("s3://pedp-data-preserved/ejscreen-data-processing/pipeline/shared/census_block_weights/1.0/preprocessed_input/census_block_weights_2020_w2022pops.csv")
-  
+
+  # if not, save to s3 (path resolved via build_manifest above)
   tmp <- tempfile()
   write.csv(weights_df_uniq, paste0(tmp, ".csv"), row.names = F)
   on.exit(unlink(tmp))
   put_object(
     file = paste0(tmp, ".csv"),
-    object = save_path_name,
+    object = output_path,
     multipart = T
   )
 }
 
-
-###############################################################################
-# extra code to check output against previous file in s3: 
-###############################################################################
-# # looking at differences against our original file: 
-# test <- aws.s3::s3read_using(read.csv,
-#                              object = "s3://pedp-data-preserved/ejscreen-data-processing/census_tables/census_block_weights_2020_w2022pops.csv")
-# # fixing geoids & leading 0s
-# test_tidy <- test %>%
-#   mutate(GEOID20 = as.character(GEOID20), 
-#          GEOID20 = case_when(nchar(GEOID20) == 14 ~ paste0("0", GEOID20), 
-#                                    TRUE ~ GEOID20))
-# # which ones got dropped? 
-# missing_from_update <- test_tidy %>%
-#   filter(!(GEOID20 %in% weights_df_uniq$GEOID20))
-# 
-# # there are 5,911 observations that are missing 
-# unique(missing_from_update$state_abb)
-# # "VI" "MP" "GU" "AS" --- as expected. Great!
-# 
-# # extra checks to confirm issues raised in:
-# # https://github.com/Public-Environmental-Data-Partners/EJSCREEN-Data-Processing/issues/15
-# # FIPS: 300290017032 & 300679806001
-# mt_data <- weights_df_uniq %>% 
-#   filter(state_abb == "MT")
+# yay!

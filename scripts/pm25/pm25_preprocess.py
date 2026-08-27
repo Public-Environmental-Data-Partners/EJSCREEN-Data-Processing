@@ -34,19 +34,11 @@ from datetime import datetime
 import importlib
 import logging
 from pathlib import Path
-import sys
 
 import pandas as pd
 
-# Ensure the `scripts/shared` folder is importable so modules in that
-# folder (e.g. build_manifest.py, resolve_path.py) can be imported as
-# top-level modules when running this script directly.
-SHARED_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "shared"
-if str(SHARED_SCRIPTS_DIR) not in sys.path:
-	sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
-
-import build_manifest
-import resolve_path
+import scripts.shared.build_manifest as build_manifest
+import scripts.shared.resolve_path as resolve_path
 
 
 PM25_DIR = Path(__file__).resolve().parent

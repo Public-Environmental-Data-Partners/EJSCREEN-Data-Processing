@@ -2,8 +2,8 @@
 
 Examples (run from the `scripts/` folder):
 
-    python3 test_harness/test_resolve_path.py --storage-mode local --type indicator --name o3 version 1.2020 --key raw_o3
-    python3 test_harness/test_resolve_path.py --storage-mode remote --type indicator --name o3 version 1.2021 --key raw_o3
+    python3 test_harness/test_resolve_path.py --storage-mode local --type indicator --name o3 --version 1.2020 --key raw_o3
+    python3 test_harness/test_resolve_path.py --storage-mode remote --type indicator --name o3 --version 1.2021 --key raw_o3
     python3 test_harness/test_resolve_path.py --storage-mode local --type shared --name tiger_bg --version 2020 --category downloads --key tiger_bg_2020
     python3 test_harness/test_resolve_path.py --storage-mode remote --type shared --name census_block_weights version 1.2022 --category preprocessed_input
 
@@ -22,18 +22,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import sys
 from pathlib import Path
 
+import scripts.shared.resolve_path as resolve_path
 
+# NB: logging is to console until/unless someone changes it to log to a file
 LOGGER = logging.getLogger(__name__)
-
-SHARED_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "shared"
-if str(SHARED_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
-
-import resolve_path  # type: ignore[import-not-found]
-
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Dry-run path resolution for indicator and shared assets.")

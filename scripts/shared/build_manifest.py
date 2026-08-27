@@ -28,23 +28,8 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-import sys
 
-# All of our project-specific imports must be relative to the 
-# `scripts` folder which we assume is at the first level of the
-# repository. 
-# NB: ***If `scripts` moves, this code will have to change.***
-# Walk up our current working directory tree until you find the
-# repository root, then add the scripts directory to sys.path
-REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
-if REPO_ROOT is None:
-	# This is a running-from-docker or other non-git environment cry for help.
-    # Undone: Handle non-git environments more gracefully when needed.
-    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
-SCRIPTS_ROOT = REPO_ROOT / "scripts"
-sys.path.insert(0, str(SCRIPTS_ROOT))
-
-import shared.resolve_path as resolve_path
+import scripts.shared.resolve_path as resolve_path
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.addHandler(logging.NullHandler())
@@ -251,7 +236,7 @@ class _ManifestBuilder:
         if indicator in self._indicator_config_cache:
             return self._indicator_config_cache[indicator]
 
-        config_path = SCRIPTS_ROOT / indicator / f"{indicator}_config.json"
+        config_path = resolve_path.SCRIPTS_ROOT / indicator / f"{indicator}_config.json"
         config = self._load_json_object(config_path, f"indicator {indicator}")
         self._indicator_config_cache[indicator] = config
         return config

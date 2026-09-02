@@ -195,17 +195,17 @@ def census(args):
   print("census")
   version = args.version
   # acs_by_x.csv where x = state, county, tract, blockgroup
-  lookup = {"state": {"fips":"statefips", "geotype": "state"}, 
+  censuslookup = {"state": {"fips":"statefips", "geotype": "state"}, 
             "county": {"fips":"countyfips", "geotype": "county"}, 
             "tract": {"fips":"tractfips", "geotype": "tract"}, 
             "blockgroup":{"fips":"bgfips", "geotype": "bg"}}
   for f in FILEMAP["census"]:
-    # infer id
+    # infer name and id
     id = f.replace("acs_by_", "").replace(".csv", "")
     print(id)
     id_cap = id.capitalize()
-    geotype = lookup[id]["geotype"]
-    id = lookup[id]["fips"]
+    geotype = censuslookup[id]["geotype"]
+    id = censuslookup[id]["fips"]
     output = _load_and_join(args, f, id, geotype)
     # Export as gdb
     f = f.replace("acs_by_", "").replace(".csv", "")
@@ -215,8 +215,64 @@ def census(args):
 
 def lookup(args):
   print("lookup")
-  # schema table?
-  return
+  """
+  updating lookup_demog See: https://services.arcgis.com/EXyRv0dqed53BmG2/ArcGIS/rest/services/EJScreen_Census/FeatureServer/6
+
+  This table (attributes only, no geo) includes every field in the Additional Demographics widget, a description (see map header names?), category (e.g. Access), AND summary stats (max, mean, min, std) for each geo level. Plan: we are only keeping fields/variables EJAM gives us.
+  """
+  from functools import reduce
+
+  # Load old lookup_demog table, sourced from above
+  lookup_demog = pandas.read_csv("pipeline/shared/ejscreen/lookup_demog.csv")
+  #print(lookup_demog.head())
+
+  namelookup = {"blockgroup": "BG", "tract": "TR", "county": "CNTY", "state": "ST"}
+  # Load EJAM Census results
+  results = []
+  for f in FILEMAP["census"]:
+    this_data = pandas.read_csv(f"pipeline/shared/ejam/{f}")
+    # EJAM calculates percentages 0-1, but we need 0-100
+    percentage_cols = [c for c in this_data.columns if "pct" in c]
+    # Multiply columns by 100
+    this_data[percentage_cols] = this_data[percentage_cols] * 100
+    # Calculate max, min, mean, std for each variable
+    this_result = this_data.agg(['max', 'min', 'mean', 'std']).T.reset_index()
+    # Renaming columns to match lookup
+    id = f.replace("acs_by_", "").replace(".csv", "")
+    abv = namelookup[id]
+    this_result.rename(columns={'min': f"{abv}_MIN", 'max': f"{abv}_MAX", 'mean':f"{abv}_MEAN", 'std':f"{abv}_STD", 'index': "FIELD_NAME"}, inplace=True)
+
+    results.append(this_result)
+  merged_df = reduce(lambda left, right: pandas.merge(left, right, on="FIELD_NAME", how="inner"), results)
+
+  # Lookup header names
+  # Load EJAM mapheadernames
+  headernames = pandas.read_csv("https://raw.githubusercontent.com/Public-Environmental-Data-Partners/EJAM/refs/heads/main/data-raw/map_headernames.csv")
+
+  # Goal: merged_df -> headernames -> lookup_demog
+  merged_df = merged_df.merge(headernames[["acsname", "rname", "shortlabel", "longname"]], left_on="FIELD_NAME", right_on="rname", how="left") # only keep the ACS variables we have from EJAM
+
+  merged_df = lookup_demog[["FIELD_NAME",	"DESCRIPTION",	"CATEGORY"]].merge(merged_df, left_on="FIELD_NAME", right_on="acsname", how="inner") # only keep variables that overlap, that are in both the existing look up and in EJAM's outputs
+  merged_df.drop(columns={"FIELD_NAME_y"}, inplace=True)
+  merged_df.rename(columns={"FIELD_NAME_x": "FIELD_NAME"}, inplace=True)
+
+  #print(merged_df)
+  # Not sure why, but we are getting duplicates in the outputs. Remove here, but investigate why it's happening. Some issue with the join, I assume.
+  merged_df.drop_duplicates(inplace=True)
+  merged_df.to_csv(f"pipeline/shared/ejscreen/v{args.version}/lookup_demog.csv", index=False)
+
+  # Debug
+  debug = merged_df.merge(lookup_demog, on="FIELD_NAME", how="left", suffixes=("", "_x"))
+  print(debug)
+  newcols = ["BG_MIN",	"BG_MEAN",	"BG_STD",	"TR_MAX",	"TR_MIN",	"TR_MEAN",	"TR_STD",	"CNTY_MAX",	"CNTY_MIN",	"CNTY_MEAN",	"CNTY_STD",	"ST_MAX",	"ST_MIN",	"ST_MEAN",	"ST_STD"]
+  oldcols = [c+"_x" for c in newcols]
+  diffcols = [c+"_DIFF" for c in newcols]
+  #debug[diffcols] = None
+  debug[diffcols] = debug[oldcols]- debug[newcols].values # Difference from old to new... Should expect some differences due to new ACS data (if that's the version we're working with)
+
+  # Some wonky results...need to investigate further
+  debug.to_csv(f"pipeline/shared/ejscreen/v{args.version}/lookup_demog_debug.csv", index=False)
+
 
 def parse_args(argv: list[str] | None = None):
   """Parse command-line arguments."""
@@ -271,7 +327,7 @@ def parse_args(argv: list[str] | None = None):
 
   return args
 
-FUNCTIONS = {"export":export, "thresholds": thresholds, "census":census} #"lookup":lookup
+FUNCTIONS = {"export":export, "thresholds": thresholds, "census":census, "lookup":lookup} 
 
 def main(argv=None):
   args = parse_args(argv)

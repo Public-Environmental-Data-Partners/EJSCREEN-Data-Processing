@@ -47,24 +47,11 @@ from decimal import Decimal, InvalidOperation
 import importlib
 import logging
 from pathlib import Path
-import sys
 
 import pandas as pd
-# All of our project-specific imports must be relative to the 
-# `scripts` folder which we assume is at the first level of the
-# repository. 
-# NB: ***If `scripts` moves, this code will have to change.***
-# Walk up our current working directory tree until you find the
-# repository root, then add the scripts directory to sys.path
-REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
-if REPO_ROOT is None:
-	# This is a running-from-docker or other non-git environment cry for help.
-    # Undone: Handle non-git environments more gracefully when needed.
-    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
-SCRIPTS_DIR = REPO_ROOT / "scripts"
-sys.path.insert(0, str(SCRIPTS_DIR))
-import shared.build_manifest as build_manifest
-import shared.resolve_path as resolve_path
+
+import scripts.shared.build_manifest as build_manifest
+import scripts.shared.resolve_path as resolve_path
 
 
 PM25_DIR = Path(__file__).resolve().parent
@@ -99,11 +86,11 @@ def parse_version_decimal(version_str: str) -> Decimal:
 
 
 try:
-	from shared.state_config import StateConfig, get_state_config, get_state_config_list
+	from scripts.shared.state_config import StateConfig, get_state_config, get_state_config_list
 except Exception as exc:
 	raise RuntimeError(
-		'Failed to import shared.state_config. Ensure scripts/shared/state_config.py is present and '
-		'that the repository root (containing the scripts directory) is on PYTHONPATH.'
+		'Failed to import scripts.shared.state_config. Ensure scripts/shared/state_config.py is present and '
+		'that the `scripts` package is installed (e.g. via `uv sync`).'
 	) from exc
 
 

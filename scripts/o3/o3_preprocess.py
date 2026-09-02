@@ -46,24 +46,9 @@ import logging
 from pathlib import Path
 
 import pandas as pd
-import sys
 
-# All of our project-specific imports must be relative to the 
-# `scripts` folder which we assume is at the first level of the
-# repository. 
-# NB: ***If `scripts` moves, this code will have to change.***
-# Walk up our current working directory tree until you find the
-# repository root, then add the scripts directory to sys.path
-REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
-if REPO_ROOT is None:
-	# This is a running-from-docker or other non-git environment cry for help.
-    # Undone: Handle non-git environments more gracefully when needed.
-    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
-SCRIPTS_ROOT = REPO_ROOT / "scripts"
-sys.path.insert(0, str(SCRIPTS_ROOT))
-
-import shared.build_manifest as build_manifest
-import shared.resolve_path as resolve_path
+import scripts.shared.build_manifest as build_manifest
+import scripts.shared.resolve_path as resolve_path
 
 O3_DIR = Path(__file__).resolve().parent
 DEFAULT_LOG_FILENAME = 'o3_preprocess.log'

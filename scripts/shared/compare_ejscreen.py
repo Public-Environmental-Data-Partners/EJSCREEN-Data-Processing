@@ -15,7 +15,7 @@ USAGE:
     python3 compare_ejscreen.py --indicator [indicator_name] --mode [original_merged|merged_final|original_final] --location [local_or_remote] --version [straw_version] --pipeline [pipeline_version]
 
 EXAMPLE:
-    python3 scripts/shared/compare_ejscreen.py --indicators ozone,pm25 --mode original_merged --location local --version 1.2020 --pipeline 3_2024
+    python3 scripts/shared/compare_ejscreen.py --indicators ozone,pm25 --mode original_merged --location local --version 1.2020 --pipeline 4_2024
 
 AUTHORSHIP:
     Eric Nost and Google Gemini
@@ -131,7 +131,7 @@ if __name__ == "__main__":
                         help="The *straw* version e.g. 1.2020")
     parser.add_argument("-p", "--pipeline",
                         default="",
-                        help="The *EJAM* version e.g. 3_2024")
+                        help="The *EJSCREEN* version e.g. 4_2024")
     parser.add_argument("-l", "--location", help="Local or remote storage")
 
     args = parser.parse_args()

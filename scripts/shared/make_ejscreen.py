@@ -143,15 +143,26 @@ def export(args):
   extent = args.extent
   version = args.version
 
-  # Send to load and join:
-  output = _load_and_join(args, FILEMAP["export"].format(extent, version), "ID")
-  print(output.head())
-  print(type(output))
-  print(output.geometry)
+  if args.extent == "both":
+    for e in ["us", "state"]:
+      # Send to load and join:
+      output = _load_and_join(args, FILEMAP["export"].format(e, version), "ID")
+      print(output.head())
+      print(type(output))
+      print(output.geometry)
 
-  # Export as gdb
-  gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{extent.upper()}.gdb"
-  _export_gdb(output, gdb_export_path, f"EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{extent.upper()}")
+      # Export as gdb
+      gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{e.upper()}.gdb"
+      _export_gdb(output, gdb_export_path, f"EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{e.upper()}")
+  else:
+    output = _load_and_join(args, FILEMAP["export"].format(extent, version), "ID")
+    print(output.head())
+    print(type(output))
+    print(output.geometry)
+
+    # Export as gdb
+    gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{extent.upper()}.gdb"
+    _export_gdb(output, gdb_export_path, f"EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{extent.upper()}")
 
 def thresholds(args):
   print("thresholds")

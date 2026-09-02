@@ -31,9 +31,9 @@ import logging
 import tempfile
 from pathlib import Path
 
-FILEMAP = {"export": "ejscreen_v{}.csv", "thresholds": ["ejscreen_threshold_{}_supplemental.csv", "ejscreen_threshold_{}_ejindexes.csv"], "census": ["acs_by_blockgroup.csv", "acs_by_tract.csv", "acs_by_county.csv", "acs_by_state.csv"], "lookup":"ejscreen_{}_pctile_lookup.csv"}
+FILEMAP = {"export": "ejscreen_{}_v{}.csv", "thresholds": ["ejscreen_threshold_{}_supplemental.csv", "ejscreen_threshold_{}_ejindexes.csv"], "census": ["acs_by_blockgroup.csv", "acs_by_tract.csv", "acs_by_county.csv", "acs_by_state.csv"], "lookup":"ejscreen_{}_pctile_lookup.csv"}
 
-def _read_block_groups_geodataframe(tiger_zip_path: Path) -> gpd.GeoDataFrame:
+def _read_geodataframe(tiger_zip_path: Path) -> gpd.GeoDataFrame:
   candidates = [str(tiger_zip_path)]
   if tiger_zip_path.suffix.lower() == '.zip':
     candidates.append(f'zip://{tiger_zip_path.as_posix()}')
@@ -45,9 +45,9 @@ def _read_block_groups_geodataframe(tiger_zip_path: Path) -> gpd.GeoDataFrame:
       return gdf
     except Exception as exc:
       last_err = exc
-  raise RuntimeError(f'Failed to read block-group data from {tiger_zip_path}: {last_err}')
+  raise RuntimeError(f'Failed to read data from {tiger_zip_path}: {last_err}')
 
-def _load_and_join(args, file, id):
+def _load_and_join(args, file, id, geotype="bg"):
   state = args.state
   location = args.location
 
@@ -61,10 +61,6 @@ def _load_and_join(args, file, id):
       fips = json.load(file)
     this_state_fips = fips[state]["fips"]
     data = data[data[id].str.startswith(this_state_fips)]
-    #try: # The main EJSCREEN file ("export") case
-    #   data = data[data["ST_ABBREV"]==state] 
-    #except KeyError: # The thresholds case (ST_ABBREV doesn't exist, need to look up fips) 
-       
 
   # Join with geometry
   # Ensure tiger lines are available - NOTE: unclear what vintage tiger lines we need, 2020 or something else. If something else, need to config that in shared_config.json
@@ -77,15 +73,14 @@ def _load_and_join(args, file, id):
   fips = this_state_fips #sample_id[:2]
 
   # Resolve TIGER path via shared asset config so resolution works for
-  # both local and remote locations. This uses the shared asset entry
-  # `tiger_bg` version `2020` and the download key `tiger_bg_2020`.
+  # both local and remote locations.
   shared_info = resolve_path.get_shared_asset_path(
-      asset='tiger_bg', version='2020', category='downloads', asset_key='tiger_bg_2020', environment=location
+      asset=f'tiger_{geotype}', version='2020', category='downloads', asset_key=f'tiger_{geotype}_2020', environment=location
   )
   # Ensure the shared root is fully resolved for local environments
   if location == 'local':
       try:
-          shared_root = resolve_path.get_shared_root('tiger_bg', '2020', environment=location)
+          shared_root = resolve_path.get_shared_root(f'tiger_{geotype}', '2020', environment=location)
       except Exception:
           # Fallback to the returned root if resolving fails
           shared_root = shared_info.get('root')
@@ -116,7 +111,7 @@ def _load_and_join(args, file, id):
           with fsspec.open(tiger_path_str, 'rb') as fh:
               with open(tmp.name, 'wb') as outfh:
                   outfh.write(fh.read())
-          bg_gdf = _read_block_groups_geodataframe(Path(tmp.name))
+          gdf = _read_geodataframe(Path(tmp.name))
       finally:
           try:
               Path(tmp.name).unlink()
@@ -125,25 +120,25 @@ def _load_and_join(args, file, id):
   else:
       tiger_path = Path(tiger_path_str)
       if not tiger_path.exists():
-          raise FileNotFoundError(f'TIGER block-group ZIP not found: {tiger_path}')
-      bg_gdf = _read_block_groups_geodataframe(tiger_path)
-  if 'GEOID' not in bg_gdf.columns:
-      raise RuntimeError(f"Expected 'GEOID' column in TIGER block-group data: {tiger_path}")
-  if 'geometry' not in bg_gdf.columns:
-      raise RuntimeError(f"Expected 'geometry' column in TIGER block-group data: {tiger_path}")
+          raise FileNotFoundError(f'TIGER ZIP not found: {tiger_path}')
+      gdf = _read_geodataframe(tiger_path)
+  if 'GEOID' not in gdf.columns:
+      raise RuntimeError(f"Expected 'GEOID' column in TIGER data: {tiger_path}")
+  if 'geometry' not in gdf.columns:
+      raise RuntimeError(f"Expected 'geometry' column in TIGER data: {tiger_path}")
 
   data[id] = data[id].astype(str).str.strip() # May need to fix geoids here
 
-  bg_gdf['GEOID'] = bg_gdf['GEOID'].astype(str).str.strip()
+  gdf['GEOID'] = gdf['GEOID'].astype(str).str.strip()
 
-  output = bg_gdf[["GEOID", "geometry"]].merge(data, left_on='GEOID', right_on=id, how='left') # Only need GEOID and geometry from the TIGER files
+  output = gdf[["GEOID", "geometry"]].merge(data, left_on='GEOID', right_on=id, how='left') # Only need GEOID and geometry from the TIGER files
 
   return output
 
 def _export_gdb(output, version, f):
   gdb_export_path = f"pipeline/shared/ejscreen/v{version}/{f}.gdb" # TODO: ensure state percentiles can be done
   Path(f"pipeline/shared/ejscreen/v{version}").mkdir(parents=True, exist_ok=True)
-  output.to_file(gdb_export_path, layer=f"{f}", driver="OpenFileGDB", geometry_type="Polygon") # Lookup correct layer names
+  output.to_file(gdb_export_path, layer=f"{f}", driver="OpenFileGDB", geometry_type="Polygon", TARGET_ARCGIS_VERSION="ARCGIS_PRO_3_2_OR_LATER") # Lookup correct layer names
 
 def export(args):
   # TODO: handle state percentiles here
@@ -151,13 +146,13 @@ def export(args):
   version = args.version
 
   # Send to load and join:
-  output = _load_and_join(args, FILEMAP["export"].format(version), "ID")
+  output = _load_and_join(args, FILEMAP["export"].format(extent, version), "ID")
   print(output.head())
   print(type(output))
   print(output.geometry)
 
   # Export as gdb
-  _export_gdb(output, version, f"EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI")
+  _export_gdb(output, version, f"EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{extent}")
 
 def thresholds(args):
   print("thresholds")
@@ -188,13 +183,17 @@ def census(args):
   print("census")
   version = args.version
   # acs_by_x.csv where x = state, county, tract, blockgroup
-  lookup = {"state": "statefips", "county": "countyfips", "tract": "tractfips", "blockgroup":"bgfips"}
+  lookup = {"state": {"fips":"statefips", "geotype": "state"}, 
+            "county": {"fips":"countyfips", "geotype": "county"}, 
+            "tract": {"fips":"tractfips", "geotype": "tract"}, 
+            "blockgroup":{"fips":"bgfips", "geotype": "bg"}}
   for f in FILEMAP["census"]:
     # infer id
     id = f.replace("acs_by_", "").replace(".csv", "")
     print(id)
-    id = lookup[id]
-    output = _load_and_join(args, f, id)
+    geotype = lookup[id]["geotype"]
+    id = lookup[id]["fips"]
+    output = _load_and_join(args, f, id, geotype)
     # Export as gdb
     f = f.replace("acs_by_", "").replace(".csv", "")
     _export_gdb(output, version, f)

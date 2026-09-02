@@ -37,14 +37,21 @@ import logging
 from pathlib import Path
 
 # For any local paths that we need to resolve, we want them to
-# consistently be resolved relative to the project root, no matter 
-# where this code is executed from.
-REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
-if REPO_ROOT is None:
-	# This is a running-from-docker or other non-git environment cry for help.
-    # Undone: Handle non-git environments more gracefully when needed.
-    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
+# consistently be resolved relative to the project root, no matter
+# where this code is executed from. This file always lives at
+# <repo_root>/scripts/shared/resolve_path.py under an editable install or
+# git checkout, so the repo root is a fixed number of parents away -- no
+# need to search for a `.git` anchor.
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_ROOT = REPO_ROOT / "scripts"
+PIPELINE_ROOT = REPO_ROOT / "pipeline"
+if not SCRIPTS_ROOT.is_dir() or not PIPELINE_ROOT.is_dir():
+    raise RuntimeError(
+        f"Architectural Error: expected sibling 'scripts' and 'pipeline' directories under "
+        f"{REPO_ROOT}, but at least one is missing. This module assumes the source tree is "
+        f"present on disk (e.g. an editable install or git checkout); a non-editable wheel "
+        f"install would not satisfy this layout."
+    )
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.addHandler(logging.NullHandler())
@@ -297,8 +304,12 @@ def get_indicator_root(indicator: str, version: str, environment: str = "local")
     _ = resolver._get_indicator_version_block(config, indicator, version)
     root = resolver._get_root(config, environment, f"indicator {indicator}")
     if environment == "local":
-        return str((REPO_ROOT / root).resolve())
-    return root
+        resolved_root = str((REPO_ROOT / root).resolve())
+    else:
+        resolved_root = root
+
+    logging.info("Resolved indicator root: %s", resolved_root)
+    return resolved_root
 
 
 def get_shared_root(asset: str, version: str, environment: str = "local") -> str:
@@ -314,8 +325,12 @@ def get_shared_root(asset: str, version: str, environment: str = "local") -> str
     _ = resolver._get_shared_version_block(config, asset, version)
     root = resolver._get_root(config, environment, "shared")
     if environment == "local":
-        return str((REPO_ROOT / root).resolve())
-    return root
+        resolved_root = str((REPO_ROOT / root).resolve())
+    else:
+        resolved_root = root
+
+    logging.info("Resolved shared root: %s", resolved_root)
+    return resolved_root
 
 
 def get_shared_version_block(config: dict[str, object], asset_name: str, version: str) -> dict[str, object]:
@@ -346,10 +361,14 @@ def get_pipeline_root(environment: str = "local") -> str:
     resolver._validate_environment(environment)
     config = resolver._load_shared_config()
     shared_root = resolver._get_root(config, environment, "shared")
+    logging.info("Resolved shared root for pipeline: %s", shared_root)
 
     if environment == "local":
-        return str((REPO_ROOT / shared_root).resolve().parent)
+        pipeline_root = str((REPO_ROOT / shared_root).resolve().parent)
+    else:
+        stripped = shared_root.rstrip("/")
+        parent, _, _ = stripped.rpartition("/")
+        pipeline_root = parent + "/" if parent else stripped + "/"
 
-    stripped = shared_root.rstrip("/")
-    parent, _, _ = stripped.rpartition("/")
-    return parent + "/" if parent else stripped + "/"
+    logging.info("Resolved pipeline root: %s", pipeline_root)
+    return pipeline_root

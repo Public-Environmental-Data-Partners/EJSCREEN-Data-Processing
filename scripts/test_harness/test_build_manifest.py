@@ -2,10 +2,10 @@
 
 Examples (run from the `scripts/` folder):
 
-    python3 test_harness/test_build_manifest.py --storage-mode local --target-type indicator --name o3 --stage preprocess --version 1.2020
-    python3 test_harness/test_build_manifest.py --storage-mode remote --target-type indicator --name o3 --stage score --version 1.2020
-    python3 test_harness/test_build_manifest.py --storage-mode local --target-type shared --name tiger_bg --stage fetch --version 2020
-    python3 test_harness/test_build_manifest.py --storage-mode local --target-type shared --name census_block_weights --stage preprocess --version 1.0
+    python test_harness/test_build_manifest.py --storage-mode local --target-type indicator --name o3 --stage preprocess --version 1.2020
+    python test_harness/test_build_manifest.py --storage-mode remote --target-type indicator --name o3 --stage score --version 1.2020
+    python test_harness/test_build_manifest.py --storage-mode local --target-type shared --name tiger_bg --stage fetch --version 2020
+    python test_harness/test_build_manifest.py --storage-mode local --target-type shared --name census_block_weights --stage preprocess --version 1.0
 
 Notes:
 - See the config files for what names, stages, and versions are valid for any particular indicator or shared asset. 
@@ -22,17 +22,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import sys
 from pathlib import Path
 
+import scripts.shared.build_manifest as build_manifest
 
+# NB: logging is to console until/unless someone changes it to log to a file
 LOGGER = logging.getLogger(__name__)
-
-SHARED_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "shared"
-if str(SHARED_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
-
-import build_manifest  # type: ignore[import-not-found]
 
 
 def _build_parser() -> argparse.ArgumentParser:

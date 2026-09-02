@@ -60,42 +60,28 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import importlib
+import io
 import json
 import logging
 import sys
+import tempfile
+import textwrap
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import textwrap
-import geopandas as gpd
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize, TwoSlopeNorm
 from PIL import Image
-import urllib.request
-import io
-import importlib
-import tempfile
 
-# All of our project-specific imports must be relative to the 
-# `scripts` folder which we assume is at the first level of the
-# repository. 
-# NB: ***If `scripts` moves, this code will have to change.***
-# Walk up our current working directory tree until you find the
-# repository root, then add the scripts directory to sys.path
-REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
-if REPO_ROOT is None:
-    # This is a running-from-docker or other non-git environment cry for help.
-    # Undone: Handle non-git environments more gracefully when needed.
-    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
-SCRIPTS_DIR = REPO_ROOT / "scripts"
-sys.path.insert(0, str(SCRIPTS_DIR))
-
-import shared.build_manifest as build_manifest
-import shared.resolve_path as resolve_path
-import utilities.validation.validation_io as validation_paths
+import scripts.shared.build_manifest as build_manifest
+import scripts.shared.resolve_path as resolve_path
+import scripts.utilities.validation.validation_io as validation_paths
 
 REQUIRED_FIELDS = (
     'indicator',
@@ -354,14 +340,6 @@ def plot_scatter(df: pd.DataFrame, score_a: str, score_b: str, out_path: Path, s
         fig.tight_layout()
         fig.savefig(out_p, dpi=150)
         plt.close(fig)
-
-
-def _resolve_scripts_dir() -> Path:
-    current_path = Path(__file__).resolve()
-    for parent in current_path.parents:
-        if parent.name == 'scripts':
-            return parent
-    raise RuntimeError(f'Unable to locate scripts directory from {current_path}')
 
 
 def _read_block_groups_geodataframe(tiger_zip_path: Path) -> gpd.GeoDataFrame:

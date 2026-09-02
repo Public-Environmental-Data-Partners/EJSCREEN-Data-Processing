@@ -7,12 +7,10 @@ Replacement for the previous validation_paths.py implemented to
 This file is intentionally placed under utilities/validation so changes
 are limited to the validation slice as requested.
 """
-from pathlib import Path
-import json
-import io
-import sys
-import tempfile
 import importlib
+import io
+import tempfile
+from pathlib import Path
 from typing import Any
 
 try:
@@ -24,18 +22,7 @@ except Exception:
 
 import pandas as pd
 
-# All of our project-specific imports must be relative to the
-# `scripts` folder which we assume is at the first level of the
-# repository.
-# NB: ***If `scripts` moves, this code will have to change.***
-REPO_ROOT = next((p for p in Path(__file__).resolve().parents if (p / ".git").exists()), None)
-if REPO_ROOT is None:
-    raise RuntimeError("Architectural Error: Repository root anchor (.git) could not be found!")
-SCRIPTS_DIR = REPO_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
-
-import shared.resolve_path as resolve_path
+import scripts.shared.resolve_path as resolve_path
 
 
 def get_validation_root(location: str) -> str:
@@ -55,15 +42,23 @@ def join_root_and_relative_path(root: str, relative: str) -> str:
     return str(Path(root) / relative)
 
 
+def _split_s3_uri(path: str) -> tuple[str, str] | None:
+    """Split an `s3://bucket/key` URI into (bucket, key), or None if malformed."""
+    tail = path[5:]
+    parts = tail.split('/', 1)
+    if len(parts) != 2:
+        return None
+    return parts[0], parts[1]
+
+
 def exists_s3_or_local(path: str) -> bool:
     if is_s3_uri(path):
         if boto3 is None:
             raise RuntimeError("boto3 required to check S3 URIs but is not installed")
-        tail = path[5:]
-        parts = tail.split('/', 1)
-        if len(parts) != 2:
+        split = _split_s3_uri(path)
+        if split is None:
             return False
-        bucket, key = parts[0], parts[1]
+        bucket, key = split
         s3 = boto3.client('s3')
         try:
             s3.head_object(Bucket=bucket, Key=key)
@@ -82,11 +77,10 @@ def read_csv_s3_or_local(path: str, **pd_kwargs) -> pd.DataFrame:
     if is_s3_uri(path):
         if boto3 is None:
             raise RuntimeError("boto3 required to read S3 URIs but is not installed")
-        tail = path[5:]
-        parts = tail.split('/', 1)
-        if len(parts) != 2:
+        split = _split_s3_uri(path)
+        if split is None:
             raise ValueError(f"Invalid S3 URI: {path}")
-        bucket, key = parts[0], parts[1]
+        bucket, key = split
         s3 = boto3.client('s3')
         try:
             resp = s3.get_object(Bucket=bucket, Key=key)
@@ -118,11 +112,10 @@ def write_df_s3_or_local(df: pd.DataFrame, out_path: str) -> None:
         tmp.close()
         try:
             df.to_csv(tmp.name, index=False)
-            tail = out_path[5:]
-            parts = tail.split('/', 1)
-            if len(parts) != 2:
+            split = _split_s3_uri(out_path)
+            if split is None:
                 raise ValueError(f"Invalid S3 URI: {out_path}")
-            bucket, key = parts[0], parts[1]
+            bucket, key = split
             s3 = boto3.client('s3')
             s3.upload_file(Filename=tmp.name, Bucket=bucket, Key=key)
         finally:
@@ -139,11 +132,10 @@ def write_text_s3_or_local(out_path: str, text: str) -> None:
     if is_s3_uri(out_path):
         if boto3 is None:
             raise RuntimeError("boto3 required to write S3 objects but is not installed")
-        tail = out_path[5:]
-        parts = tail.split('/', 1)
-        if len(parts) != 2:
+        split = _split_s3_uri(out_path)
+        if split is None:
             raise ValueError(f"Invalid S3 URI: {out_path}")
-        bucket, key = parts[0], parts[1]
+        bucket, key = split
         s3 = boto3.client('s3')
         s3.put_object(Bucket=bucket, Key=key, Body=text.encode('utf-8'))
         return
@@ -159,11 +151,10 @@ def write_figure_s3_or_local(fig, out_path: str, dpi: int = 150, bbox_inches='ti
         tmp.close()
         try:
             fig.savefig(tmp.name, dpi=dpi, bbox_inches=bbox_inches)
-            tail = out_path[5:]
-            parts = tail.split('/', 1)
-            if len(parts) != 2:
+            split = _split_s3_uri(out_path)
+            if split is None:
                 raise ValueError(f"Invalid S3 URI: {out_path}")
-            bucket, key = parts[0], parts[1]
+            bucket, key = split
             s3 = boto3.client('s3')
             s3.upload_file(Filename=tmp.name, Bucket=bucket, Key=key)
         finally:

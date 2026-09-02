@@ -53,7 +53,7 @@ def _load_and_join(args, file, id, geotype="bg"):
 
   # Load data based on FILEMAP
   print(file)
-  data = pandas.read_csv("pipeline/shared/ejam/" + file, dtype={id:str}) # national/usa by default # TODO: ensure state percentiles
+  data = pandas.read_csv("pipeline/shared/ejam/" + file, dtype={id:str})
   # Filter if requested
   if state:
     import json
@@ -103,7 +103,7 @@ def _load_and_join(args, file, id, geotype="bg"):
   # If remote, copy to a temporary local file for geopandas to read.
   if validation_paths.is_s3_uri(tiger_path_str):
       if not validation_paths.exists_s3_or_local(tiger_path_str):
-          raise FileNotFoundError(f'TIGER block-group ZIP not found: {tiger_path_str}')
+          raise FileNotFoundError(f'TIGER ZIP not found: {tiger_path_str}')
       fsspec = validation_paths.load_fsspec_module()
       tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
       tmp.close()
@@ -135,10 +135,8 @@ def _load_and_join(args, file, id, geotype="bg"):
 
   return output
 
-def _export_gdb(output, version, f):
-  gdb_export_path = f"pipeline/shared/ejscreen/v{version}/{f}.gdb" # TODO: ensure state percentiles can be done
-  Path(f"pipeline/shared/ejscreen/v{version}").mkdir(parents=True, exist_ok=True)
-  output.to_file(gdb_export_path, layer=f"{f}", driver="OpenFileGDB", geometry_type="Polygon", TARGET_ARCGIS_VERSION="ARCGIS_PRO_3_2_OR_LATER") # Lookup correct layer names
+def _export_gdb(output, path, layer):
+  output.to_file(path, layer=layer, driver="OpenFileGDB", geometry_type="Polygon", TARGET_ARCGIS_VERSION="ARCGIS_PRO_3_2_OR_LATER") # Lookup correct layer names
 
 def export(args):
   # TODO: handle state percentiles here
@@ -152,7 +150,8 @@ def export(args):
   print(output.geometry)
 
   # Export as gdb
-  _export_gdb(output, version, f"EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{extent}")
+  gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{extent.upper()}.gdb"
+  _export_gdb(output, gdb_export_path, f"EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{extent.upper()}")
 
 def thresholds(args):
   print("thresholds")
@@ -163,20 +162,22 @@ def thresholds(args):
   #ejscreen_threshold_state_ejindexes.csv
   #ejscreen_threshold_us_ejindexes.csv
   version = args.version
-  
+
+  gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJScreen Thresholds.gdb"
+
   if args.extent == "both":
     for e in ["us", "state"]:
       for f in FILEMAP["thresholds"]:
         f = f.format(e)
         output = _load_and_join(args, f, "ID")
         # Export as gdb
-        _export_gdb(output, version, f.replace(".csv", ""))
+        _export_gdb(output, gdb_export_path, f.replace(".csv", "").replace("ejscreen_threshold_", ""))
   else:
     for f in FILEMAP["thresholds"]:
       f = f.format(args.extent)
       output = _load_and_join(args, f, "ID")
       # Export as gdb
-      _export_gdb(output, version, f.replace(".csv", ""))
+      _export_gdb(output, gdb_export_path, f.replace(".csv", "").replace("ejscreen_threshold_", ""))
 
 
 def census(args):
@@ -191,12 +192,14 @@ def census(args):
     # infer id
     id = f.replace("acs_by_", "").replace(".csv", "")
     print(id)
+    id_cap = id.capitalize()
     geotype = lookup[id]["geotype"]
     id = lookup[id]["fips"]
     output = _load_and_join(args, f, id, geotype)
     # Export as gdb
     f = f.replace("acs_by_", "").replace(".csv", "")
-    _export_gdb(output, version, f)
+    gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJScreen_Census.gdb"
+    _export_gdb(output, gdb_export_path, f'by_{id_cap}')
   return
 
 def lookup(args):
@@ -257,10 +260,13 @@ def parse_args(argv: list[str] | None = None):
 
   return args
 
-FUNCTIONS = {"export":export, "thresholds": thresholds, "census":census, "lookup":lookup}
+FUNCTIONS = {"export":export, "thresholds": thresholds, "census":census} #"lookup":lookup
 
 def main(argv=None):
   args = parse_args(argv)
+
+  # Prep outputs
+  Path(f"pipeline/shared/ejscreen/v{args.version}").mkdir(parents=True, exist_ok=True)
 
   # Run requested functions
   if args.functions:

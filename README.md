@@ -1,3 +1,15 @@
+## `initialInvestigations` branch
+
+This branch is intended to archive early efforts some of us contributed to this project before
+we hit our stride in the `indicators` branch and its descendants.
+It has artifacts (jupyter notebooks, data files, etc) that I will be deleting in the 
+`v4.2024.0` branch which we hope will eventually be moved into `main`.
+
+I wanted to keep those artifacts easily accessible for now in case we decide
+they are of some longterm use.
+
+~ag
+
 # EJSCREEN-Data-Processing
 
 This repo is intended to hold the code required to build and update

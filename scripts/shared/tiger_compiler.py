@@ -33,7 +33,8 @@ if gdf_list:
   merged_gdf = gpd.GeoDataFrame(pd.concat(gdf_list, ignore_index=True))
 else:
   merged_gdf = gpd.GeoDataFrame()
-
+  
+merged_gdf = merged_gdf.reset_index(drop=True) # Reset index numbering
 
 # Create a temporary directory
 with tempfile.TemporaryDirectory() as temp_dir:

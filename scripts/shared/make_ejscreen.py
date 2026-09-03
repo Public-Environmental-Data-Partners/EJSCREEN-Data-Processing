@@ -54,6 +54,7 @@ def _load_and_join(args, file, id, geotype="bg"):
   # Load data based on FILEMAP
   print(file)
   data = pandas.read_csv("pipeline/shared/ejam/" + file, dtype={id:str})
+
   # Filter if requested
   if state:
     import json
@@ -61,7 +62,6 @@ def _load_and_join(args, file, id, geotype="bg"):
       fips = json.load(file)
     this_state_fips = fips[state]["fips"]
     data = data[data[id].str.startswith(this_state_fips)]
-
   # Join with geometry
   # Ensure tiger lines are available - NOTE: unclear what vintage tiger lines we need, 2020 or something else. If something else, need to config that in shared_config.json
   # TODO: script to compile tiger lines for USA?
@@ -70,7 +70,10 @@ def _load_and_join(args, file, id, geotype="bg"):
   if data.empty:
       raise RuntimeError('No matched rows to map')
   #sample_id = data['ID'].astype(str).iloc[0]
-  fips = this_state_fips #sample_id[:2]
+  try:
+    fips = this_state_fips #sample_id[:2] # State case
+  except: 
+    fips = "us"  # No state
 
   # Resolve TIGER path via shared asset config so resolution works for
   # both local and remote locations.
@@ -95,6 +98,7 @@ def _load_and_join(args, file, id, geotype="bg"):
       formatted_relative = raw_relative
 
   tiger_path_str = validation_paths.join_root_and_relative_path(shared_root, formatted_relative)
+
   # Log both the raw shared asset template, the formatted relative, and the resolved path
   logging.info('TIGER raw relative template -> %s', raw_relative)
   logging.info('TIGER formatted relative -> %s', formatted_relative)
@@ -127,16 +131,59 @@ def _load_and_join(args, file, id, geotype="bg"):
   if 'geometry' not in gdf.columns:
       raise RuntimeError(f"Expected 'geometry' column in TIGER data: {tiger_path}")
 
+
+  # Proceed with joining
   data[id] = data[id].astype(str).str.strip() # May need to fix geoids here
 
   gdf['GEOID'] = gdf['GEOID'].astype(str).str.strip()
 
   output = gdf[["GEOID", "geometry"]].merge(data, left_on='GEOID', right_on=id, how='left') # Only need GEOID and geometry from the TIGER files
 
+  del gdf, data # clear memory
+
   return output
 
+def _data_typer(input):
+  # This function maps column names to standard data types.
+  # Goal is to use shorts instead of floats where we can
+  # Load schema
+  schema = pandas.read_csv("pipeline/shared/ejscreen/ejschema.csv")
+  schema = schema[["column", "pandas"]].set_index('column')['pandas'].to_dict()
+
+  print(input.head(10))
+  print(input.dtypes)
+
+  schema = {k: v for k, v in schema.items() if k in input.columns}
+
+  input = input.astype(schema)
+  print(input.head(10))
+  print(input.dtypes)
+
+  return input
+
+
+
 def _export_gdb(output, path, layer):
-  output.to_file(path, layer=layer, driver="OpenFileGDB", geometry_type="Polygon", TARGET_ARCGIS_VERSION="ARCGIS_PRO_3_2_OR_LATER") # Lookup correct layer names
+  # Remove ID columns that pyogrio maps to database IDs
+  id_columns_to_drop = ['OBJECTID', 'GEOID']
+  output = output.drop(columns=[col for col in id_columns_to_drop if col in output.columns], errors='ignore')
+  # Reset indices
+  output.reset_index(drop=True, inplace=True) # This resequences the index, which may have gotten out of order through joins. Ensures we can write.
+  # Formating
+  output = output.round(3)
+  output = _data_typer(output)
+  schema = gpd.io.file.infer_schema(output)
+  print(schema)
+  #schema['properties']['your_int_column'] = 'int32:4'  # or 'int64' based on size requirements
+  # Could at least set int to int64, otherwise they're cast to float in export to gdb
+  # Delete any existing gdb here
+  import os
+  import shutil
+  if os.path.exists(path):
+    shutil.rmtree(path)
+  # Output
+  
+  output.to_file(path, layer=layer, driver="OpenFileGDB", geometry_type="Polygon", TARGET_ARCGIS_VERSION="ARCGIS_PRO_3_2_OR_LATER", append=False) # TODO: schema=schema, lookup correct layer names
 
 def export(args):
   # TODO: handle state percentiles here
@@ -148,8 +195,8 @@ def export(args):
       # Send to load and join:
       output = _load_and_join(args, FILEMAP["export"].format(e, version), "ID")
       print(output.head())
-      print(type(output))
-      print(output.geometry)
+      for t in output.dtypes:
+        print(t)
 
       # Export as gdb
       gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{e.upper()}.gdb"
@@ -157,8 +204,8 @@ def export(args):
   else:
     output = _load_and_join(args, FILEMAP["export"].format(extent, version), "ID")
     print(output.head())
-    print(type(output))
-    print(output.geometry)
+    for t in output.dtypes:
+      print(t)
 
     # Export as gdb
     gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{extent.upper()}.gdb"
@@ -199,6 +246,8 @@ def census(args):
             "county": {"fips":"countyfips", "geotype": "county"}, 
             "tract": {"fips":"tractfips", "geotype": "tract"}, 
             "blockgroup":{"fips":"bgfips", "geotype": "bg"}}
+  lookup_demog = pandas.read_csv("pipeline/shared/ejscreen/lookup_demog.csv")
+
   for f in FILEMAP["census"]:
     # infer name and id
     id = f.replace("acs_by_", "").replace(".csv", "")
@@ -207,11 +256,16 @@ def census(args):
     geotype = censuslookup[id]["geotype"]
     id = censuslookup[id]["fips"]
     output = _load_and_join(args, f, id, geotype)
+
+    # Exclude env indicator columns. Use only those in exisiting lookup_demog table
+    print(lookup_demog.columns)
+    print(output.columns)
+    output = output[output.columns.intersection(lookup_demog.columns)]
+    print(output.columns)
     # Export as gdb
-    f = f.replace("acs_by_", "").replace(".csv", "")
-    gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJScreen_Census.gdb"
-    _export_gdb(output, gdb_export_path, f'by_{id_cap}')
-  return
+    #f = f.replace("acs_by_", "").replace(".csv", "")
+    #gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJScreen_Census.gdb"
+    #_export_gdb(output, gdb_export_path, f'by_{id_cap}')
 
 def lookup(args):
   print("lookup")
@@ -222,12 +276,12 @@ def lookup(args):
   """
   from functools import reduce
 
-  # Load old lookup_demog table, sourced from above
+  # Load existing lookup_demog table (ACS 2022), sourced from above feature server
   lookup_demog = pandas.read_csv("pipeline/shared/ejscreen/lookup_demog.csv")
   #print(lookup_demog.head())
 
   namelookup = {"blockgroup": "BG", "tract": "TR", "county": "CNTY", "state": "ST"}
-  # Load EJAM Census results
+  # Load EJAM Census results (acs_by_x.csv)
   results = []
   for f in FILEMAP["census"]:
     this_data = pandas.read_csv(f"pipeline/shared/ejam/{f}")
@@ -250,7 +304,7 @@ def lookup(args):
   headernames = pandas.read_csv("https://raw.githubusercontent.com/Public-Environmental-Data-Partners/EJAM/refs/heads/main/data-raw/map_headernames.csv")
 
   # Goal: merged_df -> headernames -> lookup_demog
-  merged_df = merged_df.merge(headernames[["acsname", "rname", "shortlabel", "longname"]], left_on="FIELD_NAME", right_on="rname", how="left") # only keep the ACS variables we have from EJAM
+  merged_df = merged_df.merge(headernames[["acsname", "rname", "shortlabel", "longname"]], left_on="FIELD_NAME", right_on="rname", how="left") # only keep the ACS variables we have from EJAM. This may be where duplication is happening?
 
   merged_df = lookup_demog[["FIELD_NAME",	"DESCRIPTION",	"CATEGORY"]].merge(merged_df, left_on="FIELD_NAME", right_on="acsname", how="inner") # only keep variables that overlap, that are in both the existing look up and in EJAM's outputs
   merged_df.drop(columns={"FIELD_NAME_y"}, inplace=True)
@@ -259,13 +313,13 @@ def lookup(args):
   #print(merged_df)
   # Not sure why, but we are getting duplicates in the outputs. Remove here, but investigate why it's happening. Some issue with the join, I assume.
   merged_df.drop_duplicates(inplace=True)
+  merged_df = _data_typer(merged_df)
   merged_df.to_csv(f"pipeline/shared/ejscreen/v{args.version}/lookup_demog.csv", index=False)
 
   # Debug
-  debug = merged_df.merge(lookup_demog, on="FIELD_NAME", how="left", suffixes=("", "_x"))
-  print(debug)
+  debug = merged_df.merge(lookup_demog, on="FIELD_NAME", how="left", suffixes=("", "_old"))
   newcols = ["BG_MIN",	"BG_MEAN",	"BG_STD",	"TR_MAX",	"TR_MIN",	"TR_MEAN",	"TR_STD",	"CNTY_MAX",	"CNTY_MIN",	"CNTY_MEAN",	"CNTY_STD",	"ST_MAX",	"ST_MIN",	"ST_MEAN",	"ST_STD"]
-  oldcols = [c+"_x" for c in newcols]
+  oldcols = [c+"_old" for c in newcols]
   diffcols = [c+"_DIFF" for c in newcols]
   #debug[diffcols] = None
   debug[diffcols] = debug[oldcols]- debug[newcols].values # Difference from old to new... Should expect some differences due to new ACS data (if that's the version we're working with)

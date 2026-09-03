@@ -5,5 +5,42 @@
 .venv/
 venv/
 
+# Hold project-specific environment variables,
+# needed for Python access to some APIs such as AWS
+.env
+# Python bytecode
+__pycache__/
+*.py[cod]
 # OS cruft
 .DS_Store
+/.Rproj.user
+*.Rproj
+scripts/traffic/.Rhistory
+.Rhistory
+# Everything within the pipeline trees should be ignored 
+# except .md files we write to document contents for the 
+# GitHub repo.
+pipeline/
+!pipeline/**/*.md
+# Local files for testing input and output
+# I don't think we want to commit any of these to the repo
+test_files/
+output/
+test.out
+*.csv
+*.zip
+*.png
+*.log
+*.txt
+*.xlsx
+# Dev-specific experiments, temp tools, and old
+# files kept for diffing
+agScratch/
+*.old
+*.old/
+# Dev-specific Copilot instructions
+copilot-instructions.md
+*_plan.md
+scripts/o3/.python-version
+# Generated wastewater comparison artifacts
+scripts/wastewater/comparison/

@@ -155,7 +155,7 @@ def _data_typer(input):
 
 def _export_gdb(output, path, layer):
   # Remove ID columns that pyogrio maps to database IDs
-  id_columns_to_drop = ['OBJECTID', 'GEOID']
+  id_columns_to_drop = ['OBJECTID', 'GEOID', 'Shape_Area', 'Shape_Length'] # SA and SL are reserved in the ArcGIS world
   output = output.drop(columns=[col for col in id_columns_to_drop if col in output.columns], errors='ignore')
 
   # Reset indices

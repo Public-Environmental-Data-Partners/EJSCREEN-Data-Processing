@@ -34,31 +34,21 @@ from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 import sys
+import caffeine
 
 WASTEWATER_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = WASTEWATER_DIR.parent
 
 print(WASTEWATER_DIR, SCRIPTS_DIR)
 
-# TODO: Move to config/arguments
-DEFAULT_VERSION = 1
-DEFAULT_YEAR = 2021
-
-MODELED_FLOWLINES_DIR = (
-    Path("../pipeline/wastewater")
-    / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
-    / "preprocessed_input"
-    / "modeled_flowlines"
-)
 
 COMBINE_SCRIPT = WASTEWATER_DIR / "wastewater_combine_flowlines.py"
 PROXIMITY_SCRIPT = WASTEWATER_DIR / "wastewater_proximity.py"
 
 OUTPUT_ROOT = (
-    Path("../pipeline/wastewater")
-    / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
-    / "score_output"
+    Path("pipeline/wastewater")
 )
+
 
 STATE_OUTPUT_FILENAMES = (
     "targeted_blocks.csv",
@@ -134,11 +124,12 @@ def parse_args(argv: list[str] | None = None) -> Config:
     )
 
     parser.add_argument(
-        "--year",
-        type=int,
-        default=2021,
-        help="Wastewater microdata year. Default: 2021.",
+        "-v", "--version",
+        type=str,
+        default="1.2021",
+        help="Water Geographic Microdata version (1.2021, 1.2022). Default: 1.2021.",
     )
+
 
     parser.add_argument(
         "--flowlines",
@@ -168,10 +159,21 @@ def parse_args(argv: list[str] | None = None) -> Config:
 
     args = parser.parse_args(argv)
 
+    # Update
+    args.output_root = (
+        Path("pipeline/wastewater")
+        / f"v{args.version}"
+        / "score_output"
+    )
+
+    
+    year = int(args.version.split(".")[1])
+    print(year)
+    
     return Config(
         storage_mode=args.storage_mode,
         state=args.state,
-        year=args.year,
+        year=year,
         flowlines=args.flowlines,
         output_root=args.output_root,
         overwrite=args.overwrite,
@@ -179,7 +181,12 @@ def parse_args(argv: list[str] | None = None) -> Config:
 
 def get_combined_flowlines_path(year: int) -> Path:
     """Return the default combined national flowline path for a year."""
-
+    MODELED_FLOWLINES_DIR = (
+        Path("../pipeline/wastewater") # because this is called from within a script, path must be relative hence ../
+        / f"v1.{year}"
+        / "preprocessed_input"
+        / "modeled_flowlines"
+    )
     return (
         MODELED_FLOWLINES_DIR
         / f"wastewater_flowlines_conus_{year}_positive.parquet"
@@ -248,8 +255,8 @@ def run_combine_flowlines(config: Config) -> None:
     command = [
         sys.executable,
         str(COMBINE_SCRIPT),
-        "--year",
-        str(config.year),
+        "--version",
+        f"1.{config.year}",
     ]
 
     if config.overwrite:

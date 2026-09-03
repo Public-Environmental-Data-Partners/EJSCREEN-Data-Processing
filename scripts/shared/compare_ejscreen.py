@@ -142,7 +142,7 @@ if __name__ == "__main__":
     FILE_MAP = {
         "original": "pipeline/shared/ejscreen/EJSCREEN_2024_BG_with_AS_CNMI_GU_VI.csv",
         "merged": f"pipeline/shared/ejscreen/v{args.version}/envirodata_{args.version}.csv",
-        "final": f"pipeline/shared/ejam/ejscreen_v{args.pipeline}.csv"
+        "final": f"pipeline/shared/ejam/ejscreen_us_v{args.pipeline}.csv"
     }
 
     run_audit(args.indicators, args.mode)

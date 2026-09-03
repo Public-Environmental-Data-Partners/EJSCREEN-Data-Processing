@@ -247,6 +247,8 @@ def census(args):
             "tract": {"fips":"tractfips", "geotype": "tract"}, 
             "blockgroup":{"fips":"bgfips", "geotype": "bg"}}
   lookup_demog = pandas.read_csv("pipeline/shared/ejscreen/lookup_demog.csv")
+  # get column names from EJAM
+  headernames = pandas.read_csv("https://raw.githubusercontent.com/Public-Environmental-Data-Partners/EJAM/refs/heads/main/data-raw/map_headernames.csv")
 
   for f in FILEMAP["census"]:
     # infer name and id
@@ -258,14 +260,18 @@ def census(args):
     output = _load_and_join(args, f, id, geotype)
 
     # Exclude env indicator columns. Use only those in exisiting lookup_demog table
-    print(lookup_demog.columns)
-    print(output.columns)
-    output = output[output.columns.intersection(lookup_demog.columns)]
+    dataT = output.T.reset_index()
+    dataT.rename(columns={"index": "FIELD_NAME"},inplace=True)
+    cols = dataT[["FIELD_NAME"]].merge(headernames[["acsname", "rname", "shortlabel", "longname"]], left_on="FIELD_NAME", right_on="rname", how="left") # only keep the ACS variables we have from EJAM. 
+    cols = lookup_demog[["FIELD_NAME",	"DESCRIPTION",	"CATEGORY"]].merge(cols, left_on="FIELD_NAME", right_on="acsname", how="inner") # only keep variables that overlap, that are in both the existing look up and in EJAM's outputs
+    core_cols = ['GEOID', 'geometry', 'bgfips', 'tractfips', 'countyfips', 'statefips']
+    cols = list(cols["rname"]) + core_cols
+    output = output.loc[:, output.columns.isin(cols)] # Keep only these Census columns
     print(output.columns)
     # Export as gdb
-    #f = f.replace("acs_by_", "").replace(".csv", "")
-    #gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJScreen_Census.gdb"
-    #_export_gdb(output, gdb_export_path, f'by_{id_cap}')
+    f = f.replace("acs_by_", "").replace(".csv", "")
+    gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJScreen_Census.gdb"
+    _export_gdb(output, gdb_export_path, f'by_{id_cap}')
 
 def lookup(args):
   print("lookup")

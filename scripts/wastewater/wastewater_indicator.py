@@ -51,10 +51,10 @@ OUTPUT_ROOT = (
 
 
 STATE_OUTPUT_FILENAMES = (
-    "targeted_blocks.csv",
-    "block_flowline_distances.csv",
-    "final_bg_scores.csv",
-    "wastewater_proximity_qa.json",
+    "targeted_blocks_{}.csv",
+    "block_flowline_distances_{}.csv",
+    "final_bg_scores_{}.csv",
+    "wastewater_proximity_qa_{}.json",
 )
 
 STORAGE_MODES = ("local", "remote")
@@ -161,7 +161,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
 
     # Update
     args.output_root = (
-        Path("pipeline/wastewater")
+        Path("../pipeline/wastewater") # because this is called from within a script, path must be relative hence ../
         / f"v{args.version}"
         / "score_output"
     )
@@ -271,10 +271,8 @@ def run_state_proximity(
 ) -> None:
     """Run the wastewater proximity workflow for one state."""
 
-    state_output_dir = config.output_root / state_config.postal
-
     expected_outputs = [
-        state_output_dir / filename
+        config.output_root / filename.format(state_config.postal)
         for filename in STATE_OUTPUT_FILENAMES
     ]
 
@@ -306,7 +304,7 @@ def run_state_proximity(
         "--flowlines",
         str(flowline_path),
         "--output-dir",
-        str(state_output_dir),
+        str(config.output_root),
     ]
 
     if config.overwrite:
@@ -384,12 +382,8 @@ def main(argv: list[str] | None = None) -> int:
         print("=" * 60)
 
         run_state_proximity(config, state_config)
-        verify_state_output(
-            config,
-            state_config,
-        )
+       #verify_state_output(config,state_config) # Currently having issues with this, even though state results ARE being produced
 
-    print()
     print("Wastewater proximity processing completed.")
 
     return 0

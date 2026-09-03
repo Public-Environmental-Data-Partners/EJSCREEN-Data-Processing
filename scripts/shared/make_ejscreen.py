@@ -149,26 +149,18 @@ def _data_typer(input):
   # Load schema
   schema = pandas.read_csv("pipeline/shared/ejscreen/ejschema.csv")
   schema = schema[["column", "pandas"]].set_index('column')['pandas'].to_dict()
-
-  print(input.head(10))
-  print(input.dtypes)
-
   schema = {k: v for k, v in schema.items() if k in input.columns}
-
   input = input.astype(schema)
-  print(input.head(10))
-  print(input.dtypes)
-
   return input
-
-
 
 def _export_gdb(output, path, layer):
   # Remove ID columns that pyogrio maps to database IDs
   id_columns_to_drop = ['OBJECTID', 'GEOID']
   output = output.drop(columns=[col for col in id_columns_to_drop if col in output.columns], errors='ignore')
+
   # Reset indices
   output.reset_index(drop=True, inplace=True) # This resequences the index, which may have gotten out of order through joins. Ensures we can write.
+
   # Formating
   output = output.round(3)
   output = _data_typer(output)
@@ -176,17 +168,17 @@ def _export_gdb(output, path, layer):
   print(schema)
   #schema['properties']['your_int_column'] = 'int32:4'  # or 'int64' based on size requirements
   # Could at least set int to int64, otherwise they're cast to float in export to gdb
+
   # Delete any existing gdb here
   import os
   import shutil
   if os.path.exists(path):
     shutil.rmtree(path)
+
   # Output
-  
-  output.to_file(path, layer=layer, driver="OpenFileGDB", geometry_type="Polygon", TARGET_ARCGIS_VERSION="ARCGIS_PRO_3_2_OR_LATER", append=False) # TODO: schema=schema, lookup correct layer names
+  output.to_file(path, layer=layer, driver="OpenFileGDB", geometry_type="Polygon", TARGET_ARCGIS_VERSION="ARCGIS_PRO_3_2_OR_LATER", append=False) # TODO: schema=schema, lookup correct layer names, ALIASES (possibly only possible with arcpy / within ArcGIS)
 
 def export(args):
-  # TODO: handle state percentiles here
   extent = args.extent
   version = args.version
 
@@ -194,25 +186,18 @@ def export(args):
     for e in ["us", "state"]:
       # Send to load and join:
       output = _load_and_join(args, FILEMAP["export"].format(e, version), "ID")
-      print(output.head())
-      for t in output.dtypes:
-        print(t)
 
       # Export as gdb
       gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{e.upper()}.gdb"
       _export_gdb(output, gdb_export_path, f"EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{e.upper()}")
   else:
     output = _load_and_join(args, FILEMAP["export"].format(extent, version), "ID")
-    print(output.head())
-    for t in output.dtypes:
-      print(t)
 
     # Export as gdb
     gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{extent.upper()}.gdb"
     _export_gdb(output, gdb_export_path, f"EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_{extent.upper()}")
 
 def thresholds(args):
-  print("thresholds")
   # Compare with https://colab.research.google.com/drive/1jaWCaAv1ZPg4zKoUv5REuKwIUaOPTJdY
   # EJAM paths:
   #ejscreen_threshold_us_supplemental.csv
@@ -239,7 +224,6 @@ def thresholds(args):
 
 
 def census(args):
-  print("census")
   version = args.version
   # acs_by_x.csv where x = state, county, tract, blockgroup
   censuslookup = {"state": {"fips":"statefips", "geotype": "state"}, 
@@ -265,16 +249,19 @@ def census(args):
     cols = dataT[["FIELD_NAME"]].merge(headernames[["acsname", "rname", "shortlabel", "longname"]], left_on="FIELD_NAME", right_on="rname", how="left") # only keep the ACS variables we have from EJAM. 
     cols = lookup_demog[["FIELD_NAME",	"DESCRIPTION",	"CATEGORY"]].merge(cols, left_on="FIELD_NAME", right_on="acsname", how="inner") # only keep variables that overlap, that are in both the existing look up and in EJAM's outputs
     core_cols = ['GEOID', 'geometry', 'bgfips', 'tractfips', 'countyfips', 'statefips']
-    cols = list(cols["rname"]) + core_cols
-    output = output.loc[:, output.columns.isin(cols)] # Keep only these Census columns
-    print(output.columns)
+    rcols = list(cols["rname"]) + core_cols
+    output = output.loc[:, output.columns.isin(rcols)] # Keep only these Census columns
+    # Rename columns based on mapping
+    cols.rename(columns={"FIELD_NAME_x": "FIELD_NAME"}, inplace=True)
+    mapping = cols[["FIELD_NAME", "rname"]].set_index('rname')['FIELD_NAME'].to_dict()
+    output = output.rename(columns=mapping)
+
     # Export as gdb
     f = f.replace("acs_by_", "").replace(".csv", "")
     gdb_export_path = f"pipeline/shared/ejscreen/v{version}/EJScreen_Census.gdb"
     _export_gdb(output, gdb_export_path, f'by_{id_cap}')
 
 def lookup(args):
-  print("lookup")
   """
   updating lookup_demog See: https://services.arcgis.com/EXyRv0dqed53BmG2/ArcGIS/rest/services/EJScreen_Census/FeatureServer/6
 
@@ -301,8 +288,8 @@ def lookup(args):
     id = f.replace("acs_by_", "").replace(".csv", "")
     abv = namelookup[id]
     this_result.rename(columns={'min': f"{abv}_MIN", 'max': f"{abv}_MAX", 'mean':f"{abv}_MEAN", 'std':f"{abv}_STD", 'index': "FIELD_NAME"}, inplace=True)
-
     results.append(this_result)
+
   merged_df = reduce(lambda left, right: pandas.merge(left, right, on="FIELD_NAME", how="inner"), results)
 
   # Lookup header names

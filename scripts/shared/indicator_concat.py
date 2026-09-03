@@ -72,8 +72,11 @@ def concatenate_csvs(indicator, version, location):
 
             # Column name lookup - toggle between "o3" (EJAM) and "ozone" (EJSCREEN)
             # We need "o3" early on to validate via EJAM but "ozone" later to merge with EJSCREEN
+            # Same with wastewater...
             if indicator == "o3":
                 df.rename(columns={"o3": "ozone"}, inplace=True)
+            elif indicator == "wastewater":
+                df.rename(columns={"wastewater": "pwdis"}, inplace=True)
 
             df_list.append(df)
             print(f"Loaded: {file_path.name}")

@@ -94,7 +94,7 @@ def ejscreen_merge(indicators, version, location):
         df_local = df_local.rename(columns={indicator: indicator.upper()})
 
         # Outer join on ID
-        # This places your new indicator data into the dataframe
+        # This places new indicator data into the dataframe
         df_main = pd.merge(df_main, df_local, on='ID', how='left')
 
     # 4. Process further for EJAM

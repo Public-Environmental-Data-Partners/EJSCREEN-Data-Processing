@@ -30,6 +30,7 @@ import scripts.utilities.validation.validation_io as validation_paths
 import logging
 import tempfile
 from pathlib import Path
+import caffeine 
 
 FILEMAP = {"export": "ejscreen_{}_v{}.csv", "thresholds": ["ejscreen_threshold_{}_supplemental.csv", "ejscreen_threshold_{}_ejindexes.csv"], "census": ["acs_by_blockgroup.csv", "acs_by_tract.csv", "acs_by_county.csv", "acs_by_state.csv"], "lookup":"ejscreen_{}_pctile_lookup.csv"}
 
@@ -155,7 +156,7 @@ def _data_typer(input):
 
 def _export_gdb(output, path, layer):
   # Remove ID columns that pyogrio maps to database IDs
-  id_columns_to_drop = ['OBJECTID', 'GEOID', 'Shape_Area', 'Shape_Length'] # SA and SL are reserved in the ArcGIS world
+  id_columns_to_drop = ['OBJECTID', 'GEOID', 'Shape__Area', 'Shape__Length'] # SA and SL are reserved in the ArcGIS world
   output = output.drop(columns=[col for col in id_columns_to_drop if col in output.columns], errors='ignore')
 
   # Reset indices
@@ -176,7 +177,7 @@ def _export_gdb(output, path, layer):
     shutil.rmtree(path)
 
   # Output
-  output.to_file(path, layer=layer, driver="OpenFileGDB", geometry_type="Polygon", TARGET_ARCGIS_VERSION="ARCGIS_PRO_3_2_OR_LATER", append=False) # TODO: schema=schema, lookup correct layer names, ALIASES (possibly only possible with arcpy / within ArcGIS)
+  output.to_file(path, layer=layer, driver="OpenFileGDB", geometry_type="Polygon", TARGET_ARCGIS_VERSION="ARCGIS_PRO_3_2_OR_LATER") # TODO: schema=schema, lookup correct layer names, ALIASES (possibly only possible with arcpy / within ArcGIS)
 
 def export(args):
   extent = args.extent
@@ -243,7 +244,7 @@ def census(args):
     id = censuslookup[id]["fips"]
     output = _load_and_join(args, f, id, geotype)
 
-    # Exclude env indicator columns. Use only those in exisiting lookup_demog table
+    # Exclude env indicator columns. Use only those in exisiting lookup_demog table. Use correct census syntax.
     dataT = output.T.reset_index()
     dataT.rename(columns={"index": "FIELD_NAME"},inplace=True)
     cols = dataT[["FIELD_NAME"]].merge(headernames[["acsname", "rname", "shortlabel", "longname"]], left_on="FIELD_NAME", right_on="rname", how="left") # only keep the ACS variables we have from EJAM. 
@@ -254,7 +255,7 @@ def census(args):
     # Rename columns based on mapping
     cols.rename(columns={"FIELD_NAME_x": "FIELD_NAME"}, inplace=True)
     mapping = cols[["FIELD_NAME", "rname"]].set_index('rname')['FIELD_NAME'].to_dict()
-    output = output.rename(columns=mapping)
+    output = output.rename(columns=mapping) 
 
     # Export as gdb
     f = f.replace("acs_by_", "").replace(".csv", "")

@@ -39,13 +39,13 @@ def report(products, args):
     lambda left, right: pandas.merge(left, right, on="ID", how="left"),
     products,
   )
-  print(merged_products)
 
   # Create diffs
   # Diff EJSCREEN V2.32 vs Pipeline vs Final
 
   # Export
   merged_products.to_csv(f"pipeline/compare/coc_report_{args.blockgroup}.csv")
+  print(f"Exported to pipeline/compare/coc_report_{args.blockgroup}.csv")
 
 # Load each dataset
 def load(args):
@@ -65,7 +65,6 @@ def load(args):
 
   concatenated = []
   for path in FILE_MAP["concatenated"].values():
-    print(path)
     this_data = pandas.read_csv(path, dtype={"block_group_geoid":str})
     this_data = this_data[this_data["block_group_geoid"]==args.blockgroup]
     this_data.rename(columns={"block_group_geoid": "ID"}, inplace=True)

@@ -1,0 +1,73 @@
+{
+  "local_root_path": "./pipeline/shared/",
+  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/pipeline/shared/",
+  "download_settings": {
+    "request_timeout_seconds": 120,
+    "chunk_size_bytes": 1048576
+  },
+  "assets": {
+    "census_block_weights": {
+      "1.0": {
+        "stages": {
+          "preprocess": {
+            "outputs": {
+              "census_block_weights": {
+                "type": "shared_asset",
+                "scope": "single",
+                "relative_path_template": "census_block_weights/1.0/preprocessed_input/census_block_weights_2020_w2022pops.csv"
+              }
+          }
+        }
+      },
+      "notes": "These are EmmaLi's new-improved weights that include the acs_2022_bg_pop column to use for identifying zero-population block groups."
+      }
+    },
+    "tiger_bg": {
+      "2020": {
+        "stages": {
+          "fetch": {
+            "outputs": {
+              "tiger_bg_2020": {
+                "type": "download",
+                "scope": "state",
+                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/BG/tl_2020_{fips}_bg.zip",
+                "relative_path_template": "downloads/tiger_lines/2020/bg/tl_2020_{fips}_bg.zip"
+              }
+            }
+          }
+        }
+      }
+    },
+    "tiger_block": {
+      "2022": {
+        "stages": {
+          "fetch": {
+            "outputs": {
+              "tiger_block_2022": {
+                "type": "download",
+                "scope": "state",
+                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2022/TABBLOCK20/tl_2022_{fips}_tabblock20.zip",
+                "relative_path_template": "downloads/tiger_lines/2022/tabblock20/tl_2022_{fips}_tabblock20.zip"
+              }
+            }
+          }
+        }
+      },
+      "2020": {
+        "stages": {
+          "fetch": {
+            "outputs": {
+              "tiger_block_2020": {
+                "type": "download",
+                "scope": "state",
+                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/TABBLOCK20/tl_2020_{fips}_tabblock20.zip",
+                "relative_path_template": "downloads/tiger_lines/2020/tabblock20/tl_2020_{fips}_tabblock20.zip"
+              }
+            }
+          }
+        }
+      }
+
+    }
+  }
+}

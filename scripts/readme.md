@@ -6,7 +6,7 @@ Before running any scripts for the first time, set up and activate the project v
 
 2. Activate the virtual environment:
 
-    - macOS/Linux: `source .venv/bin/activate`
+    - macOS/Linux (inc. Windows WSL): `source .venv/bin/activate`
     - Windows (PowerShell): `.venv\Scripts\Activate.ps1`
     - Windows (CMD): `.venv\Scripts\activate.bat`
 

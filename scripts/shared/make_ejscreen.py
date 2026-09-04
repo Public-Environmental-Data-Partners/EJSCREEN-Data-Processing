@@ -170,12 +170,6 @@ def _export_gdb(output, path, layer):
   #schema['properties']['your_int_column'] = 'int32:4'  # or 'int64' based on size requirements
   # Could at least set int to int64, otherwise they're cast to float in export to gdb
 
-  # Delete any existing gdb here
-  import os
-  import shutil
-  if os.path.exists(path):
-    shutil.rmtree(path)
-
   # Output
   output.to_file(path, layer=layer, driver="OpenFileGDB", geometry_type="Polygon", TARGET_ARCGIS_VERSION="ARCGIS_PRO_3_2_OR_LATER") # TODO: schema=schema, lookup correct layer names, ALIASES (possibly only possible with arcpy / within ArcGIS)
 
@@ -382,6 +376,14 @@ def main(argv=None):
 
   # Prep outputs
   Path(f"pipeline/shared/ejscreen/v{args.version}").mkdir(parents=True, exist_ok=True)
+
+  # Delete any existing gdbs here
+  import os
+  import shutil
+  for gdb_path in Path(f"pipeline/shared/ejscreen/v{args.version}").rglob("*.gdb"):
+    if gdb_path.is_dir():
+      print(f"Deleting geodatabase: {gdb_path}")
+      shutil.rmtree(gdb_path) # Deletes the folder and all contents safely
 
   # Run requested functions
   if args.functions:

@@ -13,7 +13,7 @@ INPUT FILES:
     pipeline/shared/ejscreen/EJSCREEN_2024_BG_with_AS_CNMI_GU_VI.csv # Original archive
     pipeline/indicator/combined_indicator.csv # Combined blockgroup scores for the indicator
     pipeline/shared/ejscreen/envirodata_version.csv 
-    pipeline/shared/ejam/ejscreen_us_pipeline # TODO
+    pipeline/shared/ejam/ejscreen_us_pipeline
     pipeline/shared/ejscreen/EJSCREEN_pipeline_BG_with_AS_CNMI_GU_VI_US.gdb # TODO
 
 OUTPUT FILE:
@@ -24,6 +24,7 @@ AUTHORSHIP:
 """
 import re
 import pandas
+import geopandas
 import argparse
 from functools import reduce
 
@@ -75,7 +76,7 @@ def load(args):
     lambda left, right: pandas.merge(left, right, on="ID", how="left"),
     concatenated,
   )
-  concatenated_final["src"] = f"{args.version} - COMBINED BG SCORES"
+  concatenated_final["src"] = f"v{args.version} - COMBINED BG SCORES"
 
   # Update cols_needed = just "raw" scores
   merged_cols = [c for c in ejscreen_cols_needed if "_" not in c]
@@ -87,12 +88,15 @@ def load(args):
 
   pipeline = pandas.read_csv(FILE_MAP["pipeline"], usecols=ejscreen_cols_needed, dtype={"ID":str})
   pipeline = pipeline[pipeline["ID"]==args.blockgroup] # Filter to bg
-  pipeline["src"] = f"EJAM CALCULATIONS FOR {args.pipeline}"
+  pipeline["src"] = f"EJAM CALCULATIONS FOR v{args.pipeline}"
   #pipeline.columns = [c+f"_{args.pipeline}" if c != "ID" else c for c in pipeline.columns] # For recognition
 
-  #final = pandas.read_csv(FILE_MAP["ejscreen"], dtype={"ID":str}) # TBD
+  final = geopandas.read_file(FILE_MAP["final"], dtype={"ID":str}) # Need to handle ID as str here. Geopandas doesn't do it...
+  final = final[final["ID"]==args.blockgroup]
+  final = final[ejscreen_cols_needed]
+  final["src"] = f"EJSCREEN v{args.pipeline}"
 
-  report([ejscreen, concatenated_final, merged, pipeline], args)
+  report([ejscreen, concatenated_final, merged, pipeline, final], args)
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(description="Audit EJSCREEN straw/pipeline stages.")
@@ -134,7 +138,7 @@ if __name__ == "__main__":
     "concatenated": concat,
     "merged": f"pipeline/shared/ejscreen/v{args.version}/envirodata_{args.version}.csv",
     "pipeline": f"pipeline/shared/ejam/ejscreen_us_v{args.pipeline}.csv",
-    "final": f" pipeline/shared/ejscreen/EJSCREEN_{args.pipeline}_BG_with_AS_CNMI_GU_VI_US.gdb"
+    "final": f" pipeline/shared/ejscreen/v{args.pipeline}/EJSCREEN_{args.pipeline}_BG_with_AS_CNMI_GU_VI_US.gdb"
   }
 
   load(args)

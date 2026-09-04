@@ -35,13 +35,12 @@ def get_matching_columns(columns, target_pattern):
 
 # Report results
 def report(products, args):
-  merged_products = reduce(
-    lambda left, right: pandas.merge(left, right, on="ID", how="left"),
-    products,
-  )
+  # Conctenate results
+  merged_products = pandas.concat(products, ignore_index=True)
 
-  # Create diffs
-  # Diff EJSCREEN V2.32 vs Pipeline vs Final
+  # Reorder
+  col = merged_products.pop('src')
+  merged_products.insert(0, 'src', col)
 
   # Export
   merged_products.to_csv(f"pipeline/compare/coc_report_{args.blockgroup}.csv")
@@ -61,7 +60,8 @@ def load(args):
   # Load and filter
   ejscreen = pandas.read_csv(FILE_MAP["ejscreen"], usecols=ejscreen_cols_needed, dtype={"ID":str})
   ejscreen = ejscreen[ejscreen["ID"]==args.blockgroup] # Filter to bg
-  ejscreen.columns = [c+"_V2.32" if c != "ID" else c for c in ejscreen.columns] # For recognition
+  ejscreen["src"] = "EJSCREEN V2.32"
+  #ejscreen.columns = [c+"_V2.32" if c != "ID" else c for c in ejscreen.columns] # For recognition
 
   concatenated = []
   for path in FILE_MAP["concatenated"].values():
@@ -69,23 +69,26 @@ def load(args):
     this_data = this_data[this_data["block_group_geoid"]==args.blockgroup]
     this_data.rename(columns={"block_group_geoid": "ID"}, inplace=True)
     this_data.columns = this_data.columns.str.upper() # For EJSCREEN formatting
-    this_data.columns = [c+"_COMBINED"  if c != "ID" else c for c in this_data.columns] # For recognition
+    #this_data.columns = [c+"_COMBINED"  if c != "ID" else c for c in this_data.columns] # For recognition
     concatenated.append(this_data)
   concatenated_final = reduce(
     lambda left, right: pandas.merge(left, right, on="ID", how="left"),
     concatenated,
   )
+  concatenated_final["src"] = f"{args.version} - COMBINED BG SCORES"
 
   # Update cols_needed = just "raw" scores
   merged_cols = [c for c in ejscreen_cols_needed if "_" not in c]
   merged_cols.extend(["ID"])
   merged = pandas.read_csv(FILE_MAP["merged"], usecols=merged_cols, dtype={"ID":str})
   merged = merged[merged["ID"]==args.blockgroup]
-  merged.columns = [c+f"_{args.version}" if c != "ID" else c for c  in merged.columns] # For recognition
+  #merged.columns = [c+f"_{args.version}" if c != "ID" else c for c  in merged.columns] # For recognition
+  merged["src"] = f"{args.version} - MERGED WITH EJSCREEN V2.32"
 
   pipeline = pandas.read_csv(FILE_MAP["pipeline"], usecols=ejscreen_cols_needed, dtype={"ID":str})
   pipeline = pipeline[pipeline["ID"]==args.blockgroup] # Filter to bg
-  pipeline.columns = [c+f"_{args.pipeline}" if c != "ID" else c for c in pipeline.columns] # For recognition
+  pipeline["src"] = f"EJAM CALCULATIONS FOR {args.pipeline}"
+  #pipeline.columns = [c+f"_{args.pipeline}" if c != "ID" else c for c in pipeline.columns] # For recognition
 
   #final = pandas.read_csv(FILE_MAP["ejscreen"], dtype={"ID":str}) # TBD
 

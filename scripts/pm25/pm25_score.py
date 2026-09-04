@@ -19,7 +19,7 @@ Runtime arguments (current defaults shown):
 		- -s/--state: required two-letter state code (e.g. `WY`) or `all` (case-insensitive) to process the full
 			configured set. Use `--state all` to iterate across all configured states (the code maps this to
 			an internal `None` which `load_state_targets()` interprets as "all").
-		- -v/--version: optional config version to use. Default: `1.2020`.
+		- -v/--version: optional config version to use. Default: `1.2022`.
 		- --dry-run: long-only flag. When present the script validates manifests and prints resolved paths
 			without performing any I/O.
 
@@ -29,13 +29,13 @@ Outputs:
 
 Examples (run from the `scripts` folder):
 		- Dry-run for Wyoming (local):
-			python3 pm25/pm25_score.py --location local --state WY --dry-run
+			python pm25/pm25_score.py --location local --state WY --dry-run
 
 		- Full run for all configured states (local):
-			python3 pm25/pm25_score.py --location local --state all
+			python pm25/pm25_score.py --location local --state all
 
 		- Full run for a specific version (remote):
-			python3 pm25/pm25_score.py --location remote -v 1.2022 --state CA
+			python pm25/pm25_score.py --location remote -v 1.2022 --state CA
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ import scripts.shared.resolve_path as resolve_path
 
 PM25_DIR = Path(__file__).resolve().parent
 DEFAULT_LOG_FILENAME = 'pm25_score.log'
-DEFAULT_VERSION = '1.2020'
+DEFAULT_VERSION = '1.2022'
 TRACT_GEOID_COLUMN = 'tract_geoid'
 ANNUAL_AVERAGE_COLUMN = 'annual_average_concentration'
 FINAL_SCORE_COLUMN = 'pm25_score'

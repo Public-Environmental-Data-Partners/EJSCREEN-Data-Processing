@@ -17,7 +17,7 @@ Runtime arguments:
 	- storage_mode
 		Required. Passed via -l/--location. Either local or remote.
 	- --version / -v
-		Optional. Config version to use (default: 1.2020).
+		Optional. Config version to use (default: 1.2022).
 	- --dry-run
 		Optional. Validate manifest and headers, then exit without processing or writing outputs.
 
@@ -85,8 +85,8 @@ def get_config(argv=None) -> Config:
 	parser.add_argument(
 		'-v', '--version',
 		dest='version',
-		default='1.2020',
-		help='Optional: config version to base processing on (current default: 1.2020)'
+		default='1.2022',
+		help='Optional: config version to base processing on (current default: 1.2022)'
 	)
 	# Long-only dry-run flag (no short alias)
 	parser.add_argument(

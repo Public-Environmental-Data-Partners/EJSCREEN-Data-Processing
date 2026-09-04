@@ -37,13 +37,13 @@ Outputs:
 
 Examples (run from the `scripts` folder):
     - Simple indicator with a default download:
-        python3 shared/fetch_raw.py --indicator pm25 -v 1.2020 -l local
+        python shared/fetch_raw.py --indicator pm25 -v 1.2022 -l local
 
     - Remote fetch for ozone:
-        python3 shared/fetch_raw.py --indicator o3 -l remote
+        python shared/fetch_raw.py --indicator o3 -l remote
 
     - Shared tiger BG download for Vermont (postal code). --state uses two-letter postal codes:
-        python3 shared/fetch_raw.py --indicator shared --download tiger_bg_2020 --state VT -l local
+        python shared/fetch_raw.py --indicator shared --download tiger_bg_2020 --state VT -l local
 """
 
 from __future__ import annotations

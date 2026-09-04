@@ -29,20 +29,20 @@ environment set up correctly.
 will skip the download if the file already exists:
 
    ```bash
-   python shared/fetch_raw.py --indicator o3 -v 1.2020 -l local
+   python shared/fetch_raw.py --indicator o3 -v 1.2022 -l local
    ```
 
 2. `o3_preprocess.py` reads the zipped raw annual ozone file source directly 
 and writes one annual average of the ten highest daily 8-hour maxima per tract:
 
    ```bash
-   python o3/o3_preprocess.py -v 1.2020 -l local
+   python o3/o3_preprocess.py -v 1.2022 -l local
    ```
 
 3. `o3_score.py` expands tract scores to block groups, applies the zero-population null rule, and writes per-state final scores:
 
    ```bash
-   python o3/o3_score.py -v 1.2020 -s WY  -l local 
+   python o3/o3_score.py -v 1.2022 -s WY  -l local 
    # or use  `-s all` to process every configured state
    ```
 

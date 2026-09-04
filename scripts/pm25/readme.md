@@ -30,20 +30,20 @@ environment set up correctly.
 will skip the download if the file already exists:
 
    ```bash
-   python shared/fetch_raw.py --indicator pm25 -v 1.2020 -l local
+   python shared/fetch_raw.py --indicator pm25 -v 1.2022 -l local
    ```
 
 2. `pm25_preprocess.py` reads the compressed source data directly and writes 
 one annual average concentration per tract (yes, tract):
 
    ```bash
-   python pm25/pm25_preprocess.py -v 1.2020 -l local
+   python pm25/pm25_preprocess.py -v 1.2022 -l local
    ```
 
 3. `pm25_score.py` expands tract scores to block groups, applies the zero-population null rule, and writes per-state final scores:
 
    ```bash
-   python pm25/pm25_score.py -v 1.2020 -s WY -l local 
+   python pm25/pm25_score.py -v 1.2022 -s WY -l local 
    # or use  `-s all` to process every configured state
    ```
 

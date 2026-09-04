@@ -165,7 +165,7 @@ def _export_gdb(output, path, layer):
   output = output.round(3)
   output = _data_typer(output)
   schema = gpd.io.file.infer_schema(output)
-  print(schema)
+  #print(schema)
   #schema['properties']['your_int_column'] = 'int32:4'  # or 'int64' based on size requirements
   # Could at least set int to int64, otherwise they're cast to float in export to gdb
 

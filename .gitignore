@@ -18,9 +18,9 @@ __pycache__/
 scripts/traffic/.Rhistory
 .Rhistory
 # Everything within the pipeline trees should be ignored 
-# except .md files we write to document contents for the 
-# GitHub repo.
-pipeline/
+# except .md files we may write/save for documentation purposes.
+pipeline/*
+!pipeline/**/
 !pipeline/**/*.md
 # Local files for testing input and output
 # I don't think we want to commit any of these to the repo

@@ -405,7 +405,7 @@ def load_fsspec_module():
 
 
 def configure_logging() -> str:
-    log_path = SCRIPTS_DIR / DEFAULT_LOG_FILENAME
+    log_path = SHARED_DIR / DEFAULT_LOG_FILENAME
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,

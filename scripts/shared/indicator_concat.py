@@ -8,10 +8,10 @@ PURPOSE:
     from each file and stacks them into a single CSV.
 
 USAGE:
-    python3 scripts/shared/indicator_concat.py --indicator [name] --version [version] --location [local_or_remote]
+    python scripts/shared/indicator_concat.py --indicator [name] --version [version] --location [local_or_remote]
 
 EXAMPLE:
-    python3 scripts/shared/indicator_concat.py --indicator o3 --version 1.2020 --location local
+    python scripts/shared/indicator_concat.py --indicator o3 --version 1.2020 --location local
 
 REQUIREMENTS:
     - pandas
@@ -32,6 +32,9 @@ import argparse
 import pandas as pd
 from pathlib import Path
 
+import scripts.shared.resolve_path as resolve_path
+
+
 def concatenate_csvs(indicator, version, location):
     """
     Finds all 'final_bg_scores_XX.csv' in the target directory and stacks them.
@@ -44,8 +47,12 @@ def concatenate_csvs(indicator, version, location):
     # Let users set the version name in plain terms e.g. 1.2020 then translate to the specific path
     version_name = f"v{version}"
     
-    # Build the path cleanly using pathlib
-    target_dir = Path("pipeline") / indicator / version_name / "score_output"
+    indicator_root = resolve_path.get_indicator_root(indicator, version, location)
+    if location != "local":
+        raise ValueError("indicator_concat.py currently supports only local storage")
+
+    # Resolve the configured root instead of relying on the current working directory.
+    target_dir = Path(indicator_root) / version_name / "score_output"
     
     if not target_dir.exists():
         print(f"Error: Directory {target_dir.absolute()} does not exist.")
@@ -93,8 +100,7 @@ def concatenate_csvs(indicator, version, location):
     
     # Define output path (saving up one level in the version folder)
     output_filename = f"combined_{indicator}.csv" 
-    output_dir = Path("pipeline") / indicator / version_name / "score_output"
-    output_path = output_dir / output_filename
+    output_path = target_dir / output_filename
     
     # Save output
     combined_df.to_csv(output_path, index=False)

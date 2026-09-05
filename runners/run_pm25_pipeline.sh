@@ -100,15 +100,18 @@ announce "PM2.5 pipeline starting (version=$VERSION, state=$STATE, location=$LOC
 echo "Full step output: $OUT_FILE"
 
 run_step "precheck: shared census_block_weights asset" \
-  python3 "$SCRIPT_DIR/verify_census_block_weights.py" --indicator pm25 --version "$VERSION" --location "$LOCATION"
+  python "$SCRIPT_DIR/verify_census_block_weights.py" --indicator pm25 --version "$VERSION" --location "$LOCATION"
 
 run_step "fetch: raw pm25 download" \
-  python3 shared/fetch_raw.py --indicator pm25 -v "$VERSION" -l "$LOCATION"
+  python shared/fetch_raw.py --indicator pm25 -v "$VERSION" -l "$LOCATION"
 
 run_step "preprocess: tract annual averages" \
-  python3 pm25/pm25_preprocess.py -v "$VERSION" -l "$LOCATION"
+  python pm25/pm25_preprocess.py -v "$VERSION" -l "$LOCATION"
 
 run_step "score: block-group expansion (all states)" \
-  python3 pm25/pm25_score.py -v "$VERSION" -s "$STATE" -l "$LOCATION"
+  python pm25/pm25_score.py -v "$VERSION" -s "$STATE" -l "$LOCATION"
+
+run_step "concat: pm25 scores" \
+  python shared/indicator_concat.py --indicator pm25 --version "$VERSION" --location "$LOCATION"
 
 announce "PM2.5 pipeline finished successfully"

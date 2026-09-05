@@ -101,16 +101,19 @@ announce "O3 pipeline starting (version=$VERSION, state=$STATE, location=$LOCATI
 echo "Full step output: $OUT_FILE"
 
 run_step "precheck: shared census_block_weights asset" \
-  python3 "$SCRIPT_DIR/verify_census_block_weights.py" --indicator o3 --version "$VERSION" --location "$LOCATION"
+  python "$SCRIPT_DIR/verify_census_block_weights.py" --indicator o3 --version "$VERSION" --location "$LOCATION"
 
 run_step "fetch: raw o3 download" \
-  python3 shared/fetch_raw.py --indicator o3 -v "$VERSION" -l "$LOCATION"
+  python shared/fetch_raw.py --indicator o3 -v "$VERSION" -l "$LOCATION"
 
 run_step "preprocess: tract annual averages" \
-  python3 o3/o3_preprocess.py -v "$VERSION" -l "$LOCATION"
+  python o3/o3_preprocess.py -v "$VERSION" -l "$LOCATION"
 
 run_step "score: block-group expansion (all states)" \
-  python3 o3/o3_score.py -v "$VERSION" -s "$STATE" -l "$LOCATION"
+  python o3/o3_score.py -v "$VERSION" -s "$STATE" -l "$LOCATION"
+
+run_step "concat: o3 scores" \
+  python shared/indicator_concat.py --indicator o3 --version "$VERSION" --location "$LOCATION"
 
 announce "O3 pipeline finished successfully"
 announce "==============================================="

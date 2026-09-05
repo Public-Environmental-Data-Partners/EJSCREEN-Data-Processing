@@ -19,7 +19,8 @@ scripts/traffic/.Rhistory
 .Rhistory
 # Everything within the pipeline trees should be ignored 
 # except .md files we may write/save for documentation purposes.
-pipeline/*
+# (pipeline/** matches recursively; pipeline/* would only match top-level entries.)
+pipeline/**
 !pipeline/**/
 !pipeline/**/*.md
 # Local files for testing input and output
@@ -27,6 +28,7 @@ pipeline/*
 test_files/
 output/
 test.out
+*.out
 *.csv
 *.zip
 *.png

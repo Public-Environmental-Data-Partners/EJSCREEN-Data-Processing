@@ -12,7 +12,7 @@ MODES:
     - original_final: Compare the EJSCREEN archive directly to the final output from EJAM.
 
 USAGE:
-    python3 compare_ejscreen.py --indicator [indicator_name] --mode [original_merged|merged_final|original_final] --location [local_or_remote] --version [straw_version] --pipeline [pipeline_version]
+    python3 scripts/shared/compare_ejscreen.py --indicator [indicator_name] --mode [original_merged|merged_final|original_final] --location [local_or_remote] --version [straw_version] --pipeline [pipeline_version]
 
 EXAMPLE:
     python3 scripts/shared/compare_ejscreen.py --indicators ozone,pm25 --mode original_merged --location local --version 1.2020 --pipeline 4_2024

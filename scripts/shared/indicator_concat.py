@@ -8,7 +8,7 @@ PURPOSE:
     from each file and stacks them into a single CSV.
 
 USAGE:
-    python3 indicator_concat.py --indicator [name] --version [version] --location [local_or_remote]
+    python3 scripts/shared/indicator_concat.py --indicator [name] --version [version] --location [local_or_remote]
 
 EXAMPLE:
     python3 scripts/shared/indicator_concat.py --indicator o3 --version 1.2020 --location local

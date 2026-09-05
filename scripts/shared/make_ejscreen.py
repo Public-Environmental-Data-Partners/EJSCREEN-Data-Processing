@@ -4,34 +4,35 @@ Make EJSCREEN
 PURPOSE:
     This script runs up to 4 functions to produce 4 sets of files needed for the EJSCREEN web app:
     1. export - geodatabases with spatial representation of the main EJSCREEN CSVs (state and US percentiles)
-    2. thresholds - geodatabase with layers 
-    3. census - 
-    4. lookup -
+    2. thresholds - geodatabase with layers representing, for each block group, the number of indicators at different percentile ranks for different indexes
+    3. census - geodatabase with additional demographics for blockgroup, tract, county, and state levels
+    4. lookup - CSV with summary stats (max, min, mean, std) for each additional Census variable at each geographic level (blockgroup, tract, county, state)
 
 USAGE:
-    python3 indicator_concat.py -- --version [version] --location [local_or_remote]
+    python3 scripts/shared/make_ejscreen.py --version [EJSCREEN vintage] --location [local or remote] --state [USPS abbreviation] --functions [export thresholds census lookup all] --extent [us state both]
 
 EXAMPLE:
-    python3 scripts/shared/make_ejscreen.py
+    python3 scripts/shared/make_ejscreen.py --version 4_2024 --location local --functions all
 
 INPUT FILES:
     pipeline/shared/ejam/ejscreen_us_v{version}.csv
     pipeline/shared/ejam/ejscreen_state_v{version}.csv
     pipeline/shared/ejam/ejscreen_thresholds_state_ejindexes.csv
     pipeline/shared/ejam/ejscreen_thresholds_us_ejindexes.csv
-    pipeline/shared/ejam/ejscreen_thresholds_state_supplementalindexes.csv
-    pipeline/shared/ejam/ejscreen_thresholds_us_supplementalindexes.csv
+    pipeline/shared/ejam/ejscreen_thresholds_state_supplemental.csv
+    pipeline/shared/ejam/ejscreen_thresholds_us_supplemental.csv
     pipeline/shared/ejam/acs_by_state.csv
     pipeline/shared/ejam/acs_by_county.csv
     pipeline/shared/ejam/acs_by_tract.csv
     pipeline/shared/ejam/acs_by_bg.csv
     pipeline/shared/ejscreen/lookup_demog.csv # Archived/original copy of EJSCREEN Census lookup table
     pipeline/shared/ejscreen/ejschema.csv # A rough draft of data types for different variables in final products
+    https://raw.githubusercontent.com/Public-Environmental-Data-Partners/EJAM/refs/heads/main/data-raw/map_headernames.csv # Maps between EJAM, Census, and EJSCREEN names for environmental and socioeconomic variables
 
 OUTPUT FILES:
-    pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}..._US.gdb
-    pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}..._STATE.gdb
-    pipeline/shared/ejscreen/v{version}/EJScreen_Thresholds.gdb
+    pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_US.gdb
+    pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}_BG_with_AS_CNMI_GU_VI_STATE.gdb
+    pipeline/shared/ejscreen/v{version}/EJScreen Thresholds.gdb
     pipeline/shared/ejscreen/v{version}/EJScreen_Census.gdb
     pipeline/shared/ejscreen/v{version}/lookup_demog.csv
 
@@ -48,7 +49,7 @@ import tempfile
 from pathlib import Path
 import caffeine 
 
-FILEMAP = {"export": "ejscreen_{}_v{}.csv", "thresholds": ["ejscreen_threshold_{}_supplemental.csv", "ejscreen_threshold_{}_ejindexes.csv"], "census": ["acs_by_blockgroup.csv", "acs_by_tract.csv", "acs_by_county.csv", "acs_by_state.csv"], "lookup":"ejscreen_{}_pctile_lookup.csv"}
+FILEMAP = {"export": "ejscreen_{}_v{}.csv", "thresholds": ["ejscreen_threshold_{}_supplemental.csv", "ejscreen_threshold_{}_ejindexes.csv"], "census": ["acs_by_blockgroup.csv", "acs_by_tract.csv", "acs_by_county.csv", "acs_by_state.csv"]}
 
 def _read_geodataframe(tiger_zip_path: Path) -> gpd.GeoDataFrame:
   candidates = [str(tiger_zip_path)]

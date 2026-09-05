@@ -1,27 +1,43 @@
 """
-The main EJSCREEN data layers are produced by EJAM as ejscreen_export.csv (and I assume there is a version of this with the state scores). This csv file needs to be converted to a geodatabase file first by joining with the appropriate geometry (i.e. tiger lines).
+Make EJSCREEN
 
-Then there are at least three 'supplemental' data products required for EJSCREEN see https://docs.google.com/spreadsheets/d/1elB32pR9bU17pzKZSFetI_YB4i84D-b7Z0NoE2Zw_FM/edit?gid=21519598#gid=21519598 and Public-Environmental-Data-Partners/EJAM#395
+PURPOSE:
+    This script runs up to 4 functions to produce 4 sets of files needed for the EJSCREEN web app:
+    1. export - geodatabases with spatial representation of the main EJSCREEN CSVs (state and US percentiles)
+    2. thresholds - geodatabase with layers 
+    3. census - 
+    4. lookup -
 
-Four thresholds layers for the threshold map widget in EJSCREEN:
-us_ejindexes: all blockgroups and for each, the percentile rank for each EJIndex PLUS a series of 100 columns P1-P100 that count the number of indexes that "hit" that value. For instance, BG 010010201001 is in the 4th percentile for P_D2_OZONE and none of the other P_D2_indicator percentile ranks are 4. So P4 = 1. Looks like this: https://www.arcgis.com/home/item.html?id=bc1eab48bb554e5b8a42a19390fd98cf&dataTabView=fields&sublayer=2#data
-state_ejindexes: same, but state percentiles
-us_supplemental: same, but national supplemental rather than D2 EJ indexes.
-state_supplemental: same, but state supplemental rather than D2 EJ indexes.
-Each of these is currently represented with geometry (polygon) so would need to be converted from CSV to GBD, though it may pay to test whether the spatial dimension is really necessary.
-Four census layers for the "additional demographics" and maybe the side-by-side maps in EJSCREEN:
-extensive ACS results by block group, tract, county, and state. For example: https://www.arcgis.com/home/item.html?id=138e199d0e0c499587011ccb3f7d0480&dataTabView=fields&sublayer=2#data
-Again, each of these layers is currently represented with geometry (polygon) so would need to be converted from CSV to GBD, though it may pay to test whether the spatial dimension is really necessary.
-A simple lookup for indicator names, see https://services.arcgis.com/EXyRv0dqed53BmG2/ArcGIS/rest/services/EJScreen_Lookup_USBG/FeatureServer/4/query?where=FIELD_NAME+IS+NOT+NULL&objectIds=&resultType=none&outFields=*&returnIdsOnly=false&returnUniqueIdsOnly=false&returnCountOnly=false&returnDistinctValues=false&cacheHint=false&collation=&orderByFields=&groupByFieldsForStatistics=&returnAggIds=false&outStatistics=&having=&resultOffset=&resultRecordCount=5&sqlFormat=none&f=pjson&token=
+USAGE:
+    python3 indicator_concat.py -- --version [version] --location [local_or_remote]
+
+EXAMPLE:
+    python3 scripts/shared/make_ejscreen.py
+
+INPUT FILES:
+    pipeline/shared/ejam/ejscreen_us_v{version}.csv
+    pipeline/shared/ejam/ejscreen_state_v{version}.csv
+    pipeline/shared/ejam/ejscreen_thresholds_state_ejindexes.csv
+    pipeline/shared/ejam/ejscreen_thresholds_us_ejindexes.csv
+    pipeline/shared/ejam/ejscreen_thresholds_state_supplementalindexes.csv
+    pipeline/shared/ejam/ejscreen_thresholds_us_supplementalindexes.csv
+    pipeline/shared/ejam/acs_by_state.csv
+    pipeline/shared/ejam/acs_by_county.csv
+    pipeline/shared/ejam/acs_by_tract.csv
+    pipeline/shared/ejam/acs_by_bg.csv
+    pipeline/shared/ejscreen/lookup_demog.csv # Archived/original copy of EJSCREEN Census lookup table
+    pipeline/shared/ejscreen/ejschema.csv # A rough draft of data types for different variables in final products
+
+OUTPUT FILES:
+    pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}..._US.gdb
+    pipeline/shared/ejscreen/v{version}/EJSCREEN_{version}..._STATE.gdb
+    pipeline/shared/ejscreen/v{version}/EJScreen_Thresholds.gdb
+    pipeline/shared/ejscreen/v{version}/EJScreen_Census.gdb
+    pipeline/shared/ejscreen/v{version}/lookup_demog.csv
+
+AUTHORSHIP:
+    Eric Nost
 """
-
-# Process: MVP, refactor
-# Structure: four separate functions so that each supplemental file can be created separately, or some combination of them (thresholds, export, census, lookup, all). Potentially additional options to specific us vs state contexts (usa, state, both)
-# Versions (v3.2022.3, v4.2024.0)
-# TEST: RI case (FIPS = 44)
-
-# Step 1: EJSCREEN export
-
 import geopandas as gpd
 import pandas
 import argparse

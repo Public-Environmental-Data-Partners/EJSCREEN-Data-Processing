@@ -1,23 +1,23 @@
 """
 Chain of Custody
 PURPOSE:
-    
+    Inspect results for a single blockgroup across v2.32 (original) EJSCREEN and our updated scores (pre- and post- index/percentile calculations in EJAM).
 
 USAGE:
-    python3 chain_of_custody.py  --indicator [name] --blockgroup [blockgroup] --version [version] --pipieline [pipeline] --location [local_or_remote]
+    python3 scripts/shared/chain_of_custody.py  --indicators [name] --blockgroup [blockgroup] --version [version] --pipieline [pipeline] --location [local_or_remote]
 
 EXAMPLE:
-    python3 scripts/shared/chain_of_custody.py --indicator pm25 --blockgroup XXXXXXXXXXXX --version 1.2022 --pipeline 4_2024 --location local
+    python3 scripts/shared/chain_of_custody.py --indicators ozone,pm25,pwdis --blockgroup 410510060021 --version 1.2022 --pipeline 4_2024 --location local
 
 INPUT FILES:
     pipeline/shared/ejscreen/EJSCREEN_2024_BG_with_AS_CNMI_GU_VI.csv # Original archive
-    pipeline/indicator/combined_indicator.csv # Combined blockgroup scores for the indicator
-    pipeline/shared/ejscreen/envirodata_version.csv 
-    pipeline/shared/ejam/ejscreen_us_pipeline
-    pipeline/shared/ejscreen/EJSCREEN_pipeline_BG_with_AS_CNMI_GU_VI_US.gdb # TODO
+    pipeline/indicator/combined_indicator.csv # Combined blockgroup scores for the indicator(s)
+    pipeline/shared/ejscreen/envirodata_version.csv # Merged scores with original archive
+    pipeline/shared/ejam/ejscreen_us_pipeline # Results from EJAM run
+    pipeline/shared/ejscreen/EJSCREEN_pipeline_BG_with_AS_CNMI_GU_VI_US.gdb # EJAM results exported to GDB
 
 OUTPUT FILE:
-    pipeline/shared/ejscreen/bg_envirodata.csv
+    pipeline/shared/compared/coc_results_blockgroup#.csv
 
 AUTHORSHIP:
     Eric Nost

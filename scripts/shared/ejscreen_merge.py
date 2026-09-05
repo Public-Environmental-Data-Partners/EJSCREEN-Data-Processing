@@ -18,7 +18,7 @@ INPUT FILE:
     pipeline/shared/ejscreen/EJSCREEN_2024_BG_with_AS_CNMI_GU_VI.csv
 
 OUTPUT FILE:
-    pipeline/shared/ejscreen/bg_envirodata.csv
+    pipeline/shared/ejscreen/v{version}/envirodata_{version}.csv
 
 AUTHORSHIP:
     Eric Nost and Google Gemini

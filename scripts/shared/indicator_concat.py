@@ -8,21 +8,20 @@ PURPOSE:
     from each file and stacks them into a single CSV.
 
 USAGE:
-    python scripts/shared/indicator_concat.py --indicator [name] --version [version] --location [local_or_remote]
+    python scripts/shared/indicator_concat.py --indicator [name] --version [version] --location [local|remote]
 
 EXAMPLE:
     python scripts/shared/indicator_concat.py --indicator o3 --version 1.2020 --location local
 
 REQUIREMENTS:
-    - pandas
-    - argparse
-    - pathlib
+    Must be run within the project virtual environment (`uv run` or activated `.venv`) to have access to
+    all required Python packages (e.g. pandas) and be runnable from any folder.
 
 NOTE:
     The script forces 'block_group_geoid' to be read as a string to preserve 
     leading zeros, which are essential for standard FIPS/GEOID formatting.
 
-    Currently runs only for local. Also assumes working in the directory root rather than scripts.
+    Currently runs only for local, not remote.
 
 AUTHORSHIP:
     Eric Nost and Google Gemini

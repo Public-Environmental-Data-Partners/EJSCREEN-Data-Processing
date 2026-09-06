@@ -31,6 +31,7 @@ AUTHORSHIP:
 import argparse
 import pandas as pd
 from pathlib import Path
+import sys
 
 import scripts.shared.resolve_path as resolve_path
 
@@ -56,7 +57,7 @@ def concatenate_csvs(indicator, version, location):
     
     if not target_dir.exists():
         print(f"Error: Directory {target_dir.absolute()} does not exist.")
-        return
+        return 1
 
     print(f"Searching in: {target_dir.absolute()}")
     
@@ -93,7 +94,7 @@ def concatenate_csvs(indicator, version, location):
 
     if not df_list:
         print("No valid files found to concatenate.")
-        return
+        return 1
 
     # Stack all dataframes vertically
     combined_df = pd.concat(df_list, axis=0, ignore_index=True)
@@ -105,6 +106,7 @@ def concatenate_csvs(indicator, version, location):
     # Save output
     combined_df.to_csv(output_path, index=False)
     print(f"\nSuccess! Saved {len(combined_df)} rows to: {output_path.absolute()}")
+    return 0
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Concatenate 'final_bg_scores_XX.csv' files from a directory.")
@@ -117,4 +119,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Run the function
-    concatenate_csvs(args.indicator, args.version, args.location)
+    sys.exit(concatenate_csvs(args.indicator, args.version, args.location))

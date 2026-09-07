@@ -1,0 +1,450 @@
+{
+  "AL": {
+    "fips": "01",
+    "postal": "AL",
+    "name": "Alabama",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "AK": {
+    "fips": "02",
+    "postal": "AK",
+    "name": "Alaska",
+    "type": "state",
+    "is_conus": false,
+    "metric_crs": "EPSG:3338"
+  },
+  "AZ": {
+    "fips": "04",
+    "postal": "AZ",
+    "name": "Arizona",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "AR": {
+    "fips": "05",
+    "postal": "AR",
+    "name": "Arkansas",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "CA": {
+    "fips": "06",
+    "postal": "CA",
+    "name": "California",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "CO": {
+    "fips": "08",
+    "postal": "CO",
+    "name": "Colorado",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "CT": {
+    "fips": "09",
+    "postal": "CT",
+    "name": "Connecticut",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "DE": {
+    "fips": "10",
+    "postal": "DE",
+    "name": "Delaware",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "DC": {
+    "fips": "11",
+    "postal": "DC",
+    "name": "District of Columbia",
+    "type": "district",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "FL": {
+    "fips": "12",
+    "postal": "FL",
+    "name": "Florida",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "GA": {
+    "fips": "13",
+    "postal": "GA",
+    "name": "Georgia",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "HI": {
+    "fips": "15",
+    "postal": "HI",
+    "name": "Hawaii",
+    "type": "state",
+    "is_conus": false,
+    "metric_crs": "+proj=aea +lat_1=8 +lat_2=18 +lat_0=3 +lon_0=-157 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs"
+  },
+  "ID": {
+    "fips": "16",
+    "postal": "ID",
+    "name": "Idaho",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "IL": {
+    "fips": "17",
+    "postal": "IL",
+    "name": "Illinois",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "IN": {
+    "fips": "18",
+    "postal": "IN",
+    "name": "Indiana",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "IA": {
+    "fips": "19",
+    "postal": "IA",
+    "name": "Iowa",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "KS": {
+    "fips": "20",
+    "postal": "KS",
+    "name": "Kansas",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "KY": {
+    "fips": "21",
+    "postal": "KY",
+    "name": "Kentucky",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "LA": {
+    "fips": "22",
+    "postal": "LA",
+    "name": "Louisiana",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "ME": {
+    "fips": "23",
+    "postal": "ME",
+    "name": "Maine",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "MD": {
+    "fips": "24",
+    "postal": "MD",
+    "name": "Maryland",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "MA": {
+    "fips": "25",
+    "postal": "MA",
+    "name": "Massachusetts",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "MI": {
+    "fips": "26",
+    "postal": "MI",
+    "name": "Michigan",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "MN": {
+    "fips": "27",
+    "postal": "MN",
+    "name": "Minnesota",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "MS": {
+    "fips": "28",
+    "postal": "MS",
+    "name": "Mississippi",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "MO": {
+    "fips": "29",
+    "postal": "MO",
+    "name": "Missouri",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "MT": {
+    "fips": "30",
+    "postal": "MT",
+    "name": "Montana",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "NE": {
+    "fips": "31",
+    "postal": "NE",
+    "name": "Nebraska",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "NV": {
+    "fips": "32",
+    "postal": "NV",
+    "name": "Nevada",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "NH": {
+    "fips": "33",
+    "postal": "NH",
+    "name": "New Hampshire",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "NJ": {
+    "fips": "34",
+    "postal": "NJ",
+    "name": "New Jersey",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "NM": {
+    "fips": "35",
+    "postal": "NM",
+    "name": "New Mexico",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "NY": {
+    "fips": "36",
+    "postal": "NY",
+    "name": "New York",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "NC": {
+    "fips": "37",
+    "postal": "NC",
+    "name": "North Carolina",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "ND": {
+    "fips": "38",
+    "postal": "ND",
+    "name": "North Dakota",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "OH": {
+    "fips": "39",
+    "postal": "OH",
+    "name": "Ohio",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "OK": {
+    "fips": "40",
+    "postal": "OK",
+    "name": "Oklahoma",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "OR": {
+    "fips": "41",
+    "postal": "OR",
+    "name": "Oregon",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "PA": {
+    "fips": "42",
+    "postal": "PA",
+    "name": "Pennsylvania",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "RI": {
+    "fips": "44",
+    "postal": "RI",
+    "name": "Rhode Island",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "SC": {
+    "fips": "45",
+    "postal": "SC",
+    "name": "South Carolina",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "SD": {
+    "fips": "46",
+    "postal": "SD",
+    "name": "South Dakota",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "TN": {
+    "fips": "47",
+    "postal": "TN",
+    "name": "Tennessee",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "TX": {
+    "fips": "48",
+    "postal": "TX",
+    "name": "Texas",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "UT": {
+    "fips": "49",
+    "postal": "UT",
+    "name": "Utah",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "VT": {
+    "fips": "50",
+    "postal": "VT",
+    "name": "Vermont",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "VA": {
+    "fips": "51",
+    "postal": "VA",
+    "name": "Virginia",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "WA": {
+    "fips": "53",
+    "postal": "WA",
+    "name": "Washington",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "WV": {
+    "fips": "54",
+    "postal": "WV",
+    "name": "West Virginia",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "WI": {
+    "fips": "55",
+    "postal": "WI",
+    "name": "Wisconsin",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "WY": {
+    "fips": "56",
+    "postal": "WY",
+    "name": "Wyoming",
+    "type": "state",
+    "is_conus": true,
+    "metric_crs": "EPSG:5070"
+  },
+  "PR": {
+    "fips": "72",
+    "postal": "PR",
+    "name": "Puerto Rico",
+    "type": "territory",
+    "is_conus": false,
+    "metric_crs": "+proj=aea +lat_1=8 +lat_2=18 +lat_0=3 +lon_0=-66 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs"
+  },
+  "AS": {
+    "fips": "60",
+    "postal": "AS",
+    "name": "American Samoa",
+    "metric_crs": "EPSG:32702",
+    "type": "territory",
+    "is_conus": false
+  },
+  "GU": {
+    "fips": "66",
+    "postal": "GU",
+    "name": "Guam",
+    "metric_crs": "+proj=aea +lat_1=8 +lat_2=18 +lat_0=3 +lon_0=145 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs",
+    "type": "territory",
+    "is_conus": false
+  },
+  "MP": {
+    "fips": "69",
+    "postal": "MP",
+    "name": "Commonwealth of the Northern Mariana Islands",
+    "metric_crs": "+proj=aea +lat_1=8 +lat_2=18 +lat_0=3 +lon_0=145 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs",
+    "type": "territory",
+    "is_conus": false
+  },
+  "VI": {
+    "fips": "78",
+    "postal": "VI",
+    "name": "U.S. Virgin Islands",
+    "metric_crs": "+proj=aea +lat_1=8 +lat_2=18 +lat_0=3 +lon_0=-66 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs",
+    "type": "territory",
+    "is_conus": false
+  }
+}

@@ -176,13 +176,12 @@ def finite_summary(
 
 def main() -> int:
     args = parse_args()
-
     DEFAULT_VERSION = 1
     DEFAULT_YEAR=2021
 
     flowline_path = (
-        Path("../pipeline/wastewater")
-        / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
+        Path("pipeline/wastewater")
+        / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}" # Use flowlines originally downloaded to 2021 version. They are same for 2022. In future, they should be downloaded to a shared rather than version specific place
         / "preprocessed_input"
         / "vpu"
         / f"nhdplus_vpu{args.vpu}_flowline_vaa.parquet"
@@ -190,8 +189,8 @@ def main() -> int:
     
     if args.microdata_path is None:
         microdata_path = (
-            Path("../pipeline/wastewater")
-            / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
+            Path("pipeline/wastewater")
+            / f"v{DEFAULT_VERSION}.{args.year}"
             / "preprocessed_input"
             / f"water_microdata_{args.year}_by_comid.parquet"
         )
@@ -200,8 +199,8 @@ def main() -> int:
 
     if args.output_dir is None:
         output_directory = (
-            Path("../pipeline/wastewater")
-            / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
+            Path("pipeline/wastewater")
+            / f"v{DEFAULT_VERSION}.{args.year}"
             / "preprocessed_input"
             / "modeled_flowlines"
         )

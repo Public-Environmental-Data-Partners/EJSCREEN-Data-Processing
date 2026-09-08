@@ -25,11 +25,9 @@ def main():
   p = Path(f"../pipeline/{args.indicator}/v{args.version}/score_output/combined_{args.indicator}.csv") # Assumes scripts directory active
 
   df = pd.read_csv(p, dtype={"block_group_geoid": str})
-  print(df.head())
 
   # For block groups, we should have 12 digits
   df["block_group_geoid"] = df["block_group_geoid"].astype(str).str.zfill(12)
-  print(df.head())
 
   df.to_csv(p, index=False) # overwrite existing file
 

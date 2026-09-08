@@ -45,6 +45,7 @@ import pandas as pd
 from nhdplus_config import SUPPORTED_VPUS
 
 DEFAULT_STATE = "RI"
+DEFAULT_VERSION = 1
 DEFAULT_YEAR = 2021
 DEFAULT_SEARCH_DISTANCE_METERS = 10_000.0
 DEFAULT_MINIMUM_DISTANCE_KM = 0.1
@@ -66,23 +67,13 @@ CENSUS_BLOCK_REQUIRED_COLUMNS = [
     "fraction_of_total",
 ]
 
-TARGETED_BLOCKS_FILENAME = "targeted_blocks.csv"
-BLOCK_FLOWLINE_DISTANCES_FILENAME = "block_flowline_distances.csv"
-FINAL_BG_SCORES_FILENAME = "final_bg_scores.csv"
-QA_FILENAME = "wastewater_proximity_qa.json"
+TARGETED_BLOCKS_FILENAME = "targeted_blocks_{}.csv"
+BLOCK_FLOWLINE_DISTANCES_FILENAME = "block_flowline_distances_{}.csv"
+FINAL_BG_SCORES_FILENAME = "final_bg_scores_{}.csv"
+QA_FILENAME = "wastewater_proximity_qa_{}.json"
 
 WASTEWATER_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = WASTEWATER_DIR.parent
-
-# TODO: Move to config/arguments
-DEFAULT_VERSION = 1
-DEFAULT_YEAR = 2021
-MODELED_FLOWLINES_DIR = (
-    Path("../pipeline/wastewater")
-    / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
-    / "preprocessed_input"
-    / "modeled_flowlines"
-)
 
 FINAL_SCORE_COLUMN = "wastewater_score"
 
@@ -245,7 +236,10 @@ def get_modeled_flowline_path(
         modeled_flowlines_path = args.flowlines.expanduser().resolve()
     else:
         modeled_flowlines_path = (
-            MODELED_FLOWLINES_DIR
+            Path("../pipeline/wastewater")
+            / f"v{DEFAULT_VERSION}.{args.year}"
+            / "preprocessed_input"
+            / "modeled_flowlines"
             / f"wastewater_flowlines_vpu{args.vpu}_{args.year}.parquet"
         ).resolve()
 
@@ -289,7 +283,7 @@ def get_output_directory(
 
     return (
         Path("../pipeline/wastewater")
-        / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
+        / f"v{DEFAULT_VERSION}.{args.year}"
         / "score_output"
         / args.state
     )
@@ -321,6 +315,7 @@ def read_modeled_flowlines(
 
 def read_census_blocks(
     path: Path,
+    state: str
 ) -> gpd.GeoDataFrame:
     """Read Census block weights and convert to a GeoDataFrame."""
 
@@ -332,8 +327,12 @@ def read_census_blocks(
         dtype={
             "GEOID20": str,
             "block_group_geoid": str,
-        },
+        }
     )
+
+    # Filter to state here
+    if state:
+        blocks = blocks[blocks["state_abb"]==state]
 
     require_columns(
         blocks,
@@ -699,6 +698,7 @@ def write_outputs(
     block_flowline_scores: pd.DataFrame,
     block_scores: pd.DataFrame,
     block_group_scores: pd.DataFrame,
+    state: str
 ) -> None:
     """
     Write all wastewater proximity outputs.
@@ -706,22 +706,22 @@ def write_outputs(
 
     targeted_path = (
         output_directory
-        / TARGETED_BLOCKS_FILENAME
+        / TARGETED_BLOCKS_FILENAME.format(state)
     )
 
     distances_path = (
         output_directory
-        / BLOCK_FLOWLINE_DISTANCES_FILENAME
+        / BLOCK_FLOWLINE_DISTANCES_FILENAME.format(state)
     )
 
     final_scores_path = (
         output_directory
-        / FINAL_BG_SCORES_FILENAME
+        / FINAL_BG_SCORES_FILENAME.format(state)
     )
 
     qa_path = (
         output_directory
-        / QA_FILENAME
+        / QA_FILENAME.format(state)
     )
 
     targeted_blocks.to_csv(
@@ -792,10 +792,10 @@ def main() -> int:
     output_directory = get_output_directory(args)
 
     output_paths = [
-        output_directory / TARGETED_BLOCKS_FILENAME,
-        output_directory / BLOCK_FLOWLINE_DISTANCES_FILENAME,
-        output_directory / FINAL_BG_SCORES_FILENAME,
-        output_directory / QA_FILENAME,
+        output_directory / TARGETED_BLOCKS_FILENAME.format(args.state),
+        output_directory / BLOCK_FLOWLINE_DISTANCES_FILENAME.format(args.state),
+        output_directory / FINAL_BG_SCORES_FILENAME.format(args.state),
+        output_directory / QA_FILENAME.format(args.state),
     ]
 
     existing_outputs = [
@@ -853,7 +853,7 @@ def main() -> int:
     )
 
     blocks = read_census_blocks(
-        census_block_path
+        census_block_path, args.state
     )
 
     logging.info(
@@ -939,6 +939,7 @@ def main() -> int:
         block_flowline_scores=block_flowline_scores,
         block_scores=block_scores,
         block_group_scores=block_group_scores,
+        state=args.state
     )
 
     return 0

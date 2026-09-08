@@ -12,10 +12,10 @@ MODES:
     - original_final: Compare the EJSCREEN archive directly to the final output from EJAM.
 
 USAGE:
-    python3 scripts/shared/compare_ejscreen.py --indicator [indicator_name] --mode [original_merged|merged_final|original_final] --location [local_or_remote] --version [straw_version] --pipeline [pipeline_version]
+    python3 scripts/shared/compare_ejscreen.py --indicator [indicator_name] --mode [original_merged|merged_final|original_final] --location [local_or_remote] --version [straw_version] --pipeline [pipeline_version] --export [boolean]
 
 EXAMPLE:
-    python3 scripts/shared/compare_ejscreen.py --indicators ozone,pm25 --mode original_merged --location local --version 1.2020 --pipeline 4_2024
+    python3 scripts/shared/compare_ejscreen.py --indicators ozone,pm25 --mode original_merged --location local --version 1.2020 --pipeline 4_2024 --export true
 
 AUTHORSHIP:
     Eric Nost and Google Gemini
@@ -40,7 +40,7 @@ def get_case_insensitive_col(columns, target):
             return c
     return None
 
-def run_audit(indicators, mode):
+def run_audit(indicators, mode, export):
     # 1. Determine which files to compare
     if "_" not in mode:
         print("Error: Mode must be in format 'source_target' (e.g., original_merged)")
@@ -111,7 +111,12 @@ def run_audit(indicators, mode):
                 diff = v_b - v_a
                 pct_diff = ((v_b - v_a) / v_a) * 100
                 
-                
+                # Optional export for further inspection
+                if export:
+                    merged["raw_diff"] = pd.to_numeric(merged[left_col], errors='coerce') - pd.to_numeric(merged[right_col], errors='coerce') #diff
+                    merged["pct_diff"] = pct_diff
+                    merged.sort_values(by="pct_diff", ascending=False).to_csv(f"pipeline/compare/compare_ejscreen_{mode}_{indicator}.csv")
+
                 count_changed = diff[diff.fillna(0) != 0].shape[0]
                 mean_pct_diff = pct_diff.replace([np.inf, -np.inf], np.nan).mean() # Ignore inf values (0 -> >0 change)
                 mean_val = diff.mean()
@@ -137,6 +142,7 @@ if __name__ == "__main__":
                         default="",
                         help="The *EJSCREEN* version e.g. 4_2024")
     parser.add_argument("-l", "--location", help="Local or remote storage")
+    parser.add_argument("-e", "--export", default=False, type=bool, help="Optional export of results for further inspection")
 
     args = parser.parse_args()
     if args.indicators:
@@ -149,4 +155,4 @@ if __name__ == "__main__":
         "final": f"pipeline/shared/ejam/ejscreen_us_v{args.pipeline}.csv"
     }
 
-    run_audit(args.indicators, args.mode)
+    run_audit(args.indicators, args.mode, args.export)

@@ -21,18 +21,46 @@ NOTE:
     The script forces 'block_group_geoid' to be read as a string to preserve 
     leading zeros, which are essential for standard FIPS/GEOID formatting.
 
-    Currently runs only for local, not remote.
+    Supports both local and remote S3 storage through fsspec.
 
 AUTHORSHIP:
     Eric Nost and Google Gemini
+    Updated for remote IO by Anne Gunn and GitHub CoPilot agents
 """
 
 import argparse
+import importlib
 import pandas as pd
 from pathlib import Path
 import sys
 
 import scripts.shared.resolve_path as resolve_path
+
+
+def load_fsspec_module():
+    return importlib.import_module("fsspec")
+
+
+def initialize_runtime_dependencies(location):
+    if location != "remote":
+        return
+    importlib.import_module("s3fs")
+    dotenv = importlib.import_module("dotenv")
+    dotenv.load_dotenv()
+
+
+def is_s3_uri(path):
+    return isinstance(path, str) and path.lower().startswith("s3://")
+
+
+def join_root_and_relative_path(root_path, relative_path):
+    if is_s3_uri(root_path):
+        return root_path.rstrip("/") + "/" + relative_path.lstrip("/")
+    return str(Path(root_path) / Path(relative_path))
+
+
+def get_file_name(path):
+    return path.rstrip("/").rsplit("/", 1)[-1]
 
 
 def concatenate_csvs(indicator, version, location):
@@ -47,28 +75,39 @@ def concatenate_csvs(indicator, version, location):
     # Let users set the version name in plain terms e.g. 1.2020 then translate to the specific path
     version_name = f"v{version}"
     
+    initialize_runtime_dependencies(location)
     indicator_root = resolve_path.get_indicator_root(indicator, version, location)
-    if location != "local":
-        raise ValueError("indicator_concat.py currently supports only local storage")
 
     # Resolve the configured root instead of relying on the current working directory.
-    target_dir = Path(indicator_root) / version_name / "score_output"
+    target_dir = join_root_and_relative_path(
+        indicator_root,
+        f"{version_name}/score_output",
+    )
+    target_pattern = join_root_and_relative_path(
+        target_dir,
+        "final_bg_scores_*.csv",
+    )
     
-    if not target_dir.exists():
-        print(f"Error: Directory {target_dir.absolute()} does not exist.")
+    if not is_s3_uri(target_dir) and not Path(target_dir).exists():
+        print(f"Error: Directory {Path(target_dir).absolute()} does not exist.")
         return 1
 
-    print(f"Searching in: {target_dir.absolute()}")
+    display_target_dir = target_dir if is_s3_uri(target_dir) else str(Path(target_dir).absolute())
+    print(f"Searching in: {display_target_dir}")
     
-    # Iterate through the files matching the pattern in the directory
-    for file_path in target_dir.glob("final_bg_scores_*.csv"):
+    fsspec = load_fsspec_module()
+    # fsspec expands the pattern for both local and remote filesystems.
+    file_count = 0
+    for file_handle in fsspec.open_files(target_pattern, mode="rb"):
+        file_name = get_file_name(file_handle.path)
         try:
-            # Force GEOID to string to preserve leading zeros
-            df = pd.read_csv(file_path, dtype={'block_group_geoid': str})
+            with file_handle as input_stream:
+                # Force GEOID to string to preserve leading zeros
+                df = pd.read_csv(input_stream, dtype={'block_group_geoid': str})
             
             # Check if the requested indicator column actually exists
             if indicator_name not in df.columns:
-                print(f"Warning: Column '{indicator_name}' not found in {file_path.name}. Skipping.")
+                print(f"Warning: Column '{indicator_name}' not found in {file_name}. Skipping.")
                 continue
             
             # Keep only the two relevant columns
@@ -86,25 +125,36 @@ def concatenate_csvs(indicator, version, location):
                 df.rename(columns={"wastewater": "pwdis"}, inplace=True)
 
             df_list.append(df)
-            print(f"Loaded: {file_path.name}")
+            file_count += 1
+            print(f"Loaded: {file_name}")
             
         except Exception as e:
-            print(f"Error reading {file_path.name}: {e}")
+            print(f"Error reading {file_name}: {e}")
 
-    if not df_list:
+    if df_list:
+            print(f"Total files loaded: {file_count}")
+    else:
         print("No valid files found to concatenate.")
         return 1
+
 
     # Stack all dataframes vertically
     combined_df = pd.concat(df_list, axis=0, ignore_index=True)
     
     # Define output path (saving up one level in the version folder)
     output_filename = f"combined_{indicator}.csv" 
-    output_path = target_dir / output_filename
+    output_path = join_root_and_relative_path(target_dir, output_filename)
     
-    # Save output
-    combined_df.to_csv(output_path, index=False)
-    print(f"\nSuccess! Saved {len(combined_df)} rows to: {output_path.absolute()}")
+    # fsspec does not create local parent directories automatically.
+    if not is_s3_uri(output_path):
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+    # Use the same output stream handling for local and remote destinations.
+    with fsspec.open(output_path, "w", encoding="utf-8", newline="") as output_stream:
+        combined_df.to_csv(output_stream, index=False)
+
+    display_output_path = output_path if is_s3_uri(output_path) else str(Path(output_path).absolute())
+    print(f"\nSuccess! Saved {len(combined_df)} rows to: {display_output_path}")
     return 0
 
 if __name__ == "__main__":

@@ -1,0 +1,128 @@
+{
+  "local_root_path": "pipeline/o3/",
+  "remote_root_path": "s3://pedp-data-preserved/ejscreen-data-processing/pipeline/o3/",
+  "download_settings": {
+    "request_timeout_seconds": 120,
+    "chunk_size_bytes": 1048576
+  },
+  "versions": {
+    "1.2022": {
+      "required_shared_assets": {
+        "census_block_weights": "1.0"
+      },
+      "notes": "Raw data is updated to the 2022 version data",
+      "stages": {
+        "fetch": {
+          "outputs": {
+            "raw_o3": {
+              "type": "download",
+              "relative_path": "v{version}/downloads/2022/2022_ozone_daily_8hour_maximum.txt.gz",
+              "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2022_ozone_daily_8hour_maximum.txt.gz",
+              "notes": "Check for updates at: https://www.epa.gov/hesc/rsig-related-downloadable-data-files?#output"
+            }
+          }
+        },
+        "preprocess": {
+          "inputs": {
+            "primary_o3": {
+              "type": "indicator_download",
+              "key": "raw_o3"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v{version}/preprocessed_input/"
+            },
+            "main_tract_averages": {
+              "type": "file",
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
+            }
+          }
+        },
+        "score": {
+          "inputs": {
+            "preprocessed_tracts": {
+              "type": "file",
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
+            },
+            "weights": {
+              "type": "shared_asset",
+              "key": "census_block_weights",
+              "category": "preprocessed_input"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v{version}/score_output/"
+            },
+            "indicator_output_template": {
+              "type": "template",
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
+            }
+          }
+        }
+      }
+    },
+    "1.2020": {
+      "required_shared_assets": {
+        "census_block_weights": "1.0"
+      },
+      "notes": "This is the first version where the scoring stage uses EmmaLi's new-improved census block weight file that includes the acs_2022_bg_pop column to use for identifying zero-population block groups.",
+      "stages": {
+        "fetch": {
+          "outputs": {
+            "raw_o3": {
+              "type": "download",
+              "relative_path": "v{version}/downloads/2020/2020_ozone_daily_8hour_maximum.txt.gz",
+              "source_url": "https://ofmpub.epa.gov/rsig/rsigserver?data/FAQSD/outputs/2020_ozone_daily_8hour_maximum.txt.gz",
+              "notes": "Check for updates at: https://www.epa.gov/hesc/rsig-related-downloadable-data-files?#output"
+            }
+          }
+        },
+        "preprocess": {
+          "inputs": {
+            "primary_o3": {
+              "type": "indicator_download",
+              "key": "raw_o3"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v{version}/preprocessed_input/"
+            },
+            "main_tract_averages": {
+              "type": "file",
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
+            }
+          }
+        },
+        "score": {
+          "inputs": {
+            "preprocessed_tracts": {
+              "type": "file",
+              "relative_path": "v{version}/preprocessed_input/o3_tract_annual_average.csv"
+            },
+            "weights": {
+              "type": "shared_asset",
+              "key": "census_block_weights",
+              "category": "preprocessed_input"
+            }
+          },
+          "outputs": {
+            "output_directory": {
+              "type": "directory",
+              "relative_path": "v{version}/score_output/"
+            },
+            "indicator_output_template": {
+              "type": "template",
+              "relative_path": "v{version}/score_output/final_bg_scores_{postal}.csv"
+            }
+          }
+        }
+      }
+    }
+  }
+}

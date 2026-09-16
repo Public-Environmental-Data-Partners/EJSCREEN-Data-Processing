@@ -74,6 +74,10 @@ library(reticulate)
 options(tigris_use_cache = TRUE)
 options(scipen = 9999)
 
+# Point reticulate to the project's virtual environment
+use_virtualenv("./.venv", required = TRUE)
+reticulate::py_run_string("import sys; sys.path.insert(0, './scripts')")
+
 ###############################################################################
 # constants 
 ###############################################################################
@@ -101,7 +105,8 @@ shared_path <- "./scripts/shared"
 # load it in 
 py_build_manifest <- NULL
 try({
-  py_build_manifest <- import_from_path("build_manifest", path = shared_path)
+  # py_build_manifest <- import_from_path("build_manifest", path = shared_path)
+  py_build_manifest <- import("shared.build_manifest")
 }, silent = TRUE)
 
 if (is.null(py_build_manifest)) {

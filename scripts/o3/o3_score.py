@@ -68,6 +68,9 @@ FINAL_SCORE_COLUMN = 'o3_score'
 # the 2020 block_group_geoid values, not the block_group_geoid_2022 values
 # (which are only different for CT anyway). 
 block_group_geoid_col = 'block_group_geoid'
+# Output rows must carry this 2022 geoid value instead of the 2020 block_group_geoid value,
+# under the same output header name (block_group_geoid).
+block_group_geoid_2022_col = 'block_group_geoid_2022'
 # But, from version 1.0 onward, the population column that we use
 # for assigning nulls to zero-population block groups is the ACS 2022 population column.
 block_group_pop_col = 'acs_2022_bg_pop'
@@ -75,6 +78,7 @@ state_abb_col = 'state_abb'
 
 # Canonical column names used downstream after normalization
 canonical_block_group_geoid = 'block_group_geoid'
+canonical_block_group_geoid_2022 = 'block_group_geoid_2022'
 canonical_block_group_pop = 'block_group_pop'
 O3_STORAGE_MODES = ('local', 'remote')
 
@@ -343,9 +347,14 @@ def prepare_block_group_population(df: pd.DataFrame) -> pd.DataFrame:
 	`state_abb` where present). Returns a DataFrame with one row per block
 	group and a derived `tract_geoid` column.
 	"""
-	require_columns(df, (canonical_block_group_geoid, canonical_block_group_pop), 'Census block weights CSV')
-	prepared = df[[canonical_block_group_geoid, canonical_block_group_pop]].copy()
+	require_columns(
+		df,
+		(canonical_block_group_geoid, canonical_block_group_geoid_2022, canonical_block_group_pop),
+		'Census block weights CSV',
+	)
+	prepared = df[[canonical_block_group_geoid, canonical_block_group_geoid_2022, canonical_block_group_pop]].copy()
 	prepared[canonical_block_group_geoid] = prepared[canonical_block_group_geoid].astype('string').str.strip()
+	prepared[canonical_block_group_geoid_2022] = prepared[canonical_block_group_geoid_2022].astype('string').str.strip()
 
 	# Drop rows with missing or placeholder GEOIDs (e.g., NA) before validation
 	geoid_upper = prepared[canonical_block_group_geoid].fillna('').str.upper()
@@ -397,7 +406,9 @@ def build_final_scores(tract_scores: pd.DataFrame, block_group_population: pd.Da
 
 	merged[FINAL_SCORE_COLUMN] = merged[ANNUAL_AVERAGE_COLUMN].astype('Float64')
 	merged.loc[~positive_population_mask, FINAL_SCORE_COLUMN] = pd.NA
-	return merged[[canonical_block_group_geoid, FINAL_SCORE_COLUMN]].copy()
+	# Output header stays block_group_geoid, but the values must be the 2022 GEOIDs.
+	output = merged[[canonical_block_group_geoid_2022, FINAL_SCORE_COLUMN]].copy()
+	return output.rename(columns={canonical_block_group_geoid_2022: canonical_block_group_geoid})
 
 
 def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
@@ -466,8 +477,8 @@ def process_state(
 		#bg_geoid_col = 'block_group_geoid'
 		bg_pop_col = 'block_group_pop'
 
-	usecols = [state_abb_col, bg_geoid_col, bg_pop_col]
-	dtypes = {bg_geoid_col: 'string', state_abb_col: 'string'}
+	usecols = [state_abb_col, bg_geoid_col, block_group_geoid_2022_col, bg_pop_col]
+	dtypes = {bg_geoid_col: 'string', block_group_geoid_2022_col: 'string', state_abb_col: 'string'}
 	if cached_block_weights_df is not None:
 		block_weights_df = cached_block_weights_df
 	else:
@@ -478,7 +489,7 @@ def process_state(
 		)
 
 	# Require required columns and filter robustly by state postal (case-insensitive)
-	require_columns(block_weights_df, (state_abb_col, bg_geoid_col, bg_pop_col), 'Census block weights CSV')
+	require_columns(block_weights_df, (state_abb_col, bg_geoid_col, block_group_geoid_2022_col, bg_pop_col), 'Census block weights CSV')
 	state_block_weights = block_weights_df.loc[block_weights_df[state_abb_col].astype(str).str.upper() == state_config.postal]
 	if state_block_weights.empty:
 		raise RuntimeError(
@@ -486,7 +497,11 @@ def process_state(
 		)
 
 	# Normalize column names to canonical names used downstream
-	state_block_weights = state_block_weights.rename(columns={bg_geoid_col: canonical_block_group_geoid, bg_pop_col: canonical_block_group_pop})
+	state_block_weights = state_block_weights.rename(columns={
+		bg_geoid_col: canonical_block_group_geoid,
+		block_group_geoid_2022_col: canonical_block_group_geoid_2022,
+		bg_pop_col: canonical_block_group_pop,
+	})
 
 	# Prepare block-group population (single validator for all versions)
 	block_group_population = prepare_block_group_population(state_block_weights)
@@ -572,10 +587,10 @@ def main(argv=None) -> int:
 	shared_version = resolve_path.get_dependency_version('pm25', cfg.version, 'census_block_weights')
 	shared_root = resolve_path.get_shared_root('census_block_weights', shared_version, cfg.storage_mode)
 	census_block_weights_path = join_root_and_relative_path(shared_root, weights_entry['relative'])
-	usecols = [state_abb_col, block_group_geoid_col, block_group_pop_col]
-	dtypes = {block_group_geoid_col: 'string', state_abb_col: 'string'}
+	usecols = [state_abb_col, block_group_geoid_col, block_group_geoid_2022_col, block_group_pop_col]
+	dtypes = {block_group_geoid_col: 'string', block_group_geoid_2022_col: 'string', state_abb_col: 'string'}
 	cached_block_weights_df = read_csv_s3_or_local(census_block_weights_path, usecols=usecols, dtype=dtypes)
-	require_columns(cached_block_weights_df, (state_abb_col, block_group_geoid_col, block_group_pop_col), 'Census block weights CSV')
+	require_columns(cached_block_weights_df, (state_abb_col, block_group_geoid_col, block_group_geoid_2022_col, block_group_pop_col), 'Census block weights CSV')
 	for state_config in state_targets:
 		# pass manifest into process_state via resolve_paths to avoid duplicate lookups
 		process_state(cfg, state_config, prepared_tract_scores, manifest, cached_block_weights_df=cached_block_weights_df)

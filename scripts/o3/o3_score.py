@@ -69,7 +69,8 @@ FINAL_SCORE_COLUMN = 'o3_score'
 # (which are only different for CT anyway). 
 block_group_geoid_col = 'block_group_geoid'
 # Output rows must carry this 2022 geoid value instead of the 2020 block_group_geoid value,
-# under the same output header name (block_group_geoid).
+# under the same output header name (block_group_geoid). Scoring/joins stay keyed on the
+# 2020 geoid; this column is only used to relabel the output right before writing.
 block_group_geoid_2022_col = 'block_group_geoid_2022'
 # But, from version 1.0 onward, the population column that we use
 # for assigning nulls to zero-population block groups is the ACS 2022 population column.
@@ -347,14 +348,9 @@ def prepare_block_group_population(df: pd.DataFrame) -> pd.DataFrame:
 	`state_abb` where present). Returns a DataFrame with one row per block
 	group and a derived `tract_geoid` column.
 	"""
-	require_columns(
-		df,
-		(canonical_block_group_geoid, canonical_block_group_geoid_2022, canonical_block_group_pop),
-		'Census block weights CSV',
-	)
-	prepared = df[[canonical_block_group_geoid, canonical_block_group_geoid_2022, canonical_block_group_pop]].copy()
+	require_columns(df, (canonical_block_group_geoid, canonical_block_group_pop), 'Census block weights CSV')
+	prepared = df[[canonical_block_group_geoid, canonical_block_group_pop]].copy()
 	prepared[canonical_block_group_geoid] = prepared[canonical_block_group_geoid].astype('string').str.strip()
-	prepared[canonical_block_group_geoid_2022] = prepared[canonical_block_group_geoid_2022].astype('string').str.strip()
 
 	# Drop rows with missing or placeholder GEOIDs (e.g., NA) before validation
 	geoid_upper = prepared[canonical_block_group_geoid].fillna('').str.upper()
@@ -406,9 +402,30 @@ def build_final_scores(tract_scores: pd.DataFrame, block_group_population: pd.Da
 
 	merged[FINAL_SCORE_COLUMN] = merged[ANNUAL_AVERAGE_COLUMN].astype('Float64')
 	merged.loc[~positive_population_mask, FINAL_SCORE_COLUMN] = pd.NA
-	# Output header stays block_group_geoid, but the values must be the 2022 GEOIDs.
-	output = merged[[canonical_block_group_geoid_2022, FINAL_SCORE_COLUMN]].copy()
-	return output.rename(columns={canonical_block_group_geoid_2022: canonical_block_group_geoid})
+	return merged[[canonical_block_group_geoid, FINAL_SCORE_COLUMN]].copy()
+
+
+def relabel_output_geoid_to_2022(final_scores: pd.DataFrame, state_block_weights: pd.DataFrame) -> pd.DataFrame:
+	"""Swap the output block_group_geoid values for their 2022 equivalents.
+
+	Scoring stays keyed on the 2020 GEOID throughout; this only relabels the
+	output column, immediately before writing, using the 1:1 2020->2022
+	mapping carried in the census block weights input.
+	"""
+	geoid_lookup = state_block_weights[[canonical_block_group_geoid, canonical_block_group_geoid_2022]].drop_duplicates()
+	relabeled = final_scores.merge(geoid_lookup, on=canonical_block_group_geoid, how='left')
+	if len(relabeled) != len(final_scores):
+		raise RuntimeError('2022 GEOID lookup is not one-to-one with the 2020 block_group_geoid values.')
+	missing_2022_mask = relabeled[canonical_block_group_geoid_2022].isna()
+	unscored_missing_mask = missing_2022_mask & relabeled[FINAL_SCORE_COLUMN].notna()
+	if unscored_missing_mask.any():
+		missing_samples = relabeled.loc[unscored_missing_mask, canonical_block_group_geoid].astype(str).head(5).tolist()
+		raise RuntimeError(f'Missing 2022 GEOID mapping for scored block groups. Sample block groups: {missing_samples}')
+	# A handful of zero-population, water-only tracts have no 2022 GEOID; since those rows
+	# already carry a null score, keep the original 2020 GEOID for them instead of failing.
+	relabeled[canonical_block_group_geoid_2022] = relabeled[canonical_block_group_geoid_2022].fillna(relabeled[canonical_block_group_geoid])
+	relabeled = relabeled.drop(columns=[canonical_block_group_geoid]).rename(columns={canonical_block_group_geoid_2022: canonical_block_group_geoid})
+	return relabeled[[canonical_block_group_geoid, FINAL_SCORE_COLUMN]]
 
 
 def log_resolved_paths(paths: ResolvedPaths, cfg: Config) -> None:
@@ -507,6 +524,7 @@ def process_state(
 	block_group_population = prepare_block_group_population(state_block_weights)
 
 	final_scores = build_final_scores(tract_scores, block_group_population)
+	final_scores = relabel_output_geoid_to_2022(final_scores, state_block_weights)
 	zero_population_count = int(block_group_population[canonical_block_group_pop].eq(0).sum())
 	logging.info(
 		'Writing final Ozone scores to %s (rows=%d, zero_population_groups=%d)',

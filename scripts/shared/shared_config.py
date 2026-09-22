@@ -34,6 +34,9 @@ REQUIRED_CONFIG_FIELDS = (
     'downloads_subtree_name',
     'preprocessed_input_subtree_name',
     'tiger_bg_relative_path_template',
+    'tiger_tract_relative_path_template',
+    'tiger_county_relative_path_template',
+    'tiger_state_relative_path_template',
     'downloads',
 )
 
@@ -45,6 +48,9 @@ class SharedConfig:
     downloads_subtree_name: str
     preprocessed_input_subtree_name: str
     tiger_bg_relative_path_template: str
+    tiger_tract_relative_path_template: str
+    tiger_county_relative_path_template: str
+    tiger_state_relative_path_template: str
     census_block_weights_relative_path_template: str | None
     request_timeout_seconds: int
     chunk_size_bytes: int
@@ -133,6 +139,9 @@ def get_shared_config() -> SharedConfig:
         downloads_subtree_name=_require_string_field(raw, 'downloads_subtree_name'),
         preprocessed_input_subtree_name=_require_string_field(raw, 'preprocessed_input_subtree_name'),
         tiger_bg_relative_path_template=_require_string_field(raw, 'tiger_bg_relative_path_template'),
+        tiger_tract_relative_path_template=_require_string_field(raw, 'tiger_bg_relative_path_template'),
+        tiger_county_relative_path_template=_require_string_field(raw, 'tiger_bg_relative_path_template'),
+        tiger_state_relative_path_template=_require_string_field(raw, 'tiger_bg_relative_path_template'),
         census_block_weights_relative_path_template=raw.get('census_block_weights_relative_path_template'),
         request_timeout_seconds=request_timeout_seconds,
         chunk_size_bytes=chunk_size_bytes,

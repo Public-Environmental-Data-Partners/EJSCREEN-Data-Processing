@@ -1,0 +1,709 @@
+---
+author: "EmmaLi Tsai, w/ help from Claude"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    theme: lumen
+params:
+  # Column name in EJScreen (e.g. OZONE, PM25, DSLPM)
+  ind: "OZONE"
+  # Pipeline slug matching the indicator config file name (e.g. o3, pm25)
+  ind_slug: "o3"
+  # Pipeline version (e.g. 1.2022, 1.2021)
+  ind_version: "1.2022"
+  # EJScreen vintage year — used to name the baseline archive CSV
+  ejscreen_year: "2024"
+  # "local" or "remote" — controls whether paths resolve to disk or S3
+  environment: "remote"
+title: "EJScreen Comparison Report: `r params$ind`"
+---
+
+```{r cli-examples, include=FALSE}
+# TODO - these CLI examples are all a work in progress! 
+# TODO - use venvs
+# TODO - resolve the remote vs local argument so it actually pulls the correct files
+
+
+## CLI Examples
+# Rscript -e "rmarkdown::render('./scripts/utilities/validation/compare_results.Rmd', params = list(ind = 'OZONE', ind_slug = 'o3', ind_version = '1.2022', ejscreen_year = '2024', environment = 'remote'))"
+
+# Rscript -e "rmarkdown::render('./scripts/utilities/validation/compare_results.Rmd', params = list(ind = 'PM25',  ind_slug = 'pm25', ind_version = '1.2022', ejscreen_year = '2024', environment = 'remote'))"
+```
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(aws.s3)
+library(tigris)
+library(sf)
+library(mapview)
+library(sysfonts)
+library(showtext)
+library(purrr)
+library(leaflet)
+library(knitr)
+library(kableExtra)
+library(ggpmisc)
+library(reticulate)
+library(RColorBrewer)
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+options(tigris_use_cache = TRUE)
+options(scipen = 9999)
+options(rmarkdown.pandoc.args = c("+RTS", "-K2g", "-RTS"))
+mapviewOptions(basemaps = c("Esri.WorldGrayCanvas"))
+
+VAR_NAME <- params$ind
+```
+
+```{r themes, include=FALSE}
+# themes and color palettes
+sysfonts::font_add_google("Lato")
+showtext::showtext_auto()
+
+epic_chart_theme <- theme_minimal() +
+  theme(legend.position  = "right",
+        text             = element_text(size = 13, family = "Lato"),
+        legend.text      = element_text(size = 10, family = "Lato"),
+        legend.title     = element_text(size = 11, family = "Lato"),
+        axis.text.x      = element_text(margin = margin(t = 10)),
+        axis.title.x     = element_text(margin = margin(t = 10)),
+        axis.text.y      = element_text(margin = margin(r = 10)),
+        axis.title.y     = element_text(margin = margin(r = 10)))
+
+cat_palette_pastel <- colorRampPalette(
+  c("#526489", "#527CAF", "#B077B2", "#E4BE7C", "#b15712", "#82AB6E")
+)
+cont_palette <- colorRampPalette(c("#172f60", "#4ea324"))
+```
+
+```{r helpers, include=FALSE}
+# function for computing summary & comparison stats for columns a and b
+compute_stats <- function(df, col_b, col_a) {
+  valid     <- df %>%
+    select(all_of(c(col_a, col_b))) %>%
+    mutate(across(everything(), as.numeric))
+  diffs     <- valid[[col_a]] - valid[[col_b]]
+  pos_diffs <- diffs[!is.na(diffs) & diffs > 0]
+  neg_diffs <- diffs[!is.na(diffs) & diffs < 0]
+
+  tibble(
+    # first, get basic min/median/mean/max for a and b
+    min_a = min(valid[[col_a]], na.rm = T),
+    median_a = median(valid[[col_a]], na.rm = T), 
+    mean_a = mean(valid[[col_a]], na.rm = T),
+    max_a = max(valid[[col_a]], na.rm = T),
+    
+    min_b = min(valid[[col_b]], na.rm = T),
+    median_b = median(valid[[col_b]], na.rm = T), 
+    mean_b = mean(valid[[col_b]], na.rm = T),
+    max_b = max(valid[[col_b]], na.rm = T),
+    
+    # how many rows are missing information? 
+    num_NA_var_a       = sum(is.na(valid[[col_a]])),
+    num_NA_var_b       = sum(is.na(valid[[col_b]])),
+    
+    # comparison stats - looking at the diff between column A  - column B 
+    mean_abs_diff     = mean(abs(diffs), na.rm = TRUE),
+    median_abs_diff   = median(abs(diffs), na.rm = TRUE),
+    rmse              = sqrt(mean(diffs^2, na.rm = TRUE)),
+    pearson_r         = cor(valid[[col_a]], valid[[col_b]], 
+                            use = "na.or.complete"),
+    r_sq              = pearson_r^2,
+    greatest_pos_diff = if (length(pos_diffs)) max(pos_diffs) else NA_real_,
+    smallest_neg_diff = if (length(neg_diffs)) min(neg_diffs) else NA_real_
+  )
+}
+
+
+# ---------------------------------------------------------------------------
+# Resolve all file paths via the shared Python resolve_path module so that
+# no paths are hard-coded in this script.
+#
+# Mirrors the pattern used in shared_preprocess.R:
+#   py_build_manifest <- import_from_path("build_manifest", path = shared_path)
+#
+# For path_old (original EJScreen baseline archive):
+#   - Local:  {repo_root}/outputs/EJSCREEN_{year}_BG_with_AS_CNMI_GU_VI.csv
+#   - Remote: not yet in shared_config.json — add an "ejscreen_archive" asset
+#             entry when the file is uploaded to S3, then switch to
+#             rp$get_shared_asset_path(...) here.
+#
+# For path_new (pipeline ejscreen export):
+#   - Derived from pipeline root + known folder convention:
+#     ejscreen_acs_{ejscreen_year}/{ind_slug}_v{ind_version}/ejscreen_export.csv
+# ---------------------------------------------------------------------------
+
+# Walk up from this Rmd's directory until we find the .git anchor
+find_repo_root <- function(start = NULL) {
+  path <- normalizePath(if (is.null(start)) getwd() else start)
+  while (!file.exists(file.path(path, ".git"))) {
+    parent <- dirname(path)
+    if (parent == path) stop("Could not locate repository root (.git)")
+    path <- parent
+  }
+  path
+}
+
+# knitr sets the working directory to the Rmd's folder at render time
+repo_root   <- find_repo_root(knitr::opts_knit$get("output.dir") %||% getwd())
+scripts_dir <- file.path(repo_root, "scripts")
+shared_dir  <- file.path(scripts_dir, "shared")
+
+# Import resolve_path (same approach as shared_preprocess.R → import_from_path)
+rp <- reticulate::import_from_path("resolve_path", path = shared_dir)
+
+pipeline_root <- rp$get_pipeline_root(params$environment)
+
+# New pipeline output — ejscreen export CSV produced by the merge step
+path_new <- paste0(
+  pipeline_root,
+  paste0(
+    "ejscreen_acs_", params$ejscreen_year, "/",
+    params$ind_slug, "_v", params$ind_version, "/ejscreen_export.csv"
+  )
+)
+
+# Original EJScreen baseline archive - defaults to always 
+# pulling from AWS
+path_old <- "s3://pedp-data-preserved/ejscreen-data-processing/pipeline/shared/ejscreen/EJSCREEN_2024_BG_with_AS_CNMI_GU_VI.csv"
+
+message("path_old -> ", path_old)
+message("path_new -> ", path_new)
+```
+
+```{r read-data, include=FALSE, cache=TRUE, message=FALSE}
+# ---------------------------------------------------------------------------
+# Memory-efficient reads: peek at headers first, then load only the columns
+# that match VAR_NAME (+ ID and ST_ABBREV). For a 200-column EJScreen CSV
+# this cuts the in-memory footprint by ~20x.
+# ---------------------------------------------------------------------------
+
+# --- OLD (defaults to always remote) ---
+ejscreen_old <- aws.s3::s3read_using(read.csv, 
+                                     object = path_old)
+
+col_names_old <- names(ejscreen_old)
+keep_old <- col_names_old[grepl(VAR_NAME, col_names_old, ignore.case = TRUE)]
+ejscreen_old <- ejscreen_old %>%
+  select(c("ID", "ST_ABBREV", all_of(keep_old))) %>%
+  mutate(ID = as.character(ID)) %>%
+  # add back leading zeroes
+  mutate(ID = str_pad(ID, width = 12, side = "left", pad = "0"))
+
+# --- NEW (S3 or local via aws.s3) ---
+# s3read_using downloads once to a local temp file; reading that temp file
+# twice (header peek + selective read) costs one network round-trip, not two.
+read_ejscreen_new <- function(f) {
+  col_names_new <- names(readr::read_csv(f, n_max = 0, show_col_types = FALSE))
+  keep_new <- col_names_new[grepl(VAR_NAME, col_names_new, ignore.case = TRUE)]
+  readr::read_csv(
+    f,
+    col_select     = c("ID", "ST_ABBREV", all_of(keep_new)),
+    col_types      = cols(ID = col_character(), .default = col_guess()),
+    show_col_types = FALSE
+  ) %>%
+  # add back leading zeroes
+  mutate(ID = str_pad(ID, width = 12, side = "left", pad = "0"))
+}
+
+ejscreen_new <- if (startsWith(path_new, "s3://")) {
+  aws.s3::s3read_using(read_ejscreen_new, object = path_new)
+} else {
+  read_ejscreen_new(path_new)
+}
+```
+
+```{r build-comparisons, include=FALSE}
+# ---------------------------------------------------------------------------
+# Build the core comparison frame and pre-compute difference columns.
+# Frees both source datasets as soon as they're no longer needed.
+# ---------------------------------------------------------------------------
+
+# Case-insensitive match for the raw score column
+col_old_name <- names(ejscreen_old)[tolower(names(ejscreen_old)) == tolower(VAR_NAME)]
+col_new_name <- names(ejscreen_new)[tolower(names(ejscreen_new)) == tolower(VAR_NAME)]
+col_old_name <- if (length(col_old_name)) col_old_name[1] else VAR_NAME
+col_new_name <- if (length(col_new_name)) col_new_name[1] else VAR_NAME
+
+COL_ORIG <- paste0(VAR_NAME, "_original")
+COL_UPD  <- paste0(VAR_NAME, "_updated")
+
+# join data frames based on ID column 
+ejscreen_raw_comp <- dplyr::full_join(
+  ejscreen_old %>% select(ID, all_of(col_old_name)) %>%
+    rename(!!COL_ORIG := all_of(col_old_name)),
+  ejscreen_new %>% select(ID, all_of(col_new_name)) %>%
+    rename(!!COL_UPD  := all_of(col_new_name)),
+  by = "ID"
+)
+
+# Attach state abbreviation (needed for region facets)
+state_lookup <- bind_rows(
+  ejscreen_old %>% select(ID, ST_ABBREV),
+  ejscreen_new %>% select(ID, ST_ABBREV)
+) %>% distinct(ID, .keep_all = TRUE)
+
+ejscreen_raw_comp <- dplyr::left_join(ejscreen_raw_comp, 
+                                      state_lookup, by = "ID")
+rm(state_lookup)
+
+# Slim pct_diff to just what the map section needs (ID + two difference cols)
+# so the left-join with a 220k-row sf doesn't drag in a dozen extra columns.
+pct_diff_map <- ejscreen_raw_comp %>%
+  mutate(
+    diff_new_minus_old = .data[[COL_UPD]] - .data[[COL_ORIG]],
+    abs_diff           = abs(diff_new_minus_old),
+    pct_diff_estimate  = 100 * (abs_diff /
+      ((.data[[COL_UPD]] + .data[[COL_ORIG]]) / 2))
+  ) %>%
+  select(ID, pct_diff_estimate, abs_diff)
+```
+
+---
+
+
+## Summary
+
+```{r summary-blurb-calc, include=FALSE}
+diff_vec   <- ejscreen_raw_comp[[COL_UPD]] - ejscreen_raw_comp[[COL_ORIG]]
+pct_diff_vec <- 100 * abs(diff_vec) / ((ejscreen_raw_comp[[COL_UPD]] + ejscreen_raw_comp[[COL_ORIG]]) / 2)
+
+n_total       <- nrow(ejscreen_raw_comp)
+n_matched     <- sum(!is.na(diff_vec))
+
+mean_orig     <- mean(ejscreen_raw_comp[[COL_ORIG]], na.rm = TRUE)
+mean_upd      <- mean(ejscreen_raw_comp[[COL_UPD]],  na.rm = TRUE)
+pct_change    <- 100 * (mean_upd - mean_orig) / mean_orig
+direction     <- ifelse(mean_upd > mean_orig, "higher", "lower")
+
+r_val         <- cor(ejscreen_raw_comp[[COL_ORIG]], ejscreen_raw_comp[[COL_UPD]],
+                      use = "na.or.complete")
+r2_val        <- r_val^2
+
+mean_abs_diff <- mean(abs(diff_vec), na.rm = TRUE)
+mean_abs_pct_dif <- mean(pct_diff_vec, na.rm = T)
+q3_pct_diff   <- quantile(pct_diff_vec, probs = 0.75, na.rm = TRUE)
+
+n_missing_orig_only <- sum(is.na(ejscreen_raw_comp[[COL_ORIG]]) & !is.na(ejscreen_raw_comp[[COL_UPD]]))
+n_missing_upd_only  <- sum(!is.na(ejscreen_raw_comp[[COL_ORIG]]) & is.na(ejscreen_raw_comp[[COL_UPD]]))
+n_missing_both       <- sum(is.na(ejscreen_raw_comp[[COL_ORIG]]) & is.na(ejscreen_raw_comp[[COL_UPD]]))
+n_missing_total      <- n_missing_orig_only + n_missing_upd_only + n_missing_both
+```
+
+This scripted pulled the original EJScreen values from: `r path_old`; and new values from: `r path_new`.
+
+Across `r format(n_total, big.mark = ",")` block groups (`r format(n_matched, big.mark = ",")` with values in both versions), updated `r VAR_NAME` scores are on average `r round(abs(pct_change), 2)`% `r direction` than the original values (mean absolute percent difference of `r round(mean_abs_pct_dif, 2)`; **Fig. 2**). The two versions remain tightly correlated (Pearson r² = `r round(r2_val, 2)`; **Fig. 1**), though the top quartile of block groups shows percent differences of `r round(q3_pct_diff, 2)`% or more (**Map 1**). Data availability also shifted slightly: `r format(n_missing_total, big.mark = ",")` block groups are missing a score in at least one version (`r n_missing_orig_only` missing only from the original, `r n_missing_upd_only` missing only from the updated, and `r n_missing_both` missing from both; **Map 2**).
+
+# 1 · Score Comparisons
+
+## Figure 1 – Relationship plot
+
+```{r figure-1, fig.width=6, fig.height=6}
+ggplot(ejscreen_raw_comp,
+       aes(x = .data[[COL_ORIG]], y = .data[[COL_UPD]])) +
+  geom_point(alpha = 0.4, size = 0.7, colour = "#526489") +
+  stat_poly_eq(
+    aes(label = paste(after_stat(eq.label), after_stat(rr.label),
+                      sep = "*\", \"*")),
+    formula   = y ~ x,
+    parse     = TRUE,
+    label.x   = "left",
+    label.y   = "top"
+  ) +
+  geom_abline(intercept = 0, slope = 1, colour = "red", lty = "dashed") +
+  theme_bw() +
+  labs(x     = "Original EJScreen Value",
+       y     = "Updated EJScreen Value",
+       title = paste0("Relationship Plot: ", VAR_NAME))
+```
+
+This scatterplot compares each block group's original and updated `r VAR_NAME` 
+value directly against one another (n = `r sum(!is.na(ejscreen_raw_comp[[COL_ORIG]]) & !is.na(ejscreen_raw_comp[[COL_UPD]]))` 
+matched block groups). Points falling on the red dashed line indicate no 
+change between versions; points above or below the line show the direction 
+and magnitude of the shift.
+
+*Note: the R² shown on the plot comes from OLS regression of updated ~ original
+and equals Pearson r² only when both columns are on the same scale with no
+offset. The red dashed line is the 1:1 reference, not the regression line.*
+
+## Table 1 – Summary statistics
+```{r table-1}
+# compute stats
+stats <- compute_stats(ejscreen_raw_comp, COL_ORIG, COL_UPD)
+
+# extract the summary stats
+summary_stats <- stats %>% 
+  select(min_a:num_NA_var_b) %>%
+  pivot_longer(everything(), 
+               names_to = c(".value", "group"), 
+               names_pattern = "(.*)_(a|b)$")%>%
+  mutate(group = case_when(group == "a" ~ "Updated", 
+                           group == "b" ~ "Original")) %>%
+  rename(NA_obs= num_NA_var) %>%
+  mutate(across(min:max, ~ round(., digits = 2)))
+
+# format for knitting
+summary_stats %>%
+  knitr::kable(align = c("l", "r")) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                            full_width = FALSE)
+```
+
+This table summarizes the distribution of `r VAR_NAME` values in each dataset. 
+The original data has `r summary_stats$NA_obs[summary_stats$group == "Original"]` 
+missing observations, compared to `r summary_stats$NA_obs[summary_stats$group == "Updated"]` 
+in the updated data.
+
+## Table 2 – Comparison statistics
+```{r}
+# format the comparion stats
+stats %>%
+  select(!(min_a:num_NA_var_b)) %>%
+  pivot_longer(everything(), names_to = "Metric", values_to = "Value") %>%
+  mutate(
+    Metric = recode(Metric,
+                    matched_rows      = "Matched rows",
+                    rows_used         = "Rows used",
+                    dropped           = "Dropped (NA in either column)",
+                    num_NA_vara       = "NAs in original dataset",
+                    num_NA_varb       = "NAs in updated dataset",
+                    mean_abs_diff     = "Mean absolute difference (upd − orig)",
+                    median_abs_diff   = "Median absolute difference",
+                    rmse              = "RMSE",
+                    pearson_r         = "Pearson r",
+                    r_sq              = "R²",
+                    greatest_pos_diff = "Greatest positive difference (upd − orig)",
+                    smallest_neg_diff = "Smallest negative difference (upd − orig)"
+    ),
+    Value = round(Value, 2)
+  ) %>%
+  knitr::kable(align = c("l", "r")) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                            full_width = FALSE)
+```
+
+This table quantifies agreement between versions. The two datasets show a 
+Pearson r of `r round(stats$pearson_r, 2)` (r² = `r round(stats$r_sq, 2)`), 
+with a mean absolute difference of `r round(stats$mean_abs_diff, 2)`.
+
+
+## Figure 2 – Violin / boxplot
+
+```{r figure-2, fig.width=7, fig.height=5}
+ejscreen_raw_comp %>%
+  select(ID, all_of(c(COL_ORIG, COL_UPD))) %>%
+  pivot_longer(-ID, names_to = "version", values_to = "value") %>%
+  mutate(version = recode(version,
+    !!COL_ORIG := "Original",
+    !!COL_UPD  := "Updated"
+  )) %>%
+  ggplot(aes(x = version, y = value, fill = version)) +
+  geom_violin(alpha = 0.5) +
+  geom_boxplot(width = 0.2, alpha = 0.6, outlier.size = 0.5) +
+  scale_fill_manual(values = cat_palette_pastel(2)) +
+  labs(x     = "",
+       y     = paste0(VAR_NAME, " value"),
+       title = paste0("Distribution Comparison: ", VAR_NAME)) +
+  epic_chart_theme +
+  theme(legend.position = "none")
+```
+
+This plot compares the overall shape and spread of `r VAR_NAME` values, with 
+means of `r round(stats$mean_b, 2)` (original) and `r round(stats$mean_a, 2)` 
+(updated), highlighting any shifts in central tendency or variability.
+
+
+```{r region-codes, include=FALSE}
+# TODO - I'm not actually sure how useful this break down is. 
+west_state_codes      <- c("04","08","16","30","32","35","49","56",
+                           "02","06","15","41","53")
+northeast_state_codes <- c("09","23","25","33","44","50","34","36","42")
+midwest_state_codes   <- c("17","18","26","39","55","19","20","27",
+                           "29","31","38","46")
+south_state_codes     <- c("10","11","12","13","24","37","45","51","54",
+                           "01","21","28","47","05","22","40","48")
+all_conus_codes       <- c(west_state_codes, northeast_state_codes,
+                           midwest_state_codes, south_state_codes)
+
+assign_region <- function(fips2) {
+  case_when(
+    fips2 %in% west_state_codes      ~ "West",
+    fips2 %in% northeast_state_codes ~ "Northeast",
+    fips2 %in% midwest_state_codes   ~ "Midwest",
+    fips2 %in% south_state_codes     ~ "South",
+    TRUE                             ~ "Territory / Other"
+  )
+}
+```
+
+```{r figure-3, fig.width=11, fig.height=5}
+# ejscreen_raw_comp %>%
+#   mutate(region = assign_region(substr(ID, 1, 2))) %>%
+#   pivot_longer(all_of(c(COL_ORIG, COL_UPD)),
+#                names_to = "version", values_to = "value") %>%
+#   mutate(version = recode(version,
+#     !!COL_ORIG := "Original",
+#     !!COL_UPD  := "Updated"
+#   )) %>%
+#   ggplot(aes(x = version, y = value, fill = version)) +
+#   geom_violin(alpha = 0.5) +
+#   geom_boxplot(width = 0.25, alpha = 0.6, outlier.size = 0.3) +
+#   facet_wrap(~region, nrow = 1) +
+#   scale_fill_manual(values = cat_palette_pastel(2)) +
+#   labs(x     = "",
+#        y     = paste0(VAR_NAME, " value"),
+#        title = paste0("Regional Score Distributions: ", VAR_NAME)) +
+#   epic_chart_theme +
+#   theme(legend.position = "none",
+#         strip.text      = element_text(face = "bold"))
+```
+
+---
+
+# 2 · Pipeline Column Audit
+
+```{r column-audit}
+# removing extra strings from percentiles so we can actually 
+# convert this column to numeric
+ejscreen_old_audit <- ejscreen_old %>%
+  mutate(across(starts_with("T_"), ~ sub(" %ile", "", .)))
+ejscreen_new_audit <- ejscreen_new %>%
+    mutate(across(starts_with("T_"), ~ sub(" %ile", "", .)))
+
+# locating the columns to audit 
+audit_cols_old <- names(ejscreen_old)[
+  grepl(VAR_NAME, names(ejscreen_old), ignore.case = TRUE)
+]
+
+# creating audit table function 
+audit_table <- purrr::map_dfr(audit_cols_old, function(col) {
+  col_match <- names(ejscreen_new_audit)[tolower(names(ejscreen_new_audit)) == tolower(col)]
+
+  if (!length(col_match)) {
+    return(tibble(column = col, n_changed = NA_integer_,
+                  mean_delta = NA_real_, status = "MISSING IN NEW"))
+  }
+
+  col_b <- col_match[1]
+  merged_audit <- dplyr::inner_join(
+    ejscreen_old_audit %>% select(ID, val_a = all_of(col)),
+    ejscreen_new_audit %>% select(ID, val_b = all_of(col_b)),
+    by = "ID"
+  ) %>%
+    # calculate deltas (b - a) and percent diffs
+    mutate(val_a = suppressWarnings(as.numeric(val_a)),
+           val_b = suppressWarnings(as.numeric(val_b)),
+           delta = val_b - val_a, 
+           pct_diff = 100*((delta)/((val_b + val_a)/2))) %>%
+    # replace inf with NAs
+    mutate(pct_diff = if_else(is.infinite(pct_diff), NA, pct_diff))
+  
+  # how many actually changed?
+  n_changed <- merged_audit %>%
+    filter(!(is.na(val_a) & is.na(val_b))) %>%
+    filter(is.na(delta) | delta != 0) %>%
+    nrow()
+
+  tibble(column     = col,
+         n_changed  = n_changed,
+         mean_delta = mean(merged_audit$delta, na.rm = TRUE), 
+         mean_pct_diff = mean(merged_audit$pct_diff, na.rm = TRUE))
+})
+
+# generate table, rename columns 
+audit_table %>%
+  arrange(desc(column)) %>%
+  mutate(mean_delta = round(mean_delta, 6)) %>%
+  rename(Column                   = column,
+         `# Block Groups Changed` = n_changed,
+         `Mean Delta (Upd − Orig)` = mean_delta, 
+         `Mean Percent Diff (Upd − Orig)` = mean_pct_diff) %>%
+  knitr::kable(align = c("l", "r", "r", "r")) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                            full_width = FALSE) %>%
+  # removed the "OK" field 
+  kableExtra::row_spec(which(audit_table$status != "OK"),
+                       bold = TRUE, color = "white", background = "#c0392b")
+
+# free up some memory
+rm(ejscreen_old, ejscreen_new, ejscreen_old_audit, 
+   ejscreen_new_audit, audit_cols_old)
+
+invisible(gc())
+```
+
+This table audits every column in the original dataset containing `r VAR_NAME`, 
+checking whether a matching column exists in the updated dataset and, where it 
+does, how many block groups changed. Of the `r nrow(audit_table)` columns 
+checked, `r sum(audit_table$status == "MISSING IN NEW", na.rm = TRUE)` 
+could not be matched to the updated dataset and are flagged in *Map 2*. 
+
+Mirrors compare_ejscreen.py run_audit()
+
+---
+
+# 3 · Difference Maps
+
+```{r build-fips-xwalk-prep, include=FALSE}
+fips_xwalk <- tigris::fips_codes %>%
+  select(state, state_code) %>%
+  distinct()
+
+postal_all <- fips_xwalk %>%
+  # these are minor outlying islands  - I don't think we would ever have 
+  # data in EJScreen for these
+  filter(state != "UM") %>%
+  pull(state) %>% 
+  unique()
+
+# grabbing geometries 
+bg_all <- postal_all %>%
+  purrr::map(~tigris::block_groups(.x, cb = TRUE, progress_bar = FALSE)) %>%
+  dplyr::bind_rows() %>%
+  select(GEOID, STATEFP, geometry) %>%
+  # shift_geometry before join so we transform the smaller pre-join frame
+  # tigris::shift_geometry(geoid_column = "GEOID") %>%
+  sf::st_transform(crs = "WGS84") %>%
+  dplyr::left_join(pct_diff_map, by = c("GEOID" = "ID"))
+```
+
+## Map 1 - Largest Percent Differences (>= 3rd Quantile)
+```{r map-percent-difference, fig.width=7, fig.height=5}
+# finding 3rd quantile for the % difference estimates
+q3 <- quantile(bg_all$pct_diff_estimate, probs = 0.75, na.rm = T)
+
+# mappy time 
+bg_over_q3 <- bg_all %>%
+  filter(pct_diff_estimate >= q3) %>%
+  mutate(pct_diff_estimate = round(pct_diff_estimate, 2))
+mapview(bg_over_q3,
+        zcol = "pct_diff_estimate", canvas = TRUE)@map
+```
+This map highlights the `r nrow(bg_over_q3)` block groups with the largest 
+percent differences between original and updated `r VAR_NAME` scores — 
+those at or above the 75th percentile (>= `r round(q3, 1)`%). Clusters on 
+the map may point to regions where the underlying data or methodology 
+changed most.
+
+## Map 2 - Missing Scores 
+```{r missing-scores-map, fig.width=7, fig.height=5}
+# isolating geoids and geometries
+bg_all_simp <- bg_all %>%
+  select(GEOID) %>%
+  st_as_sf() 
+
+# we don't need this file anymore
+rm(bg_all)
+
+# create df of missing observations
+missing_map <- ejscreen_raw_comp %>%
+  rename(GEOID = ID) %>%
+  # isolate for NAs in the original or updated columns 
+  filter(is.na(.data[[paste0(VAR_NAME, "_original")]]) | is.na(.data[[paste0(VAR_NAME, "_updated")]])) %>%
+  # identify what component is missing 
+  mutate(`Missing Status` = case_when(is.na(.data[[paste0(VAR_NAME, "_original")]]) & is.na(.data[[paste0(VAR_NAME, "_updated")]]) ~ "Missing - Both", 
+                                    is.na(.data[[paste0(VAR_NAME, "_original")]]) & !(is.na(.data[[paste0(VAR_NAME, "_updated")]])) ~ "Missing - Original Only",
+                                    TRUE ~ "Missing - Updated Only")) %>%
+  # bring in geometries
+  left_join(., bg_all_simp, by = "GEOID") %>%
+  st_as_sf() %>%
+  st_cast(., "MULTIPOLYGON") %>%
+  st_transform(., crs = 4326) %>%
+  mutate(`Missing Status` = as.factor(`Missing Status`))
+
+
+pal <- colorFactor(brewer.pal(3, "Set2"), domain = missing_map$`Missing Status`)
+
+# an issue 
+mapview(missing_map,
+        zcol = "Missing Status", canvas = TRUE, 
+        col.regions = pal(missing_map$`Missing Status`), 
+        legend = T)
+
+# ejscreen_raw_comp is no longer needed after this section
+rm(ejscreen_raw_comp)
+invisible(gc())
+```
+
+This map shows the `r nrow(missing_map)` block groups missing a `r VAR_NAME` 
+score in the original data, the updated data, or both. Of these, 
+`r sum(missing_map$missing_status == "missing from original")` are missing 
+only from the original dataset, `r sum(missing_map$missing_status == "missing from updated")` 
+only from the updated dataset, and `r sum(missing_map$missing_status == "both")` 
+are missing from both.
+
+---
+
+# 4 · Works in Progress
+
+## Figure 4 – Percentile scatter
+
+```{r figure-4, fig.width=6, fig.height=6}
+# t_pattern    <- paste0("^T_", VAR_NAME, "$")
+# col_names_t  <- names(readr::read_csv(path_old, n_max = 0, show_col_types = FALSE))
+# t_col_old    <- col_names_t[grepl(t_pattern, col_names_t, ignore.case = TRUE)]
+# 
+# if (length(t_col_old) == 1) {
+#   t_old <- readr::read_csv(
+#     path_old,
+#     col_select     = c("ID", all_of(t_col_old)),
+#     col_types      = cols(ID = col_character(), .default = col_character()),
+#     show_col_types = FALSE
+#   )
+# 
+#   read_t_new <- function(f) {
+#     cn <- names(readr::read_csv(f, n_max = 0, show_col_types = FALSE))
+#     t_col_new <- cn[grepl(t_pattern, cn, ignore.case = TRUE)]
+#     if (!length(t_col_new)) return(NULL)
+#     readr::read_csv(f, col_select = c("ID", all_of(t_col_new)),
+#                     col_types = cols(ID = col_character(), .default = col_character()),
+#                     show_col_types = FALSE)
+#   }
+# 
+#   t_new <- if (startsWith(path_new, "s3://")) {
+#     aws.s3::s3read_using(read_t_new, object = path_new)
+#   } else {
+#     read_t_new(path_new)
+#   }
+# 
+#   if (!is.null(t_new)) {
+#     t_percentiles <- dplyr::inner_join(t_old, t_new, by = "ID") %>%
+#       rename(tile_str_old = 2, tile_str_new = 3) %>%
+#       mutate(tile_old = as.numeric(str_extract(tile_str_old, "\\d+")),
+#              tile_new = as.numeric(str_extract(tile_str_new, "\\d+")))
+# 
+#     ggplot(t_percentiles, aes(x = tile_old, y = tile_new)) +
+#       geom_point(alpha = 0.4, size = 0.7, colour = "#526489") +
+#       geom_abline(intercept = 0, slope = 1, colour = "red", lty = "dashed") +
+#       theme_bw() +
+#       labs(x     = paste0("Original T_", VAR_NAME, " tile"),
+#            y     = paste0("Updated T_", VAR_NAME, " tile"),
+#            title = paste0("T-Percentile Comparison: ", VAR_NAME))
+# 
+#     rm(t_old, t_new, t_percentiles)
+#   } else {
+#     message("T_", VAR_NAME, " not found in updated dataset — skipping Figure 4.")
+#     rm(t_old)
+#   }
+# } else {
+#   message("T_", VAR_NAME, " not found in original dataset — skipping Figure 4.")
+# }
+# gc()
+```
+
+## Map 3 - Largest Absolute Differences (>= 3rd Quantile)
+```{r map-abs-difference}
+# # finding 3rd quantile 
+# q3 <- quantile(bg_all$abs_diff, probs = 0.75, na.rm = T)
+# 
+# # mappy time 
+# bg_over_q3 <- bg_all %>%
+#   filter(abs_diff >= q3)
+# mapview(bg_over_q3,
+#         zcol = "abs_diff", canvas = TRUE)@map
+```

@@ -1,5 +1,8 @@
-# IDEs
+# IDEs and their artifacts
 .idea/
+
+# vscode workspace file, used for multi-repo setups
+*.code-workspace   
 
 # Virtual environments
 .venv/

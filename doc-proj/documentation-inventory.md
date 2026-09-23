@@ -214,10 +214,13 @@ No `docs/` folder, no PDFs, no archive.org links in this repo.
 Files tagged **📌 NEEDS DONATE HTML** above are the home-screen files identified for
 inserting the Donate HTML button:
 
-- `EJScreen/index.html` — desktop home screen (splash-screen div with Help/Glossary/FAQ links)
-- `EJScreen/mobile/index.html` — mobile home screen (see description above of how the new button/option will be inserted in the dropdown menu)
-- `EJAM/inst/global_defaults_shiny.R` (`aboutpage_texts$aboutpage_text`, rendered by the
-  `'About'` tab in `EJAM/R/app_ui.R`) — EJAM's single home/about screen (no desktop/mobile split)
+- `EJScreen/index.html`* — desktop home screen (splash-screen div with Help/Glossary/FAQ links)
+- `EJScreen/mobile/index.html`* — mobile home screen (see description above of how the new button/option will be inserted in the dropdown menu)
+- `EJAM/inst/global_defaults_shiny.R`** (`aboutpage_texts$aboutpage_text`, rendered by the
+  `'About'` tab in `EJAM/R/app_ui.R`) — EJAM's single home/about screen (no desktop/mobile split)<br>
+`*` Changes committed to EJScreen repo, v4-2024-0 branch on 23 Sept. Awaiting testing. <br>
+`**` Change committed to EJAM repo, development branch on 23 Sept. Awaiting testing. 
+
 
 Clicking the button should open a new tab in the current browser at:
 `https://donorbox.org/open-environmental-data-project-donations-2`

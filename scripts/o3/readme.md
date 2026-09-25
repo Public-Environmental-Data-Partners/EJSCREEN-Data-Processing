@@ -39,7 +39,7 @@ and writes one annual average of the ten highest daily 8-hour maxima per tract:
    python o3/o3_preprocess.py -v 1.2022 -l local
    ```
 
-3. `o3_score.py` expands tract scores to block groups, applies the zero-population null rule, and writes per-state final scores:
+3. `o3_score.py` expands tract scores to block groups and writes per-state final scores. Block groups retain their tract score regardless of population. Rows without 2022 GEOIDs are excluded from the final output and written to a per-state exception CSV:
 
    ```bash
    python o3/o3_score.py -v 1.2022 -s WY  -l local 
@@ -72,4 +72,5 @@ and writes one annual average of the ten highest daily 8-hour maxima per tract:
 
 - Tract-level preprocess output: `v{version}/preprocessed_input/o3_tract_annual_average.csv`
 - Per-state final output: `v{version}/score_output/final_bg_scores_{postal}.csv`
-- Final columns include `block_group_geoid` and `o3_score`; zero-population block groups must have a null `o3_score`.
+- Final columns include `block_group_geoid` (2022 GEOID) and `o3_score`.
+- When a state has rows without 2022 GEOIDs, `final_bg_scores_missing_2022_geoid_{postal}.csv` is written beside the final output with `block_group_geoid_2020` and `o3_score` columns.

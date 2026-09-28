@@ -40,7 +40,7 @@ one annual average concentration per tract (yes, tract):
    python pm25/pm25_preprocess.py -v 1.2022 -l local
    ```
 
-3. `pm25_score.py` expands tract scores to block groups, applies the zero-population null rule, and writes per-state final scores:
+3. `pm25_score.py` expands tract scores to block groups and writes per-state final scores. Block groups retain their tract score regardless of population. Rows without 2022 GEOIDs are excluded from the final output and written to a per-state exception CSV:
 
    ```bash
    python pm25/pm25_score.py -v 1.2022 -s WY -l local 
@@ -72,4 +72,5 @@ one annual average concentration per tract (yes, tract):
 
 - Tract-level preprocess output: `v{version}/preprocessed_input/pm25_tract_annual_average.csv`
 - Per-state final output: `v{version}/score_output/final_bg_scores_{postal}.csv`
-- Final columns include `block_group_geoid` and `pm25_score`; zero-population block groups must have a null `pm25_score`.
+- When a state has rows without 2022 GEOIDs, `final_bg_scores_{postal}_missing_2022_geoid.csv` is written beside the final output with `block_group_geoid_2020` and `pm25_score` columns.
+- Final columns include `block_group_geoid` (2022 GEOID) and `pm25_score`.

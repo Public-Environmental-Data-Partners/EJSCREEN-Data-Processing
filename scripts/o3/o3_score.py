@@ -29,7 +29,6 @@ Runtime arguments (current defaults shown):
 
 Outputs:
 		- v{version}/score_output/final_bg_scores_{postal}.csv under the active Ozone root
-		- v{version}/score_output/final_bg_scores_{postal}.csv under the active Ozone root
 		- v{version}/score_output/final_bg_scores_missing_2022_geoid_{postal}.csv when
 		  the state has rows without 2022 GEOIDs
 		- o3_score.log in scripts/o3.
@@ -100,8 +99,8 @@ try:
 	from scripts.shared.state_config import StateConfig, get_state_config, get_state_config_list
 except Exception as exc:
 	raise RuntimeError(
-		'Failed to import shared.state_config. Ensure scripts/shared/state_config.py is present and '
-		'that the repository root (containing the scripts directory) is on PYTHONPATH.'
+		'Failed to import scripts.shared.state_config. Ensure scripts/shared/state_config.py is present and '
+		'that the `scripts` package is installed (e.g. via `uv sync`).'
 	) from exc
 
 
@@ -415,13 +414,13 @@ def filter_and_relabel_geoids_to_2022(
 	final_scores: pd.DataFrame,
 	state_block_weights: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-	"""Relabel output GEOIDs and separate rows without a 2022 GEOID.
+	"""Return 2022-keyed score rows and rows with no usable 2022 GEOID.
 
-	Scoring to this point has been keyed off of the 2020 GEOID througho; 
-	this only relabels the
-	output column immediately before writing, using the 2020->2022 mapping in
-	the census block weights input. Returns final rows and rows missing a 2022
-	GEOID, with the latter retaining an explicitly named 2020 GEOID column.
+	All scoring and matching done up to this point has used the 2020 
+	GEOID as the primary key but downstream code requires the 2022 GEOID.
+	Rows with a valid 2022 GEOID are returned with that value in
+	`block_group_geoid`. Rows with a null, blank, or placeholder 2022 GEOID are
+	returned separately with their original ID in `block_group_geoid_2020`.
 	"""
 	geoid_lookup = state_block_weights[[canonical_block_group_geoid, canonical_block_group_geoid_2022]].drop_duplicates()
 	relabeled = final_scores.merge(geoid_lookup, on=canonical_block_group_geoid, how='left')

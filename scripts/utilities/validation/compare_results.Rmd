@@ -25,6 +25,7 @@ title: "EJScreen Comparison Report: `r params$ind`"
 # TODO - these CLI examples are all a work in progress! 
 # TODO - use venvs
 # TODO - resolve the remote vs local argument so it actually pulls the correct files
+# TODO - remove the hard-coded path_new <- "s3://pedp-data-preserved/ejscreen-data-processing/pipeline/shared/ejscreen/v1.2022/envirodata_1.2022.csv.no_zero_population_rule_applied.csv" once we have a stable file name and location on s3
 
 
 ## CLI Examples
@@ -159,13 +160,8 @@ rp <- reticulate::import_from_path("resolve_path", path = shared_dir)
 pipeline_root <- rp$get_pipeline_root(params$environment)
 
 # New pipeline output — ejscreen export CSV produced by the merge step
-path_new <- paste0(
-  pipeline_root,
-  paste0(
-    "ejscreen_acs_", params$ejscreen_year, "/",
-    params$ind_slug, "_v", params$ind_version, "/ejscreen_export.csv"
-  )
-)
+# TODO - pull this dynamically 
+path_new <- "s3://pedp-data-preserved/ejscreen-data-processing/pipeline/shared/ejscreen/v1.2022/envirodata_1.2022.csv.no_zero_population_rule_applied.csv"
 
 # Original EJScreen baseline archive - defaults to always 
 # pulling from AWS
@@ -202,12 +198,13 @@ read_ejscreen_new <- function(f) {
   keep_new <- col_names_new[grepl(VAR_NAME, col_names_new, ignore.case = TRUE)]
   readr::read_csv(
     f,
-    col_select     = c("ID", "ST_ABBREV", all_of(keep_new)),
+    # col_select     = c("ID", "ST_ABBREV", all_of(keep_new)),
+    col_select     = c("ID", all_of(keep_new)),
     col_types      = cols(ID = col_character(), .default = col_guess()),
     show_col_types = FALSE
   ) %>%
-  # add back leading zeroes
-  mutate(ID = str_pad(ID, width = 12, side = "left", pad = "0"))
+    # add back leading zeroes
+    mutate(ID = str_pad(ID, width = 12, side = "left", pad = "0"))
 }
 
 ejscreen_new <- if (startsWith(path_new, "s3://")) {
@@ -244,7 +241,7 @@ ejscreen_raw_comp <- dplyr::full_join(
 # Attach state abbreviation (needed for region facets)
 state_lookup <- bind_rows(
   ejscreen_old %>% select(ID, ST_ABBREV),
-  ejscreen_new %>% select(ID, ST_ABBREV)
+  ejscreen_new %>% select(ID)
 ) %>% distinct(ID, .keep_all = TRUE)
 
 ejscreen_raw_comp <- dplyr::left_join(ejscreen_raw_comp, 
@@ -563,6 +560,9 @@ postal_all <- fips_xwalk %>%
 
 # grabbing geometries 
 bg_all <- postal_all %>%
+  # CB removes extra block groups with 0 populations. 
+  # We don't really need this for the map below & this causes the RMD file hit
+  # oom errors when knitting. 
   purrr::map(~tigris::block_groups(.x, cb = TRUE, progress_bar = FALSE)) %>%
   dplyr::bind_rows() %>%
   select(GEOID, STATEFP, geometry) %>%
@@ -583,6 +583,7 @@ bg_over_q3 <- bg_all %>%
   mutate(pct_diff_estimate = round(pct_diff_estimate, 2))
 mapview(bg_over_q3,
         zcol = "pct_diff_estimate", canvas = TRUE)@map
+rm(bg_all)
 ```
 This map highlights the `r nrow(bg_over_q3)` block groups with the largest 
 percent differences between original and updated `r VAR_NAME` scores — 
@@ -592,6 +593,19 @@ changed most.
 
 ## Map 2 - Missing Scores 
 ```{r missing-scores-map, fig.width=7, fig.height=5}
+rm(bg_over_q3)
+
+# grabbing geometries 
+bg_all <- postal_all %>%
+  # CB removes extra block groups with 0 populations. 
+  purrr::map(~tigris::block_groups(.x, progress_bar = FALSE)) %>%
+  dplyr::bind_rows() %>%
+  select(GEOID, STATEFP, geometry) %>%
+  # shift_geometry before join so we transform the smaller pre-join frame
+  # tigris::shift_geometry(geoid_column = "GEOID") %>%
+  sf::st_transform(crs = "WGS84") %>%
+  dplyr::left_join(pct_diff_map, by = c("GEOID" = "ID"))
+
 # isolating geoids and geometries
 bg_all_simp <- bg_all %>%
   select(GEOID) %>%
@@ -632,9 +646,9 @@ invisible(gc())
 
 This map shows the `r nrow(missing_map)` block groups missing a `r VAR_NAME` 
 score in the original data, the updated data, or both. Of these, 
-`r sum(missing_map$missing_status == "missing from original")` are missing 
-only from the original dataset, `r sum(missing_map$missing_status == "missing from updated")` 
-only from the updated dataset, and `r sum(missing_map$missing_status == "both")` 
+`r sum(missing_map$missing_status == "Missing - Original Only")` are missing 
+only from the original dataset, `r sum(missing_map$missing_status == "Missing - Updated Only")` 
+only from the updated dataset, and `r sum(missing_map$missing_status == "Missing - Both")` 
 are missing from both.
 
 ---

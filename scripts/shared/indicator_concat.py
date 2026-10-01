@@ -32,6 +32,7 @@ import argparse
 import importlib
 import pandas as pd
 from pathlib import Path
+import re
 import sys
 
 import scripts.shared.resolve_path as resolve_path
@@ -83,6 +84,7 @@ def concatenate_csvs(indicator, version, location):
         indicator_root,
         f"{version_name}/score_output",
     )
+    # Use a glob supported by fsspec, then filter exact state filenames below.
     target_pattern = join_root_and_relative_path(
         target_dir,
         "final_bg_scores_*.csv",
@@ -100,6 +102,8 @@ def concatenate_csvs(indicator, version, location):
     file_count = 0
     for file_handle in fsspec.open_files(target_pattern, mode="rb"):
         file_name = get_file_name(file_handle.path)
+        if re.fullmatch(r"final_bg_scores_[A-Za-z]{2}\.csv", file_name) is None:
+            continue
         try:
             with file_handle as input_stream:
                 # Force GEOID to string to preserve leading zeros
@@ -161,9 +165,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Concatenate 'final_bg_scores_XX.csv' files from a directory.")
     
     # Required arguments mapped to flags
-    parser.add_argument("--indicator", required=True, help="The name of the indicator to extract (e.g., o3)")
-    parser.add_argument("--version", required=True, help="The version of the data (e.g., 1.2020)")
-    parser.add_argument("--location", required=True, help="Local or remote storage")
+    parser.add_argument("--indicator", "-i", required=True, help="The name of the indicator to extract (e.g., o3)")
+    parser.add_argument("--version", "-v", required=True, help="The version of the data (e.g., 1.2020)")
+    parser.add_argument("--location", "-l", required=True, help="Local or remote storage")
 
     args = parser.parse_args()
 

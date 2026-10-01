@@ -12,7 +12,7 @@ USAGE:
     python3 ejscreen_merge.py  --indicators [name] --version [version] --location [local_or_remote]
 
 EXAMPLE:
-    python3 scripts/shared/ejscreen_merge.py --indicators ozone,pm25 --version 1.2020 --location local
+    python3 scripts/shared/ejscreen_merge.py --indicators o3,pm25 --version 1.2020 --location local
 
 INPUT FILE:
     pipeline/shared/ejscreen/EJSCREEN_2024_BG_with_AS_CNMI_GU_VI.csv

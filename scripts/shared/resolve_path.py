@@ -116,7 +116,21 @@ class _PathResolver:
             required_shared_assets.get(dependency),
             f"{indicator}.versions.{version}.required_shared_assets.{dependency}",
         )
-
+
+    # WARNING: this method reads only `relative_path_template` from shared_config.json,
+    # for both the "preprocessed_input" and "downloads" categories. build_manifest accepts
+    # either `relative_path` or `relative_path_template`, so the two can disagree. Shared
+    # outputs that define plain `relative_path` (no template) will fail here with
+    # "Expected ... to be a non-empty string" if an indicator ever lists them as a
+    # `shared_asset` input. Nothing in o3/pm25 triggers this today. To verify or fix it, test
+    # category="downloads" resolution (asset_key required) for these fetch outputs, which
+    # use `relative_path`:
+    #   - tiger_state 2020 / tiger_state_2020
+    #   - tiger_county 2020 / tiger_county_2020
+    #   - census_block_weights 1.0 / block_crosswalk_2022
+    # and category="preprocessed_input" for any shared asset whose preprocess output is
+    # changed from `relative_path_template` to `relative_path`. (The other fetch outputs
+    # use `relative_path_template` and should resolve.)
     def get_shared_asset_path(
         self,
         asset: str,

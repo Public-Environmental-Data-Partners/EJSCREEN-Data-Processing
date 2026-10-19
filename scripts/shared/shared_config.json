@@ -95,9 +95,9 @@
             "outputs": {
               "tiger_state_2020": {
                 "type": "download",
-                "scope": "state",
-                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/STATE/tl_2020_us_state.zip",
-                "relative_path_template": "downloads/tiger_lines/2020/state/tl_2020_us_state.zip"
+                "scope": "nationwide",
+                "source_url": "https://www2.census.gov/geo/tiger/TIGER2020/STATE/tl_2020_us_state.zip",
+                "relative_path": "downloads/tiger_lines/2020/state/tl_2020_us_state.zip"
               }
             }
           }
@@ -116,9 +116,9 @@
             "outputs": {
               "tiger_county_2020": {
                 "type": "download",
-                "scope": "state",
-                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/COUNTY/tl_2020_us_county.zip",
-                "relative_path_template": "downloads/tiger_lines/2020/county/tl_2020_us_county.zip"
+                "scope": "nationwide",
+                "source_url": "https://www2.census.gov/geo/tiger/TIGER2020/COUNTY/tl_2020_us_county.zip",
+                "relative_path": "downloads/tiger_lines/2020/county/tl_2020_us_county.zip"
               }
             }
           }

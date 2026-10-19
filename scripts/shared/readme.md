@@ -14,10 +14,9 @@ have both been built to serve both Python modules and R modules via reticulate.
   `get_download_path()`, `get_dependency_version()`, `get_shared_asset_path()`,
   `get_indicator_root()`, `get_shared_root()`, `get_shared_version_block()`,
   `get_pipeline_root()`, and `substitute_version_placeholder()`.
-- `shared_config.py` / `shared_config.json`: loader and config for shared assets
-  (e.g. TIGER block groups, census block weights) consumed by more than one
-  indicator pipeline. Public functions: `get_shared_config()`,
-  `resolve_local_shared_root_path()`.
+- `shared_config.json`: config for shared assets (e.g. TIGER lines, census block
+  weights) consumed by more than one indicator pipeline. It is read through
+  `build_manifest.py` and `resolve_path.py`, and directly by `fetch_raw.py`.
 - `state_config.py` / `state_config.json`: canonical two-letter-postal-code state
   metadata (FIPS, display name, projected metric CRS) used across pipelines.
   Public functions: `get_state_config(state_code)`, `get_state_config_list(extent)`.

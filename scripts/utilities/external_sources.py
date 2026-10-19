@@ -12,17 +12,23 @@ USAGE:
 EXAMPLE:
     python scripts/utilities/external_sources.py --indicators o3,pm25 --version 1.2022
 
-OUTPUT FILES (written next to this script):
-    external_sources.json - the report (overwritten on each run; written only
-                            after every indicator and shared asset resolves).
-    external_sources.log  - run log (appended).
+OUTPUT FILES:
+    output/external_sources.json - the report (in an output/ folder next to this script;
+                            overwritten on each run; written only after every
+                            indicator and shared asset resolves).
+    external_sources.log  - run log (next to this script; appended).
 
-OUTPUT SHAPE:
+OUTPUT SHAPE (key order is fixed in code, not sorted; list order follows the config files):
     {
-      "indicators": {"o3": {"version": ..., "external_sources": [{name, file_name, source_url}]}},
-      "shared": {"census_block_weights": {"version": ..., "required_by": [...],
-                                           "external_sources": [{name, file_name, [source_url], [scope]}]}}
+      "indicators": {"o3": {display_name_short, display_name_long, provider, description,
+                            version, data_period,
+                            "external_sources": [{name, file_name, source_url}]}},
+      "shared": {"census_block_weights": {display_name_short, display_name_long, provider,
+                            description, version, data_period, "required_by": [...],
+                            "external_sources": [{name, file_name, [source_url], [scope]}]}}
     }
+    - The descriptive fields and data_period must be non-empty strings in the config
+      files; a missing or empty value fails the run.
     - Indicator sources are the fetch downloads that the preprocess stage consumes.
     - Shared assets use their fetch downloads when they have a fetch stage; otherwise
       their preprocess outputs are listed by stored file name only (no source_url).
@@ -49,6 +55,7 @@ import scripts.shared.resolve_path as resolve_path
 DEFAULT_OUTPUT_FILENAME = "external_sources.json"
 DEFAULT_LOG_FILENAME = "external_sources.log"
 HARDCODED_TIGER_VERSION = "2022"
+DESCRIPTIVE_FIELDS = ("display_name_short", "display_name_long", "provider", "description")
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 LOGGER = logging.getLogger(__name__)
@@ -75,6 +82,22 @@ def _load_json(path: Path, label: str) -> dict:
     if not isinstance(payload, dict):
         _fail(f"Expected {label} config to be a JSON object: {path}")
     return payload
+
+
+def _describe(config_block: dict, version_block: dict, version: str, label: str) -> dict[str, str]:
+    # Key order here is the order in the report; every field must be a non-empty string.
+    described: dict[str, str] = {}
+    for field in DESCRIPTIVE_FIELDS:
+        described[field] = _require_string(config_block.get(field), f"{label}.{field}")
+    described["version"] = version
+    described["data_period"] = _require_string(version_block.get("data_period"), f"{label}.{version}.data_period")
+    return described
+
+
+def _require_string(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        _fail(f"Expected {field_name} to be a non-empty string")
+    return value
 
 
 def _source_entry(name: str, entry: dict[str, str], label: str, require_url: bool) -> dict[str, str]:
@@ -131,6 +154,11 @@ def _shared_sources(asset: str, version: str, shared_config: dict) -> list[dict[
     return sources
 
 
+def _describe_shared(asset: str, version: str, shared_config: dict) -> dict[str, str]:
+    version_block = resolve_path.get_shared_version_block(shared_config, asset, version)
+    return _describe(shared_config["assets"][asset], version_block, version, f"shared asset {asset}")
+
+
 def build_report(indicators: list[str], version: str) -> dict:
     shared_config = _load_json(resolve_path.SCRIPTS_ROOT / "shared" / "shared_config.json", "shared")
     report: dict = {"indicators": {}, "shared": {}}
@@ -145,7 +173,7 @@ def build_report(indicators: list[str], version: str) -> dict:
             _fail(f"Version {version!r} not found for indicator {indicator}; valid versions: {valid}")
 
         report["indicators"][indicator] = {
-            "version": version,
+            **_describe(config, versions[version], version, f"{indicator} config"),
             "external_sources": _indicator_sources(indicator, version),
         }
 
@@ -158,7 +186,7 @@ def build_report(indicators: list[str], version: str) -> dict:
             entry = report["shared"].get(asset)
             if entry is None:
                 report["shared"][asset] = {
-                    "version": shared_version,
+                    **_describe_shared(asset, shared_version, shared_config),
                     "required_by": [indicator],
                     "external_sources": _shared_sources(asset, shared_version, shared_config),
                 }
@@ -197,7 +225,7 @@ def _add_hardcoded_tiger_assets(report: dict, shared_config: dict) -> None:
             )
         if existing is None:
             report["shared"][asset] = {
-                "version": HARDCODED_TIGER_VERSION,
+                **_describe_shared(asset, HARDCODED_TIGER_VERSION, shared_config),
                 "required_by": [],
                 "external_sources": _shared_sources(asset, HARDCODED_TIGER_VERSION, shared_config),
             }
@@ -241,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     output_dir = SCRIPT_DIR / "output"
     output_dir.mkdir(exist_ok=True)
     output_path = output_dir / DEFAULT_OUTPUT_FILENAME
-    output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     LOGGER.info("Wrote %s", output_path)
     print(f"Wrote {output_path}")
     return 0

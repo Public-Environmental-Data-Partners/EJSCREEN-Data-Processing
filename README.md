@@ -1,15 +1,17 @@
 # EJSCREEN-Data-Processing
 
 This repo is intended to hold the code required to build and update
-all [EJScreen](https://screening-tools.com/epa-ejscreen) indicators 
+all [EJAM](https://ejam.publicenvirodata.org/) |
+[EJScreen](https://ejscreen.ejanalysis.com/) indicators 
 and indexes as new data becomes available. 
 
 The goal is to re-engineer the previous generation of EPA-produced
 tools to get comparable, but not necessarily exactly the same, results
-given the same input. However, the tool stack, processing steps, 
-and data pipeline will diverge substantially from the EPA's 
-ArcGIS-, AWS-, and Hadoop-dependent pipeline. One of the primary reference
-documents we use is the EPA's:
+given the same input. And then be able to process updated inputs
+as they become available.
+However, this tool stack and our processing steps will diverge substantially 
+from the EPA's ArcGIS-, AWS-, and Hadoop-dependent pipeline. One of the primary reference
+documents we have used to understand the older system is:
 https://www.epa.gov/system/files/documents/2024-07/ejscreen-tech-doc-version-2-3.pdf
 
 # How to start contributing to this repo
@@ -21,7 +23,40 @@ https://www.epa.gov/system/files/documents/2024-07/ejscreen-tech-doc-version-2-3
 * Later, this project should to evolve into a more standard
   open source effort where this GitHub repo will be the center of
   communication.
-* Developer setup: TBD
+
+## Developer setup
+
+Much of our code right now is in Python scripts. As we move forward, we
+expect to add a substantial amount of R code to support the GIS 
+processing requirements for many of our indicators.
+
+### Python setup
+
+The processing scripts require Python 3.12 or newer and use `uv` to manage the
+project environment and dependencies.
+
+1. Install `uv` if it is not already available: https://docs.astral.sh/uv/getting-started/installation/
+2. From the repository root, create and sync the environment:
+
+  ```sh
+  uv sync
+  ```
+
+3. Activate the environment when running scripts directly:
+
+  - macOS/Linux or Windows WSL: `source .venv/bin/activate`
+  - Windows PowerShell: `.venv\Scripts\Activate.ps1`
+  - Windows Command Prompt: `.venv\Scripts\activate.bat`
+
+  Alternatively, run a script without activating the environment with
+  `uv run python <path-to-script>`.
+
+Indicator scripts are documented as being run from the `scripts/` directory.
+See [`scripts/readme.md`](scripts/readme.md) for additional usage details.
+
+### R Setup
+
+TBD
 
 ---
 **Coming attractions:**

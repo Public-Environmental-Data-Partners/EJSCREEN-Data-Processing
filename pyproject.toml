@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[project]
+name = "ejscreen-data-processing"
+version = "4.2024.0"
+description = "Data processing for re-creating and updating a subset of the EPA's EJScreen/EJAM environmental indicators"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.40",
+    "caffeine>=0.5",
+    "dotenv>=0.9.9",
+    "fsspec>=2025.9",
+    "geopandas>=1.1.4",
+    "matplotlib>=3.11.1",
+    "pandas>=3.0.5",
+    "py7zr>=1.1.3",
+    "pyarrow>=25.0.1",
+    "pyproj>=3.7.2",
+    "requests>=2.34.2",
+    "s3fs>=2025.9",
+]
+[tool.hatch.build.targets.wheel]
+packages = ["scripts"]

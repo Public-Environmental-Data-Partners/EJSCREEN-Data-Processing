@@ -50,6 +50,54 @@
       "notes": "These were EmmaLi's original weights, used up through her fix for issues #15 and #16."
       }
     },
+    "tiger_state": {
+      "2020": {
+        "stages": {
+          "fetch": {
+            "outputs": {
+              "tiger_state_2020": {
+                "type": "download",
+                "scope": "state", 
+                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/STATE/tl_2020_us_state.zip",
+                "relative_path_template": "downloads/tiger_lines/2020/state/tl_2020_us_state.zip"
+              }
+            }
+          }
+        }
+      }
+    },
+    "tiger_county": {
+      "2020": {
+        "stages": {
+          "fetch": {
+            "outputs": {
+              "tiger_county_2020": {
+                "type": "download",
+                "scope": "state",
+                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/COUNTY/tl_2020_us_county.zip",
+                "relative_path_template": "downloads/tiger_lines/2020/county/tl_2020_us_county.zip"
+              }
+            }
+          }
+        }
+      }
+    },
+    "tiger_tract": {
+      "2020": {
+        "stages": {
+          "fetch": {
+            "outputs": {
+              "tiger_tract_2020": {
+                "type": "download",
+                "scope": "state",
+                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/TRACT/tl_2020_{fips}_tract.zip",
+                "relative_path_template": "downloads/tiger_lines/2020/tract/tl_2020_{fips}_tract.zip"
+              }
+            }
+          }
+        }
+      }
+    },
     "tiger_bg": {
       "2020": {
         "stages": {

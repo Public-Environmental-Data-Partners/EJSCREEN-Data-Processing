@@ -18,14 +18,6 @@ from nhdplus_config import SUPPORTED_VPUS
 
 
 WASTEWATER_DIR = Path(__file__).resolve().parent
-DEFAULT_VERSION=1
-DEFAULT_YEAR=2021
-DEFAULT_INPUT_DIR = (
-    Path("../pipeline/wastewater")
-    / f"v{DEFAULT_VERSION}.{DEFAULT_YEAR}"
-    / "preprocessed_input"
-    / "modeled_flowlines"
-)
 
 COMID_COLUMN = "COMID"
 CONCENTRATION_COLUMN = "offsite_toxconc"
@@ -39,17 +31,12 @@ def get_args() -> argparse.Namespace:
             "from all configured CONUS VPUs."
         )
     )
+    
     parser.add_argument(
-        "--input-dir",
-        type=Path,
-        default=DEFAULT_INPUT_DIR,
-        help=f"Modeled VPU input directory (default: {DEFAULT_INPUT_DIR})",
-    )
-    parser.add_argument(
-        "--year",
-        type=int,
-        default=2021,
-        help="Modeled wastewater flowline year. Default: 2021.",
+        "-v","--version",
+        type=str,
+        default="1.2021",
+        help="Modeled wastewater flowline version (1.2021,1.2022). Default: 1.2021.",
     )
     parser.add_argument(
         "--output",
@@ -110,17 +97,26 @@ def normalize_comid(series: pd.Series) -> pd.Series:
 
 def main() -> int:
     args = get_args()
+    year = int(args.version.split(".")[1])
+    print(year)
+
+    input_dir = (
+        Path("../pipeline/wastewater") # because this is called from within a script, path must be relative hence ../
+        / f"v{args.version}"
+        / "preprocessed_input"
+        / "modeled_flowlines"
+    )
 
     if args.output is None:
         args.output = (
-            args.input_dir
-            / f"wastewater_flowlines_conus_{args.year}_positive.parquet"
+            input_dir
+            / f"wastewater_flowlines_conus_{year}_positive.parquet"
         )
 
     if args.qa_output is None:
         args.qa_output = (
-            args.input_dir
-            / f"wastewater_flowlines_conus_{args.year}_positive_qa.json"
+            input_dir
+            / f"wastewater_flowlines_conus_{year}_positive_qa.json"
         )
 
     if args.output.exists() and not args.overwrite:
@@ -138,20 +134,25 @@ def main() -> int:
     available_paths: list[tuple[str, Path]] = []
     missing_vpus: list[str] = []
 
+
+    
+
+
     for vpu in SUPPORTED_VPUS:
         path = resolve_vpu_path(
-            args.input_dir,
+            input_dir,
             vpu,
-            args.year,
+            year,
         )
+        print(path)
         if path.exists():
             available_paths.append((vpu, path))
         else:
             missing_vpus.append(vpu)
-
+    print(available_paths)
     if not available_paths:
         raise FileNotFoundError(
-            f"No modeled VPU GeoParquet files found in {args.input_dir}"
+            f"No modeled VPU GeoParquet files found in {input_dir}"
         )
 
     if missing_vpus and not args.allow_partial:
@@ -292,7 +293,7 @@ def main() -> int:
     combined.to_parquet(args.output, index=False)
 
     qa_summary = {
-        "year": int(args.year),
+        "year": year,
         "configured_vpus": list(SUPPORTED_VPUS),
         "available_vpus": [vpu for vpu, _ in available_paths],
         "missing_vpus": missing_vpus,

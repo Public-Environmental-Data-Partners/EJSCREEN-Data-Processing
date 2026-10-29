@@ -27,8 +27,8 @@ from pathlib import Path
 import argparse
 
 def do_tiger(geo):
-  # Define your directory path
-  directory_path = Path(f"pipeline/shared/downloads/tiger_lines/2020/{geo}") # Support tract in the future
+  # Define directory path
+  directory_path = Path(f"pipeline/shared/downloads/tiger_lines/2020/{geo}")
 
   # Define the path to existing compiled ZIP file
   zip_path = Path(f"pipeline/shared/downloads/tiger_lines/2020/{geo}/tl_2020_us_{geo}.zip")

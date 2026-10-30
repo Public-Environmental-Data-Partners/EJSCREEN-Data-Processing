@@ -68,6 +68,7 @@ def _read_geodataframe(tiger_zip_path: Path) -> gpd.GeoDataFrame:
 def _load_and_join(args, file, id, geotype="bg"):
   state = args.state
   location = args.location
+  vintage = args.vintage
 
   # Load data based on FILEMAP
   print(file)
@@ -81,8 +82,6 @@ def _load_and_join(args, file, id, geotype="bg"):
     this_state_fips = fips[state]["fips"]
     data = data[data[id].str.startswith(this_state_fips)]
   # Join with geometry
-  # Ensure tiger lines are available - NOTE: unclear what vintage tiger lines we need, 2020 or something else. If something else, need to config that in shared_config.json
-  # TODO: script to compile tiger lines for USA?
   # The following is borrowed from CompareScores.py - SUGGESTING WE NEED IT IN A SHARED PLACE
   # Derive FIPS from first matched geoid (first 2 digits)
   if data.empty:
@@ -96,12 +95,12 @@ def _load_and_join(args, file, id, geotype="bg"):
   # Resolve TIGER path via shared asset config so resolution works for
   # both local and remote locations.
   shared_info = resolve_path.get_shared_asset_path(
-      asset=f'tiger_{geotype}', version='2020', category='downloads', asset_key=f'tiger_{geotype}_2020', environment=location
+      asset=f'tiger_{geotype}', version=vintage, category='downloads', asset_key=f'tiger_{geotype}_{vintage}', environment=location
   )
   # Ensure the shared root is fully resolved for local environments
   if location == 'local':
       try:
-          shared_root = resolve_path.get_shared_root(f'tiger_{geotype}', '2020', environment=location)
+          shared_root = resolve_path.get_shared_root(f'tiger_{geotype}', vintage, environment=location)
       except Exception:
           # Fallback to the returned root if resolving fails
           shared_root = shared_info.get('root')
@@ -372,7 +371,15 @@ def parse_args(argv: list[str] | None = None):
     type=str,
     choices = ["3_2022", "4_2024"],
     default="3_2022",
-    help="EJSCREEN vintage. Default: 3_2022",
+    help="EJSCREEN version. Default: 3_2022",
+  )
+
+  parser.add_argument(
+    "--vintage",
+    type=str,
+    choices = ["2020", "2024"],
+    default="2024",
+    help="ACS vintage. Default = 2024",
   )
 
   parser.add_argument(

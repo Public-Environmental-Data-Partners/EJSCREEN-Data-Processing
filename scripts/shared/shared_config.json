@@ -64,6 +64,20 @@
             }
           }
         }
+      },
+      "2024": {
+        "stages": {
+          "fetch": {
+            "outputs": {
+              "tiger_state_2024": {
+                "type": "download",
+                "scope": "state", 
+                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2024/STATE/tl_2024_us_state.zip",
+                "relative_path_template": "downloads/tiger_lines/2024/state/tl_2024_us_state.zip"
+              }
+            }
+          }
+        }
       }
     },
     "tiger_county": {
@@ -76,6 +90,20 @@
                 "scope": "state",
                 "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/COUNTY/tl_2020_us_county.zip",
                 "relative_path_template": "downloads/tiger_lines/2020/county/tl_2020_us_county.zip"
+              }
+            }
+          }
+        }
+      },
+      "2024": {
+        "stages": {
+          "fetch": {
+            "outputs": {
+              "tiger_county_2024": {
+                "type": "download",
+                "scope": "state",
+                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2024/COUNTY/tl_2024_us_county.zip",
+                "relative_path_template": "downloads/tiger_lines/2024/county/tl_2024_us_county.zip"
               }
             }
           }
@@ -96,6 +124,20 @@
             }
           }
         }
+      },
+      "2024": {
+        "stages": {
+          "fetch": {
+            "outputs": {
+              "tiger_tract_2024": {
+                "type": "download",
+                "scope": "state",
+                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2024/TRACT/tl_2024_{fips}_tract.zip",
+                "relative_path_template": "downloads/tiger_lines/2024/tract/tl_2024_{fips}_tract.zip"
+              }
+            }
+          }
+        }
       }
     },
     "tiger_bg": {
@@ -108,6 +150,20 @@
                 "scope": "state",
                 "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2020/BG/tl_2020_{fips}_bg.zip",
                 "relative_path_template": "downloads/tiger_lines/2020/bg/tl_2020_{fips}_bg.zip"
+              }
+            }
+          }
+        }
+      },
+      "2024": {
+        "stages": {
+          "fetch": {
+            "outputs": {
+              "tiger_bg_2024": {
+                "type": "download",
+                "scope": "state",
+                "source_url_template": "https://www2.census.gov/geo/tiger/TIGER2024/BG/tl_2024_{fips}_bg.zip",
+                "relative_path_template": "downloads/tiger_lines/2024/bg/tl_2024_{fips}_bg.zip"
               }
             }
           }

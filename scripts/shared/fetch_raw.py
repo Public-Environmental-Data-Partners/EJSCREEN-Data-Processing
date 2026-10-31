@@ -61,6 +61,7 @@ from pathlib import Path
 import time
 import uuid
 import requests
+import caffeine
 
 import scripts.shared.build_manifest as build_manifest
 import scripts.shared.resolve_path as resolve_path

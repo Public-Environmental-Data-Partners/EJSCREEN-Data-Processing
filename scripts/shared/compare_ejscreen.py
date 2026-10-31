@@ -12,10 +12,10 @@ MODES:
     - original_final: Compare the EJSCREEN archive directly to the final output from EJAM.
 
 USAGE:
-    python3 compare_ejscreen.py --indicator [indicator_name] --mode [original_merged|merged_final|original_final] --location [local_or_remote] --version [straw_version] --pipeline [pipeline_version]
+    python3 scripts/shared/compare_ejscreen.py --indicator [indicator_name] --mode [original_merged|merged_final|original_final] --location [local_or_remote] --version [straw_version] --pipeline [pipeline_version] --export [boolean]
 
 EXAMPLE:
-    python3 scripts/shared/compare_ejscreen.py --indicators ozone,pm25 --mode original_merged --location local --version 1.2020 --pipeline 3_2024
+    python3 scripts/shared/compare_ejscreen.py --indicators ozone,pm25 --mode original_merged --location local --version 1.2020 --pipeline 4_2024 --export true
 
 AUTHORSHIP:
     Eric Nost and Google Gemini
@@ -25,6 +25,7 @@ import pandas as pd
 import os
 import re
 import argparse
+import numpy as np
 
 
 def get_matching_columns(columns, target_pattern):
@@ -39,7 +40,7 @@ def get_case_insensitive_col(columns, target):
             return c
     return None
 
-def run_audit(indicators, mode):
+def run_audit(indicators, mode, export):
     # 1. Determine which files to compare
     if "_" not in mode:
         print("Error: Mode must be in format 'source_target' (e.g., original_merged)")
@@ -73,7 +74,7 @@ def run_audit(indicators, mode):
         #print(cols_b)
         variants_a = [c for c in variants_a if "T_" not in c] # Something screwy with the T_OZONE columns. Throws IndexError: list index out of range
         test = [*['ID'],*variants_a]
-        print(test)
+
         # 3. Load Data
         df_a = pd.read_csv(path_a, usecols=["ID"]+test, dtype={'ID': str}) 
 
@@ -81,10 +82,10 @@ def run_audit(indicators, mode):
         variants_b_needed = [get_case_insensitive_col(cols_b, v) for v in variants_a]
         variants_b_needed = [v for v in variants_b_needed if v is not None]
         variants_b_needed = [v for v in variants_b_needed if "T_" not in v]
-        print(variants_b_needed)
+
         df_b = pd.read_csv(path_b, usecols=["ID"]+variants_b_needed, dtype={'ID': str})
 
-        print(f"{'Column (Source)':<25} | {'Changes':<10} | {'Mean Delta'}")
+        print(f"{'Column (Source)':<25} | {'Changes':<10} | {'Mean Delta':<10} | {'Mean % Delta'}")
         print("-" * 65)
 
         for col_a in variants_a:
@@ -108,11 +109,19 @@ def run_audit(indicators, mode):
                 v_a = pd.to_numeric(merged[left_col], errors='coerce')
                 v_b = pd.to_numeric(merged[right_col], errors='coerce')
                 diff = v_b - v_a
+                pct_diff = ((v_b - v_a) / v_a) * 100
                 
+                # Optional export for further inspection
+                if export:
+                    merged["raw_diff"] = pd.to_numeric(merged[left_col], errors='coerce') - pd.to_numeric(merged[right_col], errors='coerce') #diff
+                    merged["pct_diff"] = pct_diff
+                    merged.sort_values(by="pct_diff", ascending=False).to_csv(f"pipeline/compare/compare_ejscreen_{mode}_{indicator}.csv")
+
                 count_changed = diff[diff.fillna(0) != 0].shape[0]
+                mean_pct_diff = pct_diff.replace([np.inf, -np.inf], np.nan).mean() # Ignore inf values (0 -> >0 change)
                 mean_val = diff.mean()
                 
-                print(f"{col_a:<25} | {count_changed:>10,} | {mean_val:>12.6f}")
+                print(f"{col_a:<25} | {count_changed:>10,} | {mean_val:>12.6f} | {mean_pct_diff:>12.6f}")
             else:
                 TARGET = mode.split("_")[1]
                 print(f"{col_a:<25} | {f'MISSING IN {TARGET}':>25}")
@@ -131,8 +140,9 @@ if __name__ == "__main__":
                         help="The *straw* version e.g. 1.2020")
     parser.add_argument("-p", "--pipeline",
                         default="",
-                        help="The *EJAM* version e.g. 3_2024")
+                        help="The *EJSCREEN* version e.g. 4_2024")
     parser.add_argument("-l", "--location", help="Local or remote storage")
+    parser.add_argument("-e", "--export", default=False, type=bool, help="Optional export of results for further inspection")
 
     args = parser.parse_args()
     if args.indicators:
@@ -142,7 +152,7 @@ if __name__ == "__main__":
     FILE_MAP = {
         "original": "pipeline/shared/ejscreen/EJSCREEN_2024_BG_with_AS_CNMI_GU_VI.csv",
         "merged": f"pipeline/shared/ejscreen/v{args.version}/envirodata_{args.version}.csv",
-        "final": f"pipeline/shared/ejam/ejscreen_v{args.pipeline}.csv"
+        "final": f"pipeline/shared/ejam/ejscreen_us_v{args.pipeline}.csv"
     }
 
-    run_audit(args.indicators, args.mode)
+    run_audit(args.indicators, args.mode, args.export)
